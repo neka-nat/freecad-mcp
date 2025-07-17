@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/neka-nat-freecad-mcp-badge.png)](https://mseep.ai/app/neka-nat-freecad-mcp)
+
 # FreeCAD MCP
 
 This repository is a FreeCAD MCP that allows you to control FreeCAD from Claude Desktop.
