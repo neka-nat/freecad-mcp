@@ -1,23 +1,126 @@
 [project]
 name = "freecad-mcp"
-version = "0.1.13"
-description = "Add your description here"
-readme = "README.md"
+version = "3.0.0"
+description = "FreeCAD MCP server - Control FreeCAD from Claude Desktop"
 authors = [
-    { name = "neka-nat", email = "nekanat.stock@gmail.com" }
+    { name = "k-tanaka", email = "" }
 ]
+readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.12"
-dependencies = [
-    "mcp[cli]>=1.12.2",
+requires-python = ">=3.10"
+keywords = ["freecad", "mcp", "cad", "model-context-protocol", "claude", "ai"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Computer Aided Design (CAD)",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
+
+dependencies = [
+    "mcp>=0.9.0",
+    "fastmcp>=0.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pylint>=2.17.0",
+    "black>=23.0.0",
+    "mypy>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/neka-nat/freecad-mcp"
+Documentation = "https://github.com/neka-nat/freecad-mcp/blob/main/README.md"
+Repository = "https://github.com/neka-nat/freecad-mcp"
+Issues = "https://github.com/neka-nat/freecad-mcp/issues"
+Changelog = "https://github.com/neka-nat/freecad-mcp/blob/main/CHANGELOG.md"
 
 [project.scripts]
 freecad-mcp = "freecad_mcp.server:main"
 
-[tool.hatch.build.targets.sdist]
-exclude = ["assets", "results"]
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/freecad_mcp"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/addon",
+    "/tests",
+    "/examples",
+    "/docs",
+    "/README.md",
+    "/LICENSE",
+    "/CHANGELOG.md",
+    "/CONTRIBUTING.md",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+
+[[tool.mypy.overrides]]
+module = "FreeCAD.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "FreeCADGui.*"
+ignore_missing_imports = true
+
+[tool.pylint.messages_control]
+disable = [
+    "C0111",  # missing-docstring
+    "C0103",  # invalid-name
+    "R0913",  # too-many-arguments
+    "R0914",  # too-many-locals
+    "W0212",  # protected-access
+]
+
+[tool.pylint.format]
+max-line-length = 100
+
