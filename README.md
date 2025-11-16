@@ -4,6 +4,16 @@
 
 This repository is a FreeCAD MCP that allows you to control FreeCAD from Claude Desktop.
 
+## Security Considerations
+
+> **Important**: This tool is designed for **local development use only**.
+
+- The `execute_code` tool allows arbitrary Python code execution within FreeCAD. Only use this in trusted environments.
+- The RPC server runs on `localhost:9875` without authentication. Do not expose this port to external networks.
+- The server accepts commands from any local process. Ensure your system is free from malicious software.
+
+For more details, see [SECURITY.md](SECURITY.md).
+
 ## Demo
 
 ### Design a flange

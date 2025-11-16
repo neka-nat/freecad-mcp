@@ -19,10 +19,22 @@ _only_text_feedback = False
 
 class FreeCADConnection:
     def __init__(self, host: str = "localhost", port: int = 9875):
+        self.host = host
+        self.port = port
         self.server = xmlrpc.client.ServerProxy(f"http://{host}:{port}", allow_none=True)
+        self._connected = False
 
     def ping(self) -> bool:
-        return self.server.ping()
+        result = self.server.ping()
+        self._connected = result
+        return result
+
+    def disconnect(self) -> None:
+        """Clean up the connection resources."""
+        self._connected = False
+        # XML-RPC ServerProxy doesn't maintain persistent connections,
+        # but we reset the state for consistency
+        logger.info(f"Disconnected from FreeCAD at {self.host}:{self.port}")
 
     def create_document(self, name: str) -> dict[str, Any]:
         return self.server.create_document(name)

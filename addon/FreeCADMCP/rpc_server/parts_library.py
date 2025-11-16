@@ -5,9 +5,28 @@ import FreeCAD
 import FreeCADGui
 
 
-def insert_part_from_library(relative_path):
+def insert_part_from_library(relative_path: str) -> None:
+    """Insert a part from the FreeCAD parts library.
+
+    Args:
+        relative_path: Relative path to the part file within the parts library.
+
+    Raises:
+        FileNotFoundError: If the part file does not exist.
+        ValueError: If the path attempts to traverse outside the library directory.
+    """
     parts_lib_path = os.path.join(FreeCAD.getUserAppDataDir(), "Mod", "parts_library")
-    part_path = os.path.join(parts_lib_path, relative_path)
+
+    # Normalize and validate the path to prevent path traversal attacks
+    part_path = os.path.normpath(os.path.join(parts_lib_path, relative_path))
+
+    # Security check: Ensure the resolved path is within the parts library
+    if not part_path.startswith(os.path.normpath(parts_lib_path) + os.sep):
+        raise ValueError(f"Invalid path: Path traversal attempt detected in '{relative_path}'")
+
+    # Ensure the file has the correct extension
+    if not part_path.endswith(".FCStd"):
+        raise ValueError(f"Invalid file type: Only .FCStd files are allowed, got '{relative_path}'")
 
     if not os.path.exists(part_path):
         raise FileNotFoundError(f"Not found: {part_path}")
