@@ -497,7 +497,7 @@ def insert_part_from_library(ctx: Context, relative_path: str) -> list[TextConte
 
 
 @mcp.tool()
-def get_objects(ctx: Context, doc_name: str) -> list[dict[str, Any]]:
+def get_objects(ctx: Context, doc_name: str) -> list[TextContent | ImageContent]:
     """Get all objects in a document.
     You can use this tool to get the objects in a document to see what you can check or edit.
 
@@ -522,7 +522,7 @@ def get_objects(ctx: Context, doc_name: str) -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-def get_object(ctx: Context, doc_name: str, obj_name: str) -> dict[str, Any]:
+def get_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextContent | ImageContent]:
     """Get an object from a document.
     You can use this tool to get the properties of an object to see what you can check or edit.
 
@@ -548,7 +548,7 @@ def get_object(ctx: Context, doc_name: str, obj_name: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def get_parts_list(ctx: Context) -> list[str]:
+def get_parts_list(ctx: Context) -> list[TextContent]:
     """Get the list of parts in the parts library addon.
     """
     freecad = get_freecad_connection()
