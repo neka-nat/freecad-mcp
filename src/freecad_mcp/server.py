@@ -42,7 +42,7 @@ class FreeCADConnection:
     def execute_code(self, code: str) -> dict[str, Any]:
         return self.server.execute_code(code)
 
-    def get_active_screenshot(self, view_name: str = "Isometric") -> str | None:
+    def get_active_screenshot(self, view_name: str = "Isometric", width: int | None = None, height: int | None = None) -> str | None:
         try:
             # Check if we're in a view that supports screenshots
             result = self.server.execute_code("""
@@ -72,7 +72,7 @@ else:
                 return None
 
             # Otherwise, try to get the screenshot
-            return self.server.get_active_screenshot(view_name)
+            return self.server.get_active_screenshot(view_name, width, height)
         except Exception as e:
             # Log the error but return None instead of raising an exception
             logger.error(f"Error getting screenshot: {e}")
@@ -436,7 +436,7 @@ def execute_code(ctx: Context, code: str) -> list[TextContent | ImageContent]:
 
 
 @mcp.tool()
-def get_view(ctx: Context, view_name: Literal["Isometric", "Front", "Top", "Right", "Back", "Left", "Bottom", "Dimetric", "Trimetric"]) -> list[ImageContent | TextContent]:
+def get_view(ctx: Context, view_name: Literal["Isometric", "Front", "Top", "Right", "Back", "Left", "Bottom", "Dimetric", "Trimetric"], width: int | None = None, height: int | None = None) -> list[ImageContent | TextContent]:
     """Get a screenshot of the active view.
 
     Args:
@@ -451,12 +451,14 @@ def get_view(ctx: Context, view_name: Literal["Isometric", "Front", "Top", "Righ
         - "Bottom"
         - "Dimetric"
         - "Trimetric"
+        width: The width of the screenshot in pixels. If not specified, uses the viewport width.
+        height: The height of the screenshot in pixels. If not specified, uses the viewport height.
 
     Returns:
         A screenshot of the active view.
     """
     freecad = get_freecad_connection()
-    screenshot = freecad.get_active_screenshot(view_name)
+    screenshot = freecad.get_active_screenshot(view_name, width, height)
     
     if screenshot is not None:
         return [ImageContent(type="image", data=screenshot, mimeType="image/png")]
