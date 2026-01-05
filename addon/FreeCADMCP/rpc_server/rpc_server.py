@@ -221,7 +221,7 @@ class FreeCADRPC:
     def get_parts_list(self):
         return get_parts_list()
 
-    def get_active_screenshot(self, view_name: str = "Isometric", width: int | None = None, height: int | None = None) -> str:
+    def get_active_screenshot(self, view_name: str = "Isometric", width: int | None = None, height: int | None = None, focus_object: str | None = None) -> str:
         """Get a screenshot of the active view.
         
         Returns a base64-encoded string of the screenshot or None if a screenshot
@@ -254,7 +254,7 @@ class FreeCADRPC:
         fd, tmp_path = tempfile.mkstemp(suffix=".png")
         os.close(fd)
         rpc_request_queue.put(
-            lambda: self._save_active_screenshot(tmp_path, view_name, width, height)
+            lambda: self._save_active_screenshot(tmp_path, view_name, width, height, focus_object)
         )
         res = rpc_response_queue.get()
         if res is True:
@@ -394,7 +394,7 @@ class FreeCADRPC:
         except Exception as e:
             return str(e)
 
-    def _save_active_screenshot(self, save_path: str, view_name: str = "Isometric", width: int | None = None, height: int | None = None):
+    def _save_active_screenshot(self, save_path: str, view_name: str = "Isometric", width: int | None = None, height: int | None = None, focus_object: str | None = None):
         try:
             view = FreeCADGui.ActiveDocument.ActiveView
             # Check if the view supports screenshots
@@ -421,7 +421,19 @@ class FreeCADRPC:
                 view.viewTrimetric()
             else:
                 raise ValueError(f"Invalid view name: {view_name}")
-            view.fitAll()
+
+            # Focus on specific object or fit all
+            if focus_object:
+                doc = FreeCAD.ActiveDocument
+                obj = doc.getObject(focus_object) if doc else None
+                if obj:
+                    FreeCADGui.Selection.clearSelection()
+                    FreeCADGui.Selection.addSelection(obj)
+                    FreeCADGui.SendMsgToActiveView("ViewSelection")
+                else:
+                    view.fitAll()
+            else:
+                view.fitAll()
             if width is not None and height is not None:
                 view.saveImage(save_path, width, height)
             else:
