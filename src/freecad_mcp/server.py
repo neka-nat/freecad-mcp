@@ -87,6 +87,9 @@ else:
     def get_parts_list(self) -> list[str]:
         return self.server.get_parts_list()
 
+    def list_documents(self) -> list[str]:
+        return self.server.list_documents()
+
 
 @asynccontextmanager
 async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
@@ -564,6 +567,18 @@ def get_parts_list(ctx: Context) -> list[TextContent]:
         return [
             TextContent(type="text", text=f"No parts found in the parts library. You must add parts_library addon.")
         ]
+
+
+@mcp.tool()
+def list_documents(ctx: Context) -> list[TextContent]:
+    """Get the list of open documents in FreeCAD.
+
+    Returns:
+        A list of document names.
+    """
+    freecad = get_freecad_connection()
+    docs = freecad.list_documents()
+    return [TextContent(type="text", text=json.dumps(docs))]
 
 
 @mcp.prompt()
