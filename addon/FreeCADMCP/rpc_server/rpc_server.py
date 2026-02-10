@@ -601,12 +601,9 @@ class StopRPCServerCommand:
 
 class ToggleRemoteConnectionsCommand:
     def GetResources(self):
-        settings = load_settings()
-        enabled = settings.get("remote_enabled", False)
-        status = "ON" if enabled else "OFF"
         return {
-            "MenuText": f"Remote Connections [{status}]",
-            "ToolTip": "Toggle remote connections for the RPC server. When enabled, prompts for allowed IP addresses/subnets.",
+            "MenuText": "Toggle Remote Connections",
+            "ToolTip": "Toggle remote connections for the RPC server on or off.",
         }
 
     def Activated(self):
