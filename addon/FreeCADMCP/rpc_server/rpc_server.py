@@ -3,6 +3,8 @@ import FreeCADGui
 import ObjectsFem
 
 import contextlib
+import ipaddress
+import json
 import queue
 import base64
 import io
@@ -13,13 +15,92 @@ from dataclasses import dataclass, field
 from typing import Any
 from xmlrpc.server import SimpleXMLRPCServer
 
-from PySide import QtCore
+from PySide import QtCore, QtWidgets
 
 from .parts_library import get_parts_list, insert_part_from_library
 from .serialize import serialize_object
 
 rpc_server_thread = None
 rpc_server_instance = None
+
+
+# --- Settings persistence ---
+
+_SETTINGS_FILENAME = "freecad_mcp_settings.json"
+
+_DEFAULT_SETTINGS = {
+    "remote_enabled": False,
+    "allowed_ips": "127.0.0.1",
+}
+
+
+def _get_settings_path():
+    return os.path.join(FreeCAD.getUserAppDataDir(), _SETTINGS_FILENAME)
+
+
+def load_settings():
+    path = _get_settings_path()
+    if os.path.exists(path):
+        try:
+            with open(path, "r") as f:
+                settings = json.load(f)
+            # Ensure all default keys exist
+            for key, value in _DEFAULT_SETTINGS.items():
+                if key not in settings:
+                    settings[key] = value
+            return settings
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(f"Failed to load MCP settings: {e}\n")
+    return dict(_DEFAULT_SETTINGS)
+
+
+def save_settings(settings):
+    path = _get_settings_path()
+    try:
+        with open(path, "w") as f:
+            json.dump(settings, f, indent=2)
+    except Exception as e:
+        FreeCAD.Console.PrintError(f"Failed to save MCP settings: {e}\n")
+
+
+# --- IP-filtered XML-RPC server ---
+
+class FilteredXMLRPCServer(SimpleXMLRPCServer):
+    """XML-RPC server that filters connections by allowed IP addresses/subnets."""
+
+    def __init__(self, addr, allowed_ips_str="127.0.0.1", **kwargs):
+        self._allowed_networks = _parse_allowed_ips(allowed_ips_str)
+        super().__init__(addr, **kwargs)
+
+    def verify_request(self, request, client_address):
+        client_ip = client_address[0]
+        try:
+            addr = ipaddress.ip_address(client_ip)
+            for network in self._allowed_networks:
+                if addr in network:
+                    return True
+        except ValueError:
+            pass
+        FreeCAD.Console.PrintWarning(
+            f"MCP RPC: Rejected connection from {client_ip}\n"
+        )
+        return False
+
+
+def _parse_allowed_ips(allowed_ips_str):
+    """Parse a comma-separated string of IPs/subnets into a list of ip_network objects."""
+    networks = []
+    for entry in allowed_ips_str.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            FreeCAD.Console.PrintWarning(
+                f"MCP RPC: Invalid IP/subnet '{entry}', skipping\n"
+            )
+    return networks
 
 # GUI task queue
 rpc_request_queue = queue.Queue()
@@ -443,19 +524,30 @@ class FreeCADRPC:
             return str(e)
 
 
-def start_rpc_server(host="localhost", port=9875):
+def start_rpc_server(port=9875):
     global rpc_server_thread, rpc_server_instance
 
     if rpc_server_instance:
         return "RPC Server already running."
 
-    rpc_server_instance = SimpleXMLRPCServer(
-        (host, port), allow_none=True, logRequests=False
+    settings = load_settings()
+    remote_enabled = settings.get("remote_enabled", False)
+    allowed_ips = settings.get("allowed_ips", "127.0.0.1")
+
+    if remote_enabled:
+        host = "0.0.0.0"
+    else:
+        host = "localhost"
+
+    rpc_server_instance = FilteredXMLRPCServer(
+        (host, port), allowed_ips_str=allowed_ips, allow_none=True, logRequests=False
     )
     rpc_server_instance.register_instance(FreeCADRPC())
 
     def server_loop():
         FreeCAD.Console.PrintMessage(f"RPC Server started at {host}:{port}\n")
+        if remote_enabled:
+            FreeCAD.Console.PrintMessage(f"Remote connections enabled. Allowed IPs: {allowed_ips}\n")
         rpc_server_instance.serve_forever()
 
     rpc_server_thread = threading.Thread(target=server_loop, daemon=True)
@@ -463,7 +555,10 @@ def start_rpc_server(host="localhost", port=9875):
 
     QtCore.QTimer.singleShot(500, process_gui_tasks)
 
-    return f"RPC Server started at {host}:{port}."
+    msg = f"RPC Server started at {host}:{port}."
+    if remote_enabled:
+        msg += f" Allowed IPs: {allowed_ips}"
+    return msg
 
 
 def stop_rpc_server():
@@ -504,5 +599,94 @@ class StopRPCServerCommand:
         return True
 
 
+class ToggleRemoteConnectionsCommand:
+    def GetResources(self):
+        settings = load_settings()
+        enabled = settings.get("remote_enabled", False)
+        status = "ON" if enabled else "OFF"
+        return {
+            "MenuText": f"Remote Connections [{status}]",
+            "ToolTip": "Toggle remote connections for the RPC server. When enabled, prompts for allowed IP addresses/subnets.",
+        }
+
+    def Activated(self):
+        settings = load_settings()
+        currently_enabled = settings.get("remote_enabled", False)
+
+        if currently_enabled:
+            # Turning off remote connections
+            settings["remote_enabled"] = False
+            save_settings(settings)
+            FreeCAD.Console.PrintMessage("Remote connections disabled.\n")
+            if rpc_server_instance:
+                FreeCAD.Console.PrintMessage(
+                    "Restart the RPC server for changes to take effect.\n"
+                )
+        else:
+            # Turning on - prompt for allowed IPs
+            current_ips = settings.get("allowed_ips", "127.0.0.1")
+            text, ok = QtWidgets.QInputDialog.getText(
+                None,
+                "Allowed IP Addresses",
+                "Enter allowed IP addresses or subnets (comma-separated):\n"
+                "Examples: 127.0.0.1, 192.168.1.0/24, 10.0.0.5",
+                QtWidgets.QLineEdit.Normal,
+                current_ips,
+            )
+            if ok and text.strip():
+                settings["remote_enabled"] = True
+                settings["allowed_ips"] = text.strip()
+                save_settings(settings)
+                FreeCAD.Console.PrintMessage(
+                    f"Remote connections enabled. Allowed IPs: {text.strip()}\n"
+                )
+                if rpc_server_instance:
+                    FreeCAD.Console.PrintMessage(
+                        "Restart the RPC server for changes to take effect.\n"
+                    )
+            else:
+                FreeCAD.Console.PrintMessage("Remote connections not changed.\n")
+
+    def IsActive(self):
+        return True
+
+
+class ConfigureAllowedIPsCommand:
+    def GetResources(self):
+        return {
+            "MenuText": "Configure Allowed IPs",
+            "ToolTip": "Set which IP addresses or subnets are allowed to connect to the RPC server.",
+        }
+
+    def Activated(self):
+        settings = load_settings()
+        current_ips = settings.get("allowed_ips", "127.0.0.1")
+        text, ok = QtWidgets.QInputDialog.getText(
+            None,
+            "Allowed IP Addresses",
+            "Enter allowed IP addresses or subnets (comma-separated):\n"
+            "Examples: 127.0.0.1, 192.168.1.0/24, 10.0.0.5",
+            QtWidgets.QLineEdit.Normal,
+            current_ips,
+        )
+        if ok and text.strip():
+            settings["allowed_ips"] = text.strip()
+            save_settings(settings)
+            FreeCAD.Console.PrintMessage(
+                f"Allowed IPs updated to: {text.strip()}\n"
+            )
+            if rpc_server_instance:
+                FreeCAD.Console.PrintMessage(
+                    "Restart the RPC server for changes to take effect.\n"
+                )
+        else:
+            FreeCAD.Console.PrintMessage("Allowed IPs not changed.\n")
+
+    def IsActive(self):
+        return True
+
+
 FreeCADGui.addCommand("Start_RPC_Server", StartRPCServerCommand())
 FreeCADGui.addCommand("Stop_RPC_Server", StopRPCServerCommand())
+FreeCADGui.addCommand("Toggle_Remote_Connections", ToggleRemoteConnectionsCommand())
+FreeCADGui.addCommand("Configure_Allowed_IPs", ConfigureAllowedIPsCommand())
