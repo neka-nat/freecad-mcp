@@ -602,14 +602,14 @@ class StopRPCServerCommand:
 class ToggleRemoteConnectionsCommand:
     def GetResources(self):
         return {
-            "MenuText": "Toggle Remote Connections",
-            "ToolTip": "Toggle remote connections for the RPC server on or off.",
+            "MenuText": "Remote Connections",
+            "ToolTip": "Enable or disable remote connections for the RPC server.",
+            "Checkable": True,
         }
 
-    def Activated(self):
+    def Activated(self, checked=0):
         settings = load_settings()
-        currently_enabled = settings.get("remote_enabled", False)
-        settings["remote_enabled"] = not currently_enabled
+        settings["remote_enabled"] = bool(checked)
         save_settings(settings)
 
         if settings["remote_enabled"]:
@@ -668,3 +668,22 @@ FreeCADGui.addCommand("Start_RPC_Server", StartRPCServerCommand())
 FreeCADGui.addCommand("Stop_RPC_Server", StopRPCServerCommand())
 FreeCADGui.addCommand("Toggle_Remote_Connections", ToggleRemoteConnectionsCommand())
 FreeCADGui.addCommand("Configure_Allowed_IPs", ConfigureAllowedIPsCommand())
+
+
+def _sync_remote_toggle_state():
+    """Sync the Remote Connections checkbox with saved settings on startup."""
+    try:
+        settings = load_settings()
+        enabled = settings.get("remote_enabled", False)
+        main_window = FreeCADGui.getMainWindow()
+        for action in main_window.findChildren(QtWidgets.QAction):
+            if action.text() == "Remote Connections":
+                action.setChecked(enabled)
+                return
+    except Exception:
+        pass
+    # Retry if menu not ready yet
+    QtCore.QTimer.singleShot(2000, _sync_remote_toggle_state)
+
+
+QtCore.QTimer.singleShot(2000, _sync_remote_toggle_state)
