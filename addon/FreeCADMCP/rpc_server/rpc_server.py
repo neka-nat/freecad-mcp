@@ -612,40 +612,21 @@ class ToggleRemoteConnectionsCommand:
     def Activated(self):
         settings = load_settings()
         currently_enabled = settings.get("remote_enabled", False)
+        settings["remote_enabled"] = not currently_enabled
+        save_settings(settings)
 
-        if currently_enabled:
-            # Turning off remote connections
-            settings["remote_enabled"] = False
-            save_settings(settings)
-            FreeCAD.Console.PrintMessage("Remote connections disabled.\n")
-            if rpc_server_instance:
-                FreeCAD.Console.PrintMessage(
-                    "Restart the RPC server for changes to take effect.\n"
-                )
-        else:
-            # Turning on - prompt for allowed IPs
-            current_ips = settings.get("allowed_ips", "127.0.0.1")
-            text, ok = QtWidgets.QInputDialog.getText(
-                None,
-                "Allowed IP Addresses",
-                "Enter allowed IP addresses or subnets (comma-separated):\n"
-                "Examples: 127.0.0.1, 192.168.1.0/24, 10.0.0.5",
-                QtWidgets.QLineEdit.Normal,
-                current_ips,
+        if settings["remote_enabled"]:
+            allowed_ips = settings.get("allowed_ips", "127.0.0.1")
+            FreeCAD.Console.PrintMessage(
+                f"Remote connections enabled. Allowed IPs: {allowed_ips}\n"
             )
-            if ok and text.strip():
-                settings["remote_enabled"] = True
-                settings["allowed_ips"] = text.strip()
-                save_settings(settings)
-                FreeCAD.Console.PrintMessage(
-                    f"Remote connections enabled. Allowed IPs: {text.strip()}\n"
-                )
-                if rpc_server_instance:
-                    FreeCAD.Console.PrintMessage(
-                        "Restart the RPC server for changes to take effect.\n"
-                    )
-            else:
-                FreeCAD.Console.PrintMessage("Remote connections not changed.\n")
+        else:
+            FreeCAD.Console.PrintMessage("Remote connections disabled.\n")
+
+        if rpc_server_instance:
+            FreeCAD.Console.PrintMessage(
+                "Restart the RPC server for changes to take effect.\n"
+            )
 
     def IsActive(self):
         return True
