@@ -15,6 +15,7 @@ logger = logging.getLogger("FreeCADMCPserver")
 
 
 _only_text_feedback = False
+_rpc_host = "localhost"
 
 
 class FreeCADConnection:
@@ -128,7 +129,7 @@ def get_freecad_connection():
     """Get or create a persistent FreeCAD connection"""
     global _freecad_connection
     if _freecad_connection is None:
-        _freecad_connection = FreeCADConnection(host="localhost", port=9875)
+        _freecad_connection = FreeCADConnection(host=_rpc_host, port=9875)
         if not _freecad_connection.ping():
             logger.error("Failed to ping FreeCAD")
             _freecad_connection = None
@@ -613,13 +614,33 @@ Only revert to basic creation methods in the following cases:
 """
 
 
+def _validate_host(value: str) -> str:
+    """Validate that *value* is a valid IP address or hostname.
+
+    Used as the ``type`` callback for the ``--host`` argparse argument.
+    Raises ``argparse.ArgumentTypeError`` on invalid input.
+    """
+    import argparse
+
+    import validators
+
+    if validators.ipv4(value) or validators.ipv6(value) or validators.hostname(value):
+        return value
+    raise argparse.ArgumentTypeError(
+        f"Invalid host: '{value}'. Must be a valid IP address or hostname."
+    )
+
+
 def main():
     """Run the MCP server"""
-    global _only_text_feedback
+    global _only_text_feedback, _rpc_host
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--only-text-feedback", action="store_true", help="Only return text feedback")
+    parser.add_argument("--host", type=_validate_host, default="localhost", help="Host address of the FreeCAD RPC server to connect to (default: localhost)")
     args = parser.parse_args()
     _only_text_feedback = args.only_text_feedback
+    _rpc_host = args.host
     logger.info(f"Only text feedback: {_only_text_feedback}")
+    logger.info(f"Connecting to FreeCAD RPC server at: {_rpc_host}")
     mcp.run()
