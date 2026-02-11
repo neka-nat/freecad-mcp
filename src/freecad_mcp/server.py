@@ -614,13 +614,30 @@ Only revert to basic creation methods in the following cases:
 """
 
 
+def _validate_host(value: str) -> str:
+    """Validate that *value* is a valid IP address or hostname.
+
+    Used as the ``type`` callback for the ``--host`` argparse argument.
+    Raises ``argparse.ArgumentTypeError`` on invalid input.
+    """
+    import argparse
+
+    import validators
+
+    if validators.ipv4(value) or validators.ipv6(value) or validators.hostname(value):
+        return value
+    raise argparse.ArgumentTypeError(
+        f"Invalid host: '{value}'. Must be a valid IP address or hostname."
+    )
+
+
 def main():
     """Run the MCP server"""
     global _only_text_feedback, _rpc_host
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--only-text-feedback", action="store_true", help="Only return text feedback")
-    parser.add_argument("--host", type=str, default="localhost", help="Host address of the FreeCAD RPC server to connect to (default: localhost)")
+    parser.add_argument("--host", type=_validate_host, default="localhost", help="Host address of the FreeCAD RPC server to connect to (default: localhost)")
     args = parser.parse_args()
     _only_text_feedback = args.only_text_feedback
     _rpc_host = args.host

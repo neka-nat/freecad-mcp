@@ -114,6 +114,43 @@ git clone https://github.com/neka-nat/freecad-mcp.git
 }
 ```
 
+## Remote Connections
+
+By default the RPC server does not accept remote connections and listens on `localhost`. To control FreeCAD from another machine on your network:
+
+### 1. Enable remote connections in FreeCAD
+
+In the **FreeCAD MCP** toolbar:
+
+1. Check **Remote Connections** — the RPC server will bind to `0.0.0.0` (all interfaces) on the next restart. For security reasons, it only accepts connections from the IP addresses or CIDR subnets specified in the **Allowed IPs** field. By default this is `127.0.0.1`.
+2. Click **Configure Allowed IPs** and enter a comma-separated list of IP addresses or CIDR subnets that are allowed to connect, e.g.:
+
+   ```
+   192.168.1.100, 10.0.0.0/24
+   ```
+
+   `127.0.0.1` is always the default. Invalid entries are rejected with an error dialog. Restart the RPC server after changing these settings.
+
+### 2. Point the MCP server at the remote host
+
+Pass the `--host` flag with the IP address or hostname of the machine running FreeCAD:
+
+```json
+{
+  "mcpServers": {
+    "freecad": {
+      "command": "uvx",
+      "args": [
+        "freecad-mcp",
+        "--host", "192.168.1.100"
+      ]
+    }
+  }
+}
+```
+
+The `--host` value is validated on startup — it must be a valid IPv4/IPv6 address or hostname.
+
 ## Tools
 
 * `create_document`: Create a new document in FreeCAD.

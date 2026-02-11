@@ -6,6 +6,7 @@ import contextlib
 import ipaddress
 import json
 import queue
+import re
 import base64
 import io
 import os
@@ -87,20 +88,50 @@ class FilteredXMLRPCServer(SimpleXMLRPCServer):
         return False
 
 
-def _parse_allowed_ips(allowed_ips_str):
-    """Parse a comma-separated string of IPs/subnets into a list of ip_network objects."""
-    networks = []
+_COMMA_SEP_RE = re.compile(r"^\s*[^,\s]+(\s*,\s*[^,\s]+)*\s*$")
+
+
+def validate_allowed_ips(allowed_ips_str):
+    """Validate a comma-separated string of IP addresses/subnets.
+
+    Returns a ``(valid, errors)`` tuple.  ``valid`` is a list of normalised
+    entry strings that passed validation; ``errors`` is a list of
+    human-readable error messages (empty when the input is fully valid).
+
+    Checks performed:
+    1. The overall string is well-formed comma-separated (no leading/trailing
+       commas, no empty entries between commas, not blank).
+    2. Each individual entry is a valid IPv4/IPv6 address or CIDR subnet
+       (validated via the stdlib ``ipaddress`` module).
+    """
+    errors = []
+
+    if not allowed_ips_str or not allowed_ips_str.strip():
+        return [], ["Input must not be empty."]
+
+    if not _COMMA_SEP_RE.match(allowed_ips_str):
+        return [], [
+            "Malformed list — check for leading/trailing commas, "
+            "double commas, or missing separators."
+        ]
+
+    valid = []
     for entry in allowed_ips_str.split(","):
         entry = entry.strip()
-        if not entry:
-            continue
         try:
-            networks.append(ipaddress.ip_network(entry, strict=False))
+            ipaddress.ip_network(entry, strict=False)
+            valid.append(entry)
         except ValueError:
-            FreeCAD.Console.PrintWarning(
-                f"MCP RPC: Invalid IP/subnet '{entry}', skipping\n"
-            )
-    return networks
+            errors.append(f"Invalid IP/subnet: '{entry}'")
+    return valid, errors
+
+
+def _parse_allowed_ips(allowed_ips_str):
+    """Parse a comma-separated string of IPs/subnets into a list of ip_network objects."""
+    valid, errors = validate_allowed_ips(allowed_ips_str)
+    for msg in errors:
+        FreeCAD.Console.PrintWarning(f"MCP RPC: {msg}, skipping\n")
+    return [ipaddress.ip_network(entry, strict=False) for entry in valid]
 
 # GUI task queue
 rpc_request_queue = queue.Queue()
@@ -648,10 +679,24 @@ class ConfigureAllowedIPsCommand:
             current_ips,
         )
         if ok and text.strip():
-            settings["allowed_ips"] = text.strip()
+            valid, errors = validate_allowed_ips(text.strip())
+            if errors:
+                QtWidgets.QMessageBox.warning(
+                    None,
+                    "Invalid IP Configuration",
+                    "The following errors were found:\n\n"
+                    + "\n".join(f"• {e}" for e in errors)
+                    + ("\n\nOnly valid entries will be saved."
+                       if valid else "\n\nNo valid entries found. Settings not changed."),
+                )
+            if not valid:
+                FreeCAD.Console.PrintWarning("Allowed IPs not changed — no valid entries.\n")
+                return
+            normalised = ", ".join(valid)
+            settings["allowed_ips"] = normalised
             save_settings(settings)
             FreeCAD.Console.PrintMessage(
-                f"Allowed IPs updated to: {text.strip()}\n"
+                f"Allowed IPs updated to: {normalised}\n"
             )
             if rpc_server_instance:
                 FreeCAD.Console.PrintMessage(
