@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from xmlrpc.server import SimpleXMLRPCServer
 
-from PySide import QtCore, QtWidgets
+from PySide import QtCore, QtGui, QtWidgets
 
 from .parts_library import get_parts_list, insert_part_from_library
 from .serialize import serialize_object
@@ -32,6 +32,8 @@ _SETTINGS_FILENAME = "freecad_mcp_settings.json"
 _DEFAULT_SETTINGS = {
     "remote_enabled": False,
     "allowed_ips": "127.0.0.1",
+    "auto_start_server": True,
+    "startup_remote_enabled": False,
 }
 
 
@@ -555,6 +557,77 @@ class FreeCADRPC:
             return str(e)
 
 
+def _make_status_icon(color):
+    """Create a small filled-circle icon in the given QColor."""
+    pixmap = QtGui.QPixmap(16, 16)
+    pixmap.fill(QtCore.Qt.transparent)
+    painter = QtGui.QPainter(pixmap)
+    painter.setRenderHint(QtGui.QPainter.Antialiasing)
+    painter.setBrush(QtGui.QBrush(color))
+    painter.setPen(QtCore.Qt.NoPen)
+    painter.drawEllipse(2, 2, 12, 12)
+    painter.end()
+    return QtGui.QIcon(pixmap)
+
+
+_ICON_RUNNING = None  # built lazily after Qt is ready
+_ICON_STOPPED = None
+
+_COLOR_RUNNING = QtGui.QColor(76, 175, 80)   # Material Green 500
+_COLOR_STOPPED = QtGui.QColor(190, 58, 50)   # Muted red
+
+
+def _get_icon_running():
+    global _ICON_RUNNING
+    if _ICON_RUNNING is None:
+        _ICON_RUNNING = _make_status_icon(_COLOR_RUNNING)
+    return _ICON_RUNNING
+
+
+def _get_icon_stopped():
+    global _ICON_STOPPED
+    if _ICON_STOPPED is None:
+        _ICON_STOPPED = _make_status_icon(_COLOR_STOPPED)
+    return _ICON_STOPPED
+
+
+# Action references, populated once by _init_gui().
+_actions: dict[str, list] = {}
+
+
+def _update_server_action():
+    """Update server toggle button icon and text."""
+    running = rpc_server_instance is not None
+    icon = _get_icon_running() if running else _get_icon_stopped()
+    for a in _actions.get("server_button", []):
+        a.setIcon(icon)
+        if running:
+            a.setText("Stop Server")
+            a.setToolTip("Stop the MCP RPC server.")
+        else:
+            a.setText("Start Server")
+            a.setToolTip("Start the MCP RPC server.")
+
+
+def _update_remote_action():
+    """Update remote toggle button and configure-IPs visibility/count."""
+    settings = load_settings()
+    enabled = settings.get("remote_enabled", False)
+    allowed_ips = settings.get("allowed_ips", "127.0.0.1")
+    ip_count = len([e for e in allowed_ips.split(",") if e.strip()])
+    for a in _actions.get("remote_button", []):
+        if enabled:
+            a.setText("Disable Remote Access")
+            a.setToolTip("Restrict to local connections only.")
+        else:
+            a.setText("Enable Remote Access")
+            a.setToolTip("Allow connections from other machines on the network.")
+    for a in _actions.get("configure_ips", []):
+        a.setVisible(enabled)
+        if enabled:
+            a.setText(f"Configure Allowed IPs ({ip_count})")
+
+
 def start_rpc_server(port=9875):
     global rpc_server_thread, rpc_server_instance
 
@@ -585,6 +658,7 @@ def start_rpc_server(port=9875):
     rpc_server_thread.start()
 
     QtCore.QTimer.singleShot(500, process_gui_tasks)
+    _update_server_action()
 
     msg = f"RPC Server started at {host}:{port}."
     if remote_enabled:
@@ -600,30 +674,94 @@ def stop_rpc_server():
         rpc_server_thread.join()
         rpc_server_instance = None
         rpc_server_thread = None
+        _update_server_action()
         FreeCAD.Console.PrintMessage("RPC Server stopped.\n")
         return "RPC Server stopped."
 
     return "RPC Server was not running."
 
 
-class StartRPCServerCommand:
+class StartupSettingsDialog(QtWidgets.QDialog):
+    """Dialog for configuring startup defaults."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Startup Settings")
+        self.setMinimumWidth(320)
+
+        settings = load_settings()
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setSpacing(16)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        # --- Server group ---
+        server_group = QtWidgets.QGroupBox("Server")
+        server_layout = QtWidgets.QVBoxLayout(server_group)
+        server_layout.setSpacing(8)
+        server_layout.setContentsMargins(12, 12, 12, 12)
+
+        self._server_on = QtWidgets.QRadioButton("Start automatically")
+        self._server_off = QtWidgets.QRadioButton("Start manually")
+        if settings.get("auto_start_server", True):
+            self._server_on.setChecked(True)
+        else:
+            self._server_off.setChecked(True)
+
+        server_layout.addWidget(self._server_on)
+        server_layout.addWidget(self._server_off)
+        layout.addWidget(server_group)
+
+        # --- Remote access group ---
+        remote_group = QtWidgets.QGroupBox("Remote Access")
+        remote_layout = QtWidgets.QVBoxLayout(remote_group)
+        remote_layout.setSpacing(8)
+        remote_layout.setContentsMargins(12, 12, 12, 12)
+
+        self._remote_on = QtWidgets.QRadioButton("Enable on startup")
+        self._remote_off = QtWidgets.QRadioButton("Disable on startup")
+        if settings.get("startup_remote_enabled", False):
+            self._remote_on.setChecked(True)
+        else:
+            self._remote_off.setChecked(True)
+
+        remote_layout.addWidget(self._remote_on)
+        remote_layout.addWidget(self._remote_off)
+        layout.addWidget(remote_group)
+
+        # --- Buttons ---
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Save | QtWidgets.QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def accept(self):
+        settings = load_settings()
+        settings["auto_start_server"] = self._server_on.isChecked()
+        settings["startup_remote_enabled"] = self._remote_on.isChecked()
+        save_settings(settings)
+        FreeCAD.Console.PrintMessage(
+            f"Startup settings saved — server: "
+            f"{'auto-start' if settings['auto_start_server'] else 'manual'}, "
+            f"remote: {'enabled' if settings['startup_remote_enabled'] else 'disabled'}\n"
+        )
+        super().accept()
+
+
+class ToggleRPCServerCommand:
     def GetResources(self):
-        return {"MenuText": "Start RPC Server", "ToolTip": "Start RPC Server"}
+        return {
+            "MenuText": "Start Server",
+            "ToolTip": "Start the MCP RPC server.",
+        }
 
     def Activated(self):
-        msg = start_rpc_server()
-        FreeCAD.Console.PrintMessage(msg + "\n")
-
-    def IsActive(self):
-        return True
-
-
-class StopRPCServerCommand:
-    def GetResources(self):
-        return {"MenuText": "Stop RPC Server", "ToolTip": "Stop RPC Server"}
-
-    def Activated(self):
-        msg = stop_rpc_server()
+        if rpc_server_instance:
+            msg = stop_rpc_server()
+        else:
+            msg = start_rpc_server()
         FreeCAD.Console.PrintMessage(msg + "\n")
 
     def IsActive(self):
@@ -633,14 +771,13 @@ class StopRPCServerCommand:
 class ToggleRemoteConnectionsCommand:
     def GetResources(self):
         return {
-            "MenuText": "Remote Connections",
-            "ToolTip": "Enable or disable remote connections for the RPC server.",
-            "Checkable": True,
+            "MenuText": "Enable Remote Access",
+            "ToolTip": "Allow connections from other machines on the network.",
         }
 
-    def Activated(self, checked=0):
+    def Activated(self):
         settings = load_settings()
-        settings["remote_enabled"] = bool(checked)
+        settings["remote_enabled"] = not settings.get("remote_enabled", False)
         save_settings(settings)
 
         if settings["remote_enabled"]:
@@ -656,6 +793,8 @@ class ToggleRemoteConnectionsCommand:
                 "Restart the RPC server for changes to take effect.\n"
             )
 
+        _update_remote_action()
+
     def IsActive(self):
         return True
 
@@ -664,7 +803,7 @@ class ConfigureAllowedIPsCommand:
     def GetResources(self):
         return {
             "MenuText": "Configure Allowed IPs",
-            "ToolTip": "Set which IP addresses or subnets are allowed to connect to the RPC server.",
+            "ToolTip": "Set which IP addresses or subnets can connect when remote access is enabled.",
         }
 
     def Activated(self):
@@ -702,6 +841,7 @@ class ConfigureAllowedIPsCommand:
                 FreeCAD.Console.PrintMessage(
                     "Restart the RPC server for changes to take effect.\n"
                 )
+            _update_remote_action()
         else:
             FreeCAD.Console.PrintMessage("Allowed IPs not changed.\n")
 
@@ -709,26 +849,70 @@ class ConfigureAllowedIPsCommand:
         return True
 
 
-FreeCADGui.addCommand("Start_RPC_Server", StartRPCServerCommand())
-FreeCADGui.addCommand("Stop_RPC_Server", StopRPCServerCommand())
+class StartupSettingsCommand:
+    def GetResources(self):
+        return {
+            "MenuText": "Startup Settings",
+            "ToolTip": "Configure default startup behavior for the server and remote access.",
+        }
+
+    def Activated(self):
+        dialog = StartupSettingsDialog(None)
+        dialog.exec_()
+
+    def IsActive(self):
+        return True
+
+
+FreeCADGui.addCommand("Toggle_RPC_Server", ToggleRPCServerCommand())
 FreeCADGui.addCommand("Toggle_Remote_Connections", ToggleRemoteConnectionsCommand())
 FreeCADGui.addCommand("Configure_Allowed_IPs", ConfigureAllowedIPsCommand())
+FreeCADGui.addCommand("Startup_Settings", StartupSettingsCommand())
 
 
-def _sync_remote_toggle_state():
-    """Sync the Remote Connections checkbox with saved settings on startup."""
+# Map of initial MenuText -> action key (used once to find QActions at startup).
+_ACTION_KEYS = {
+    "Start Server": "server_button",
+    "Enable Remote Access": "remote_button",
+    "Configure Allowed IPs": "configure_ips",
+}
+
+
+def _init_gui():
+    """One-shot startup: set toolbar style, cache QAction refs, apply initial state."""
     try:
-        settings = load_settings()
-        enabled = settings.get("remote_enabled", False)
         main_window = FreeCADGui.getMainWindow()
+        if main_window is None:
+            raise RuntimeError("Main window not ready")
+
+        # Clear in case this is a retry after a partial failure.
+        _actions.clear()
+
+        # Show icon + text side-by-side on our toolbar.
+        for toolbar in main_window.findChildren(QtWidgets.QToolBar):
+            if toolbar.windowTitle() == "FreeCAD MCP":
+                toolbar.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+                break
+
+        # Cache every matching QAction (toolbar and menu each get one).
         for action in main_window.findChildren(QtWidgets.QAction):
-            if action.text() == "Remote Connections":
-                action.setChecked(enabled)
-                return
+            key = _ACTION_KEYS.get(action.text())
+            if key is not None:
+                _actions.setdefault(key, []).append(action)
+
+        # Apply startup defaults.
+        settings = load_settings()
+        settings["remote_enabled"] = settings.get("startup_remote_enabled", False)
+        save_settings(settings)
+
+        if settings.get("auto_start_server", True) and rpc_server_instance is None:
+            msg = start_rpc_server()
+            FreeCAD.Console.PrintMessage(msg + "\n")
+
+        _update_server_action()
+        _update_remote_action()
     except Exception:
-        pass
-    # Retry if menu not ready yet
-    QtCore.QTimer.singleShot(2000, _sync_remote_toggle_state)
+        QtCore.QTimer.singleShot(2000, _init_gui)
 
 
-QtCore.QTimer.singleShot(2000, _sync_remote_toggle_state)
+QtCore.QTimer.singleShot(2000, _init_gui)
