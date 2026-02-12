@@ -1,5 +1,4 @@
 import FreeCAD as App
-import json
 
 
 def serialize_value(value):

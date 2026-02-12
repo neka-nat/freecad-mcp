@@ -6,10 +6,12 @@ class FreeCADMCPAddonWorkbench(Workbench):
         from rpc_server import rpc_server
 
         commands = [
-            "Start_RPC_Server",
-            "Stop_RPC_Server",
+            "Toggle_RPC_Server",
+            "Separator",
             "Toggle_Remote_Connections",
             "Configure_Allowed_IPs",
+            "Separator",
+            "Startup_Settings",
         ]
         self.appendToolbar("FreeCAD MCP", commands)
         self.appendMenu("FreeCAD MCP", commands)
