@@ -243,9 +243,9 @@ class FreeCADRPC:
         rpc_request_queue.put(lambda: self._create_document_gui(name))
         res = rpc_response_queue.get()
         if res is True:
-            return {"success": True, "document_name": name}
+            return {"success": True, "data": {"document_name": name}, "error": None}
         else:
-            return {"success": False, "error": res}
+            return {"success": False, "data": None, "error": res}
 
     def create_object(self, doc_name, obj_data: dict[str, Any]):
         obj = Object(
@@ -257,9 +257,9 @@ class FreeCADRPC:
         rpc_request_queue.put(lambda: self._create_object_gui(doc_name, obj))
         res = rpc_response_queue.get()
         if res is True:
-            return {"success": True, "object_name": obj.name}
+            return {"success": True, "data": {"object_name": obj.name}, "error": None}
         else:
-            return {"success": False, "error": res}
+            return {"success": False, "data": None, "error": res}
 
     def edit_object(self, doc_name: str, obj_name: str, properties: dict[str, Any]) -> dict[str, Any]:
         obj = Object(
@@ -269,17 +269,17 @@ class FreeCADRPC:
         rpc_request_queue.put(lambda: self._edit_object_gui(doc_name, obj))
         res = rpc_response_queue.get()
         if res is True:
-            return {"success": True, "object_name": obj.name}
+            return {"success": True, "data": {"object_name": obj.name}, "error": None}
         else:
-            return {"success": False, "error": res}
+            return {"success": False, "data": None, "error": res}
 
     def delete_object(self, doc_name: str, obj_name: str):
         rpc_request_queue.put(lambda: self._delete_object_gui(doc_name, obj_name))
         res = rpc_response_queue.get()
         if res is True:
-            return {"success": True, "object_name": obj_name}
+            return {"success": True, "data": {"object_name": obj_name}, "error": None}
         else:
-            return {"success": False, "error": res}
+            return {"success": False, "data": None, "error": res}
 
     def execute_code(self, code: str) -> dict[str, Any]:
         output_buffer = io.StringIO()
@@ -298,40 +298,40 @@ class FreeCADRPC:
         rpc_request_queue.put(task)
         res = rpc_response_queue.get()
         if res is True:
-            return {
-                "success": True,
-                "message": "Python code execution scheduled. \nOutput: " + output_buffer.getvalue()
-            }
+            return {"success": True, "data": {"output": output_buffer.getvalue()}, "error": None}
         else:
-            return {"success": False, "error": res}
+            return {"success": False, "data": None, "error": res}
 
     def get_objects(self, doc_name):
-        doc = FreeCAD.getDocument(doc_name)
-        if doc:
-            return [serialize_object(obj) for obj in doc.Objects]
-        else:
-            return []
+        try:
+            doc = FreeCAD.getDocument(doc_name)
+        except NameError:
+            return {"success": False, "data": None, "error": f"Document '{doc_name}' not found"}
+        return {"success": True, "data": [serialize_object(obj) for obj in doc.Objects], "error": None}
 
     def get_object(self, doc_name, obj_name):
-        doc = FreeCAD.getDocument(doc_name)
-        if doc:
-            return serialize_object(doc.getObject(obj_name))
-        else:
-            return None
+        try:
+            doc = FreeCAD.getDocument(doc_name)
+        except NameError:
+            return {"success": False, "data": None, "error": f"Document '{doc_name}' not found"}
+        obj = doc.getObject(obj_name)
+        if not obj:
+            return {"success": False, "data": None, "error": f"Object '{obj_name}' not found in document '{doc_name}'"}
+        return {"success": True, "data": serialize_object(obj), "error": None}
 
     def insert_part_from_library(self, relative_path):
         rpc_request_queue.put(lambda: self._insert_part_from_library(relative_path))
         res = rpc_response_queue.get()
         if res is True:
-            return {"success": True, "message": "Part inserted from library."}
+            return {"success": True, "data": None, "error": None}
         else:
-            return {"success": False, "error": res}
+            return {"success": False, "data": None, "error": res}
 
     def list_documents(self):
-        return list(FreeCAD.listDocuments().keys())
+        return {"success": True, "data": list(FreeCAD.listDocuments().keys()), "error": None}
 
     def get_parts_list(self):
-        return get_parts_list()
+        return {"success": True, "data": get_parts_list(), "error": None}
 
     def get_active_screenshot(self, view_name: str = "Isometric", width: int | None = None, height: int | None = None, focus_object: str | None = None) -> str:
         """Get a screenshot of the active view.
