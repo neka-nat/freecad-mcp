@@ -68,7 +68,7 @@ else:
 """)
 
             # If the view doesn't support screenshots, return None
-            if not result.get("success", False) or "Current view does not support screenshots" in result.get("message", ""):
+            if not result.get("success", False) or "Current view does not support screenshots" in (result.get("data") or {}).get("output", ""):
                 logger.info("Screenshot unavailable in current view (likely Spreadsheet or TechDraw view)")
                 return None
 
@@ -177,7 +177,7 @@ def create_document(ctx: Context, name: str) -> list[TextContent]:
         res = freecad.create_document(name)
         if res["success"]:
             return [
-                TextContent(type="text", text=f"Document '{res['document_name']}' created successfully")
+                TextContent(type="text", text=f"Document '{res['data']['document_name']}' created successfully")
             ]
         else:
             return [
@@ -322,7 +322,7 @@ def create_object(
         
         if res["success"]:
             response = [
-                TextContent(type="text", text=f"Object '{res['object_name']}' created successfully"),
+                TextContent(type="text", text=f"Object '{res['data']['object_name']}' created successfully"),
             ]
             return add_screenshot_if_available(response, screenshot)
         else:
@@ -359,7 +359,7 @@ def edit_object(
 
         if res["success"]:
             response = [
-                TextContent(type="text", text=f"Object '{res['object_name']}' edited successfully"),
+                TextContent(type="text", text=f"Object '{res['data']['object_name']}' edited successfully"),
             ]
             return add_screenshot_if_available(response, screenshot)
         else:
@@ -392,7 +392,7 @@ def delete_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextConten
         
         if res["success"]:
             response = [
-                TextContent(type="text", text=f"Object '{res['object_name']}' deleted successfully"),
+                TextContent(type="text", text=f"Object '{res['data']['object_name']}' deleted successfully"),
             ]
             return add_screenshot_if_available(response, screenshot)
         else:
@@ -424,7 +424,7 @@ def execute_code(ctx: Context, code: str) -> list[TextContent | ImageContent]:
         
         if res["success"]:
             response = [
-                TextContent(type="text", text=f"Code executed successfully: {res['message']}"),
+                TextContent(type="text", text=f"Code executed successfully.\nOutput: {res['data']['output']}"),
             ]
             return add_screenshot_if_available(response, screenshot)
         else:
@@ -488,7 +488,7 @@ def insert_part_from_library(ctx: Context, relative_path: str) -> list[TextConte
         
         if res["success"]:
             response = [
-                TextContent(type="text", text=f"Part inserted from library: {res['message']}"),
+                TextContent(type="text", text="Part inserted from library successfully"),
             ]
             return add_screenshot_if_available(response, screenshot)
         else:
@@ -516,11 +516,17 @@ def get_objects(ctx: Context, doc_name: str) -> list[TextContent | ImageContent]
     """
     freecad = get_freecad_connection()
     try:
+        res = freecad.get_objects(doc_name)
         screenshot = freecad.get_active_screenshot()
-        response = [
-            TextContent(type="text", text=json.dumps(freecad.get_objects(doc_name))),
-        ]
-        return add_screenshot_if_available(response, screenshot)
+        if res["success"]:
+            response = [
+                TextContent(type="text", text=json.dumps(res["data"])),
+            ]
+            return add_screenshot_if_available(response, screenshot)
+        else:
+            return [
+                TextContent(type="text", text=f"Failed to get objects: {res['error']}")
+            ]
     except Exception as e:
         logger.error(f"Failed to get objects: {str(e)}")
         return [
@@ -542,11 +548,17 @@ def get_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextContent |
     """
     freecad = get_freecad_connection()
     try:
+        res = freecad.get_object(doc_name, obj_name)
         screenshot = freecad.get_active_screenshot()
-        response = [
-            TextContent(type="text", text=json.dumps(freecad.get_object(doc_name, obj_name))),
-        ]
-        return add_screenshot_if_available(response, screenshot)
+        if res["success"]:
+            response = [
+                TextContent(type="text", text=json.dumps(res["data"])),
+            ]
+            return add_screenshot_if_available(response, screenshot)
+        else:
+            return [
+                TextContent(type="text", text=f"Failed to get object: {res['error']}")
+            ]
     except Exception as e:
         logger.error(f"Failed to get object: {str(e)}")
         return [
@@ -559,14 +571,14 @@ def get_parts_list(ctx: Context) -> list[TextContent]:
     """Get the list of parts in the parts library addon.
     """
     freecad = get_freecad_connection()
-    parts = freecad.get_parts_list()
-    if parts:
+    res = freecad.get_parts_list()
+    if res["success"] and res["data"]:
         return [
-            TextContent(type="text", text=json.dumps(parts))
+            TextContent(type="text", text=json.dumps(res["data"]))
         ]
     else:
         return [
-            TextContent(type="text", text=f"No parts found in the parts library. You must add parts_library addon.")
+            TextContent(type="text", text="No parts found in the parts library. You must add parts_library addon.")
         ]
 
 
@@ -578,8 +590,8 @@ def list_documents(ctx: Context) -> list[TextContent]:
         A list of document names.
     """
     freecad = get_freecad_connection()
-    docs = freecad.list_documents()
-    return [TextContent(type="text", text=json.dumps(docs))]
+    res = freecad.list_documents()
+    return [TextContent(type="text", text=json.dumps(res["data"]))]
 
 
 @mcp.prompt()
