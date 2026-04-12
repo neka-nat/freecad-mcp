@@ -552,6 +552,7 @@ class FreeCADRPC:
                     view.fitAll()
             else:
                 view.fitAll()
+            FreeCADGui.updateGui()
             if width is not None and height is not None:
                 view.saveImage(save_path, width, height)
             else:
