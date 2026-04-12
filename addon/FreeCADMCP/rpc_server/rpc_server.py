@@ -316,7 +316,11 @@ class FreeCADRPC:
     def get_object(self, doc_name, obj_name):
         doc = FreeCAD.getDocument(doc_name)
         if doc:
-            return serialize_object(doc.getObject(obj_name))
+            obj = doc.getObject(obj_name)
+            if obj:
+                return serialize_object(obj)
+            else:
+                return None
         else:
             return None
 
