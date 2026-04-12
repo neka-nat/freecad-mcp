@@ -1,6 +1,6 @@
 [project]
 name = "freecad-mcp"
-version = "0.1.16"
+version = "0.1.17"
 description = "Add your description here"
 readme = "README.md"
 authors = [
