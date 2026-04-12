@@ -236,13 +236,14 @@ def set_object_property(
 
 class FreeCADRPC:
     """RPC server for FreeCAD"""
+    TIMEOUT = 10
 
     def ping(self):
         return True
 
     def create_document(self, name="New_Document"):
         rpc_request_queue.put(lambda: self._create_document_gui(name))
-        res = rpc_response_queue.get()
+        res = rpc_response_queue.get(timeout=self.TIMEOUT)
         if res is True:
             return {"success": True, "document_name": name}
         else:
@@ -256,7 +257,7 @@ class FreeCADRPC:
             properties=obj_data.get("Properties", {}),
         )
         rpc_request_queue.put(lambda: self._create_object_gui(doc_name, obj))
-        res = rpc_response_queue.get()
+        res = rpc_response_queue.get(timeout=self.TIMEOUT)
         if res is True:
             return {"success": True, "object_name": obj.name}
         else:
@@ -268,7 +269,7 @@ class FreeCADRPC:
             properties=properties.get("Properties", {}),
         )
         rpc_request_queue.put(lambda: self._edit_object_gui(doc_name, obj))
-        res = rpc_response_queue.get()
+        res = rpc_response_queue.get(timeout=self.TIMEOUT)
         if res is True:
             return {"success": True, "object_name": obj.name}
         else:
@@ -276,7 +277,7 @@ class FreeCADRPC:
 
     def delete_object(self, doc_name: str, obj_name: str):
         rpc_request_queue.put(lambda: self._delete_object_gui(doc_name, obj_name))
-        res = rpc_response_queue.get()
+        res = rpc_response_queue.get(timeout=self.TIMEOUT)
         if res is True:
             return {"success": True, "object_name": obj_name}
         else:
@@ -297,7 +298,7 @@ class FreeCADRPC:
                 return f"Error executing Python code: {e}\n"
 
         rpc_request_queue.put(task)
-        res = rpc_response_queue.get()
+        res = rpc_response_queue.get(timeout=self.TIMEOUT)
         if res is True:
             return {
                 "success": True,
@@ -326,7 +327,7 @@ class FreeCADRPC:
 
     def insert_part_from_library(self, relative_path):
         rpc_request_queue.put(lambda: self._insert_part_from_library(relative_path))
-        res = rpc_response_queue.get()
+        res = rpc_response_queue.get(timeout=self.TIMEOUT)
         if res is True:
             return {"success": True, "message": "Part inserted from library."}
         else:
@@ -361,7 +362,7 @@ class FreeCADRPC:
                 return False
                 
         rpc_request_queue.put(check_view_supports_screenshots)
-        supports_screenshots = rpc_response_queue.get()
+        supports_screenshots = rpc_response_queue.get(timeout=self.TIMEOUT)
         
         if not supports_screenshots:
             FreeCAD.Console.PrintWarning("Current view does not support screenshots\n")
@@ -373,7 +374,7 @@ class FreeCADRPC:
         rpc_request_queue.put(
             lambda: self._save_active_screenshot(tmp_path, view_name, width, height, focus_object)
         )
-        res = rpc_response_queue.get()
+        res = rpc_response_queue.get(timeout=self.TIMEOUT)
         if res is True:
             try:
                 with open(tmp_path, "rb") as image_file:
