@@ -31,7 +31,9 @@ https://claude.ai/share/7b48fd60-68ba-46fb-bb21-2fbb17399b48
 
 FreeCAD Addon directory is
 * Windows: `%APPDATA%\FreeCAD\Mod\`
-* Mac: `~/Library/Application\ Support/FreeCAD/Mod/`
+* Mac:
+  * FreeCAD 1.1: `~/Library/Application\ Support/FreeCAD/v1-1/Mod/`
+  * FreeCAD 1.0: `~/Library/Application\ Support/FreeCAD/v1-0/Mod/`
 * Linux:
   * Ubuntu: `~/.FreeCAD/Mod/` or `~/snap/freecad/common/Mod/` (if you install FreeCAD from snap)
   * Debian: `~/.local/share/FreeCAD/Mod`
@@ -41,7 +43,12 @@ Please put `addon/FreeCADMCP` directory to the addon directory.
 ```bash
 git clone https://github.com/neka-nat/freecad-mcp.git
 cd freecad-mcp
+
+# For Linux (Ubuntu/Debian)
 cp -r addon/FreeCADMCP ~/.FreeCAD/Mod/
+
+# For macOS (FreeCAD 1.1)
+cp -r addon/FreeCADMCP ~/Library/Application\ Support/FreeCAD/v1-1/Mod/
 ```
 
 When you install addon, you need to restart FreeCAD.
