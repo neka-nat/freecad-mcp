@@ -37,6 +37,7 @@ FreeCAD Addon directory is
 * Linux:
   * Ubuntu: `~/.FreeCAD/Mod/` or `~/snap/freecad/common/Mod/` (if you install FreeCAD from snap)
   * Debian: `~/.local/share/FreeCAD/Mod`
+  * Arch / CachyOS (FreeCAD 1.1 from `extra/freecad`): `~/.local/share/FreeCAD/v1-1/Mod/`
 
 Please put `addon/FreeCADMCP` directory to the addon directory.
 
@@ -46,6 +47,10 @@ cd freecad-mcp
 
 # For Linux (Ubuntu/Debian)
 cp -r addon/FreeCADMCP ~/.FreeCAD/Mod/
+
+# For Linux (Arch/CachyOS, FreeCAD 1.1 from extra/freecad)
+mkdir -p ~/.local/share/FreeCAD/v1-1/Mod/
+cp -r addon/FreeCADMCP ~/.local/share/FreeCAD/v1-1/Mod/
 
 # For macOS (FreeCAD 1.1)
 cp -r addon/FreeCADMCP ~/Library/Application\ Support/FreeCAD/v1-1/Mod/
