@@ -2,6 +2,18 @@ import FreeCAD as App
 import json
 
 
+def _get_optional_app_type(name: str) -> type | tuple[type, ...] | None:
+    value = getattr(App, name, None)
+    if isinstance(value, type):
+        return value
+    if isinstance(value, tuple) and all(isinstance(item, type) for item in value):
+        return value
+    return None
+
+
+_COLOR_TYPE = _get_optional_app_type("Color")
+
+
 def serialize_value(value):
     if isinstance(value, (int, float, str, bool)):
         return value
@@ -19,7 +31,7 @@ def serialize_value(value):
         }
     elif isinstance(value, (list, tuple)):
         return [serialize_value(v) for v in value]
-    elif isinstance(value, (App.Color)):
+    elif _COLOR_TYPE is not None and isinstance(value, _COLOR_TYPE):
         return tuple(value)
     else:
         return str(value)
