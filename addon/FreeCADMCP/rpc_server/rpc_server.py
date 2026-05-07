@@ -283,6 +283,21 @@ class FreeCADRPC:
         else:
             return {"success": False, "error": res}
 
+    def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600) -> dict[str, Any]:
+        """Run the CalculiX solver on an existing Fem::FemAnalysis and return summary results."""
+        try:
+            timeout_s = int(timeout)
+        except (TypeError, ValueError):
+            return {"success": False, "error": f"invalid timeout: {timeout!r}"}
+        rpc_request_queue.put(lambda: self._run_fem_analysis_gui(doc_name, analysis_name))
+        try:
+            res = rpc_response_queue.get(timeout=timeout_s)
+        except queue.Empty:
+            return {"success": False, "error": f"solver did not return within {timeout_s}s (still running on the GUI thread)"}
+        if isinstance(res, dict):
+            return res
+        return {"success": False, "error": str(res)}
+
     def execute_code(self, code: str) -> dict[str, Any]:
         output_buffer = io.StringIO()
         def task():
@@ -403,19 +418,30 @@ class FreeCADRPC:
                 if obj.type == "Fem::FemMeshGmsh" and obj.analysis:
                     from femmesh.gmshtools import GmshTools
                     res = getattr(doc, obj.analysis).addObject(ObjectsFem.makeMeshGmsh(doc, obj.name))[0]
-                    if "Part" in obj.properties:
-                        target_obj = doc.getObject(obj.properties["Part"])
-                        if target_obj:
-                            res.Part = target_obj
-                        else:
-                            raise ValueError(f"Referenced object '{obj.properties['Part']}' not found.")
-                        del obj.properties["Part"]
-                    else:
-                        raise ValueError("'Part' property not found in properties.")
+                    # FreeCAD 1.x renamed the Gmsh-mesh geometry link from "Part" to "Shape"
+                    # and the size limits from "ElementSize{Max,Min}" to "CharacteristicLength{Max,Min}".
+                    # Accept both spellings so older snippets keep working.
+                    geom_attr = "Shape" if hasattr(res, "Shape") else ("Part" if hasattr(res, "Part") else None)
+                    legacy_to_new = {
+                        "Part": geom_attr,
+                        "ElementSizeMax": "CharacteristicLengthMax",
+                        "ElementSizeMin": "CharacteristicLengthMin",
+                    }
+                    geom_key = "Part" if "Part" in obj.properties else ("Shape" if "Shape" in obj.properties else None)
+                    if geom_key is None:
+                        raise ValueError("'Part' (or 'Shape') property not found in properties.")
+                    target_obj = doc.getObject(obj.properties[geom_key])
+                    if target_obj is None:
+                        raise ValueError(f"Referenced object '{obj.properties[geom_key]}' not found.")
+                    if geom_attr is None:
+                        raise ValueError("Mesh object has neither 'Shape' nor 'Part' property.")
+                    setattr(res, geom_attr, target_obj)
+                    del obj.properties[geom_key]
 
                     for param, value in obj.properties.items():
-                        if hasattr(res, param):
-                            setattr(res, param, value)
+                        target_param = legacy_to_new.get(param, param)
+                        if target_param and hasattr(res, target_param):
+                            setattr(res, target_param, value)
                     doc.recompute()
 
                     gmsh_tools = GmshTools(res)
@@ -490,6 +516,84 @@ class FreeCADRPC:
             return True
         except Exception as e:
             return str(e)
+
+    def _run_fem_analysis_gui(self, doc_name: str, analysis_name: str):
+        # MUST always return a dict — process_gui_tasks treats None as no-response,
+        # and the caller would block until its timeout. Keep the broad except.
+        work_dir = None
+        try:
+            doc = FreeCAD.getDocument(doc_name)
+            if not doc:
+                return {"success": False, "error": f"Document '{doc_name}' not found."}
+            analysis = doc.getObject(analysis_name)
+            if analysis is None:
+                return {"success": False, "error": f"Analysis '{analysis_name}' not found."}
+            if analysis.TypeId not in ("Fem::FemAnalysis", "Fem::FemAnalysisPython"):
+                return {"success": False, "error": f"'{analysis_name}' is not a FEM analysis (TypeId={analysis.TypeId})."}
+
+            solver = None
+            for member in analysis.Group:
+                tid = getattr(member, "TypeId", "")
+                if "SolverCcx" in tid or "SolverCalculix" in tid:
+                    solver = member
+                    break
+            if solver is None:
+                solver_factory = (
+                    getattr(ObjectsFem, "makeSolverCalculiXCcxTools", None)
+                    or getattr(ObjectsFem, "makeSolverCalculixCcxTools", None)
+                )
+                if solver_factory is None:
+                    return {"success": False, "error": "ObjectsFem has no Calculix solver factory."}
+                solver = solver_factory(doc, "CalculiX")
+                analysis.addObject(solver)
+
+            from femtools import ccxtools
+
+            fea = ccxtools.FemToolsCcx(analysis=analysis, solver=solver)
+            fea.update_objects()
+
+            work_dir = tempfile.mkdtemp(prefix="freecad_mcp_fem_")
+            fea.setup_working_dir(work_dir)
+            fea.setup_ccx()
+
+            prereq_msg = fea.check_prerequisites()
+            if prereq_msg:
+                return {"success": False, "error": f"Prerequisites failed: {prereq_msg}", "working_dir": work_dir}
+
+            fea.purge_results()
+            fea.run()
+            fea.load_results()
+
+            result_obj = None
+            for member in analysis.Group:
+                if "Result" in getattr(member, "TypeId", "") and hasattr(member, "vonMises"):
+                    result_obj = member
+                    break
+            if result_obj is None:
+                return {"success": False, "error": "Solver ran but no result object was produced.", "working_dir": work_dir}
+
+            # vonMises / DisplacementLengths can be None on a degenerate run.
+            vm = list(getattr(result_obj, "vonMises", None) or [])
+            disp = list(getattr(result_obj, "DisplacementLengths", None) or [])
+            doc.recompute()
+
+            return {
+                "success": True,
+                "result_object": result_obj.Name,
+                "node_count": len(vm),
+                "max_von_mises_MPa": max(vm) if vm else None,
+                "min_von_mises_MPa": min(vm) if vm else None,
+                "max_displacement_mm": max(disp) if disp else None,
+                "working_dir": work_dir,
+            }
+        except Exception as e:
+            import traceback
+            return {
+                "success": False,
+                "error": f"{type(e).__name__}: {e}",
+                "traceback": traceback.format_exc(),
+                "working_dir": work_dir,
+            }
 
     def _delete_object_gui(self, doc_name: str, obj_name: str):
         doc = FreeCAD.getDocument(doc_name)
