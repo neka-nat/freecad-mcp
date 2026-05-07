@@ -139,6 +139,39 @@ rpc_request_queue = queue.Queue()
 rpc_response_queue = queue.Queue()
 
 
+def _flush_gui_events(delay_ms: int = 50) -> None:
+    FreeCADGui.updateGui()
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        return
+
+    app.processEvents(QtCore.QEventLoop.AllEvents, delay_ms)
+    if delay_ms > 0:
+        QtCore.QThread.msleep(delay_ms)
+        app.processEvents(QtCore.QEventLoop.AllEvents, delay_ms)
+
+
+def _get_view_size(view: Any) -> tuple[int, int]:
+    try:
+        size = view.getSize()
+        if isinstance(size, (list, tuple)) and len(size) >= 2:
+            return max(1, int(size[0])), max(1, int(size[1]))
+        return max(1, int(size.width())), max(1, int(size.height()))
+    except Exception:
+        return 1024, 768
+
+
+def _resolve_screenshot_size(
+    view: Any,
+    width: int | None,
+    height: int | None,
+) -> tuple[int, int]:
+    view_width, view_height = _get_view_size(view)
+    resolved_width = view_width if width is None else max(1, int(width))
+    resolved_height = view_height if height is None else max(1, int(height))
+    return resolved_width, resolved_height
+
+
 def process_gui_tasks():
     while not rpc_request_queue.empty():
         task = rpc_request_queue.get()
@@ -512,7 +545,14 @@ class FreeCADRPC:
         except Exception as e:
             return str(e)
 
-    def _save_active_screenshot(self, save_path: str, view_name: str = "Isometric", width: int | None = None, height: int | None = None, focus_object: str | None = None):
+    def _save_active_screenshot(
+        self,
+        save_path: str,
+        view_name: str = "Isometric",
+        width: int | None = None,
+        height: int | None = None,
+        focus_object: str | None = None,
+    ):
         try:
             view = FreeCADGui.ActiveDocument.ActiveView
             # Check if the view supports screenshots
@@ -540,6 +580,8 @@ class FreeCADRPC:
             else:
                 raise ValueError(f"Invalid view name: {view_name}")
 
+            focused_selection = False
+
             # Focus on specific object or fit all
             if focus_object:
                 doc = FreeCAD.ActiveDocument
@@ -548,15 +590,21 @@ class FreeCADRPC:
                     FreeCADGui.Selection.clearSelection()
                     FreeCADGui.Selection.addSelection(obj)
                     FreeCADGui.SendMsgToActiveView("ViewSelection")
+                    focused_selection = True
+                    _flush_gui_events()
+                    FreeCADGui.Selection.clearSelection()
                 else:
                     view.fitAll()
             else:
                 view.fitAll()
-            FreeCADGui.updateGui()
-            if width is not None and height is not None:
-                view.saveImage(save_path, width, height)
-            else:
-                view.saveImage(save_path)
+
+            _flush_gui_events()
+            width, height = _resolve_screenshot_size(view, width, height)
+            view.saveImage(save_path, width, height, "Current")
+
+            if focused_selection:
+                FreeCADGui.Selection.clearSelection()
+                _flush_gui_events(delay_ms=0)
             return True
         except Exception as e:
             return str(e)
