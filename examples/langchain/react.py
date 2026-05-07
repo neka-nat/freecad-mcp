@@ -60,8 +60,8 @@ async def main():
                         print(f"\n{ai_msgs[-1].content}\n")
                     else:
                         print("No response from agent.")
-                except Exception as e:
-                    logging.error(f"Agent error: {e}")
+                except Exception:
+                    logging.exception("Agent error")
                     print("Something went wrong.")
 
 if __name__ == "__main__":
