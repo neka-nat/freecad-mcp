@@ -1,302 +1,35 @@
 import FreeCAD
 import FreeCADGui
-import ObjectsFem
 
 import contextlib
-import ipaddress
-import json
 import queue
-import re
 import base64
 import io
 import os
 import tempfile
 import threading
-import traceback
-from dataclasses import dataclass, field
 from typing import Any
-from xmlrpc.server import SimpleXMLRPCServer
 
-from PySide import QtCore, QtWidgets
+from PySide import QtCore
 
+from .commands import register_commands, schedule_toggle_sync
+from .fem_executor import run_fem_analysis as _run_fem_analysis
+from .gui_dispatch import (
+    process_gui_tasks,
+    request_shutdown,
+    rpc_request_queue,
+    rpc_response_queue,
+)
+from .ip_filter import FilteredXMLRPCServer, validate_allowed_ips
+from .object_factory import create_object_gui
 from .parts_library import get_parts_list, insert_part_from_library
+from .property_mapper import Object, set_object_property
 from .serialize import serialize_object
+from .settings import load_settings, save_settings
+from .view_manager import save_active_screenshot
 
 rpc_server_thread = None
 rpc_server_instance = None
-
-
-# --- Settings persistence ---
-
-_SETTINGS_FILENAME = "freecad_mcp_settings.json"
-
-_DEFAULT_SETTINGS = {
-    "remote_enabled": False,
-    "allowed_ips": "127.0.0.1",
-    "auto_start_rpc": False,
-}
-
-
-def _get_settings_path():
-    return os.path.join(FreeCAD.getUserAppDataDir(), _SETTINGS_FILENAME)
-
-
-def load_settings():
-    path = _get_settings_path()
-    if os.path.exists(path):
-        try:
-            with open(path, "r") as f:
-                settings = json.load(f)
-            # Ensure all default keys exist
-            for key, value in _DEFAULT_SETTINGS.items():
-                if key not in settings:
-                    settings[key] = value
-            return settings
-        except Exception as e:
-            FreeCAD.Console.PrintWarning(f"Failed to load MCP settings: {e}\n")
-    return dict(_DEFAULT_SETTINGS)
-
-
-def save_settings(settings):
-    path = _get_settings_path()
-    try:
-        with open(path, "w") as f:
-            json.dump(settings, f, indent=2)
-    except Exception as e:
-        FreeCAD.Console.PrintError(f"Failed to save MCP settings: {e}\n")
-
-
-# --- IP-filtered XML-RPC server ---
-
-class FilteredXMLRPCServer(SimpleXMLRPCServer):
-    """XML-RPC server that filters connections by allowed IP addresses/subnets."""
-
-    def __init__(self, addr, allowed_ips_str="127.0.0.1", **kwargs):
-        self._allowed_networks = _parse_allowed_ips(allowed_ips_str)
-        super().__init__(addr, **kwargs)
-
-    def verify_request(self, request, client_address):
-        client_ip = client_address[0]
-        try:
-            addr = ipaddress.ip_address(client_ip)
-            for network in self._allowed_networks:
-                if addr in network:
-                    return True
-        except ValueError:
-            pass
-        FreeCAD.Console.PrintWarning(
-            f"MCP RPC: Rejected connection from {client_ip}\n"
-        )
-        return False
-
-
-_COMMA_SEP_RE = re.compile(r"^\s*[^,\s]+(\s*,\s*[^,\s]+)*\s*$")
-
-
-def validate_allowed_ips(allowed_ips_str):
-    """Validate a comma-separated string of IP addresses/subnets.
-
-    Returns a ``(valid, errors)`` tuple.  ``valid`` is a list of normalised
-    entry strings that passed validation; ``errors`` is a list of
-    human-readable error messages (empty when the input is fully valid).
-
-    Checks performed:
-    1. The overall string is well-formed comma-separated (no leading/trailing
-       commas, no empty entries between commas, not blank).
-    2. Each individual entry is a valid IPv4/IPv6 address or CIDR subnet
-       (validated via the stdlib ``ipaddress`` module).
-    """
-    errors = []
-
-    if not allowed_ips_str or not allowed_ips_str.strip():
-        return [], ["Input must not be empty."]
-
-    if not _COMMA_SEP_RE.match(allowed_ips_str):
-        return [], [
-            "Malformed list — check for leading/trailing commas, "
-            "double commas, or missing separators."
-        ]
-
-    valid = []
-    for entry in allowed_ips_str.split(","):
-        entry = entry.strip()
-        try:
-            ipaddress.ip_network(entry, strict=False)
-            valid.append(entry)
-        except ValueError:
-            errors.append(f"Invalid IP/subnet: '{entry}'")
-    return valid, errors
-
-
-def _parse_allowed_ips(allowed_ips_str):
-    """Parse a comma-separated string of IPs/subnets into a list of ip_network objects."""
-    valid, errors = validate_allowed_ips(allowed_ips_str)
-    for msg in errors:
-        FreeCAD.Console.PrintWarning(f"MCP RPC: {msg}, skipping\n")
-    return [ipaddress.ip_network(entry, strict=False) for entry in valid]
-
-# GUI task queue
-rpc_request_queue = queue.Queue()
-rpc_response_queue = queue.Queue()
-
-# Sentinel posted on rpc_request_queue by stop_rpc_server() so the next
-# process_gui_tasks tick exits cleanly without rescheduling itself.
-_DISPATCH_SHUTDOWN = object()
-
-
-def _flush_gui_events(delay_ms: int = 50) -> None:
-    FreeCADGui.updateGui()
-    app = QtWidgets.QApplication.instance()
-    if app is None:
-        return
-
-    app.processEvents(QtCore.QEventLoop.AllEvents, delay_ms)
-    if delay_ms > 0:
-        QtCore.QThread.msleep(delay_ms)
-        app.processEvents(QtCore.QEventLoop.AllEvents, delay_ms)
-
-
-def _get_view_size(view: Any) -> tuple[int, int]:
-    try:
-        size = view.getSize()
-        if isinstance(size, (list, tuple)) and len(size) >= 2:
-            return max(1, int(size[0])), max(1, int(size[1]))
-        return max(1, int(size.width())), max(1, int(size.height()))
-    except Exception:
-        return 1024, 768
-
-
-def _resolve_screenshot_size(
-    view: Any,
-    width: int | None,
-    height: int | None,
-) -> tuple[int, int]:
-    view_width, view_height = _get_view_size(view)
-    resolved_width = view_width if width is None else max(1, int(width))
-    resolved_height = view_height if height is None else max(1, int(height))
-    return resolved_width, resolved_height
-
-
-def process_gui_tasks():
-    """Drain queued GUI-thread callables and reschedule.
-
-    Resilience guarantees (added to fix the "empty response → permanent
-    hang → restart-required" bug):
-
-    1. Exceptions inside ``task()`` are caught and converted to an error
-       string on the response queue. The QTimer reschedule still fires,
-       so the dispatch loop survives handler bugs instead of dying.
-    2. ``None`` returns are normalised to an error string so the response
-       queue is never starved.
-    3. The ``_DISPATCH_SHUTDOWN`` sentinel lets ``stop_rpc_server`` exit
-       the loop cleanly without leaving an orphan QTimer chain.
-    """
-    try:
-        while not rpc_request_queue.empty():
-            task = rpc_request_queue.get()
-            if task is _DISPATCH_SHUTDOWN:
-                return  # exit cleanly; do not reschedule
-            try:
-                res = task()
-            except Exception as e:
-                FreeCAD.Console.PrintError(
-                    f"MCP RPC: GUI task raised {type(e).__name__}: {e}\n"
-                    f"{traceback.format_exc()}"
-                )
-                rpc_response_queue.put(f"{type(e).__name__}: {e}")
-                continue
-            if res is None:
-                rpc_response_queue.put("GUI handler returned None")
-            else:
-                rpc_response_queue.put(res)
-    finally:
-        QtCore.QTimer.singleShot(500, process_gui_tasks)
-
-
-@dataclass
-class Object:
-    name: str
-    type: str | None = None
-    analysis: str | None = None
-    properties: dict[str, Any] = field(default_factory=dict)
-
-
-def set_object_property(
-    doc: FreeCAD.Document, obj: FreeCAD.DocumentObject, properties: dict[str, Any]
-):
-    for prop, val in properties.items():
-        try:
-            if prop in obj.PropertiesList:
-                if prop == "Placement" and isinstance(val, dict):
-                    if "Base" in val:
-                        pos = val["Base"]
-                    elif "Position" in val:
-                        pos = val["Position"]
-                    else:
-                        pos = {}
-                    rot = val.get("Rotation", {})
-                    placement = FreeCAD.Placement(
-                        FreeCAD.Vector(
-                            pos.get("x", 0),
-                            pos.get("y", 0),
-                            pos.get("z", 0),
-                        ),
-                        FreeCAD.Rotation(
-                            FreeCAD.Vector(
-                                rot.get("Axis", {}).get("x", 0),
-                                rot.get("Axis", {}).get("y", 0),
-                                rot.get("Axis", {}).get("z", 1),
-                            ),
-                            rot.get("Angle", 0),
-                        ),
-                    )
-                    setattr(obj, prop, placement)
-
-                elif isinstance(getattr(obj, prop), FreeCAD.Vector) and isinstance(
-                    val, dict
-                ):
-                    vector = FreeCAD.Vector(
-                        val.get("x", 0), val.get("y", 0), val.get("z", 0)
-                    )
-                    setattr(obj, prop, vector)
-
-                elif prop in ["Base", "Tool", "Source", "Profile"] and isinstance(
-                    val, str
-                ):
-                    ref_obj = doc.getObject(val)
-                    if ref_obj:
-                        setattr(obj, prop, ref_obj)
-                    else:
-                        raise ValueError(f"Referenced object '{val}' not found.")
-
-                elif prop == "References" and isinstance(val, list):
-                    refs = []
-                    for ref_name, face in val:
-                        ref_obj = doc.getObject(ref_name)
-                        if ref_obj:
-                            refs.append((ref_obj, face))
-                        else:
-                            raise ValueError(f"Referenced object '{ref_name}' not found.")
-                    setattr(obj, prop, refs)
-
-                else:
-                    setattr(obj, prop, val)
-            # ShapeColor is a property of the ViewObject
-            elif prop == "ShapeColor" and isinstance(val, (list, tuple)):
-                setattr(obj.ViewObject, prop, (float(val[0]), float(val[1]), float(val[2]), float(val[3])))
-
-            elif prop == "ViewObject" and isinstance(val, dict):
-                for k, v in val.items():
-                    if k == "ShapeColor":
-                        setattr(obj.ViewObject, k, (float(v[0]), float(v[1]), float(v[2]), float(v[3])))
-                    else:
-                        setattr(obj.ViewObject, k, v)
-
-            else:
-                setattr(obj, prop, val)
-
-        except Exception as e:
-            FreeCAD.Console.PrintError(f"Property '{prop}' assignment error: {e}\n")
 
 
 class FreeCADRPC:
@@ -477,76 +210,7 @@ class FreeCADRPC:
         return True
 
     def _create_object_gui(self, doc_name, obj: Object):
-        doc = FreeCAD.getDocument(doc_name)
-        if doc:
-            try:
-                if obj.type == "Fem::FemMeshGmsh" and obj.analysis:
-                    from femmesh.gmshtools import GmshTools
-                    res = getattr(doc, obj.analysis).addObject(ObjectsFem.makeMeshGmsh(doc, obj.name))[0]
-                    # FreeCAD 1.x renamed the Gmsh-mesh geometry link from "Part" to "Shape"
-                    # and the size limits from "ElementSize{Max,Min}" to "CharacteristicLength{Max,Min}".
-                    # Accept both spellings so older snippets keep working.
-                    geom_attr = "Shape" if hasattr(res, "Shape") else ("Part" if hasattr(res, "Part") else None)
-                    legacy_to_new = {
-                        "Part": geom_attr,
-                        "ElementSizeMax": "CharacteristicLengthMax",
-                        "ElementSizeMin": "CharacteristicLengthMin",
-                    }
-                    geom_key = "Part" if "Part" in obj.properties else ("Shape" if "Shape" in obj.properties else None)
-                    if geom_key is None:
-                        raise ValueError("'Part' (or 'Shape') property not found in properties.")
-                    target_obj = doc.getObject(obj.properties[geom_key])
-                    if target_obj is None:
-                        raise ValueError(f"Referenced object '{obj.properties[geom_key]}' not found.")
-                    if geom_attr is None:
-                        raise ValueError("Mesh object has neither 'Shape' nor 'Part' property.")
-                    setattr(res, geom_attr, target_obj)
-                    del obj.properties[geom_key]
-
-                    for param, value in obj.properties.items():
-                        target_param = legacy_to_new.get(param, param)
-                        if target_param and hasattr(res, target_param):
-                            setattr(res, target_param, value)
-                    doc.recompute()
-
-                    gmsh_tools = GmshTools(res)
-                    gmsh_tools.create_mesh()
-                    FreeCAD.Console.PrintMessage(
-                        f"FEM Mesh '{res.Name}' generated successfully in '{doc_name}'.\n"
-                    )
-                elif obj.type.startswith("Fem::"):
-                    fem_make_methods = {
-                        "MaterialCommon": ObjectsFem.makeMaterialSolid,
-                        "AnalysisPython": ObjectsFem.makeAnalysis,
-                    }
-                    obj_type_short = obj.type.split("::")[1]
-                    method_name = "make" + obj_type_short
-                    make_method = fem_make_methods.get(obj_type_short, getattr(ObjectsFem, method_name, None))
-
-                    if callable(make_method):
-                        res = make_method(doc, obj.name)
-                        set_object_property(doc, res, obj.properties)
-                        FreeCAD.Console.PrintMessage(
-                            f"FEM object '{res.Name}' created with '{method_name}'.\n"
-                        )
-                    else:
-                        raise ValueError(f"No creation method '{method_name}' found in ObjectsFem.")
-                    if obj.type != "Fem::AnalysisPython" and obj.analysis:
-                        getattr(doc, obj.analysis).addObject(res)
-                else:
-                    res = doc.addObject(obj.type, obj.name)
-                    set_object_property(doc, res, obj.properties)
-                    FreeCAD.Console.PrintMessage(
-                        f"{res.TypeId} '{res.Name}' added to '{doc_name}' via RPC.\n"
-                    )
- 
-                doc.recompute()
-                return True
-            except Exception as e:
-                return str(e)
-        else:
-            FreeCAD.Console.PrintError(f"Document '{doc_name}' not found.\n")
-            return f"Document '{doc_name}' not found.\n"
+        return create_object_gui(doc_name, obj)
 
     def _edit_object_gui(self, doc_name: str, obj: Object):
         doc = FreeCAD.getDocument(doc_name)
@@ -585,80 +249,7 @@ class FreeCADRPC:
     def _run_fem_analysis_gui(self, doc_name: str, analysis_name: str):
         # MUST always return a dict — process_gui_tasks treats None as no-response,
         # and the caller would block until its timeout. Keep the broad except.
-        work_dir = None
-        try:
-            doc = FreeCAD.getDocument(doc_name)
-            if not doc:
-                return {"success": False, "error": f"Document '{doc_name}' not found."}
-            analysis = doc.getObject(analysis_name)
-            if analysis is None:
-                return {"success": False, "error": f"Analysis '{analysis_name}' not found."}
-            if analysis.TypeId not in ("Fem::FemAnalysis", "Fem::FemAnalysisPython"):
-                return {"success": False, "error": f"'{analysis_name}' is not a FEM analysis (TypeId={analysis.TypeId})."}
-
-            solver = None
-            for member in analysis.Group:
-                tid = getattr(member, "TypeId", "")
-                if "SolverCcx" in tid or "SolverCalculix" in tid:
-                    solver = member
-                    break
-            if solver is None:
-                solver_factory = (
-                    getattr(ObjectsFem, "makeSolverCalculiXCcxTools", None)
-                    or getattr(ObjectsFem, "makeSolverCalculixCcxTools", None)
-                )
-                if solver_factory is None:
-                    return {"success": False, "error": "ObjectsFem has no Calculix solver factory."}
-                solver = solver_factory(doc, "CalculiX")
-                analysis.addObject(solver)
-
-            from femtools import ccxtools
-
-            fea = ccxtools.FemToolsCcx(analysis=analysis, solver=solver)
-            fea.update_objects()
-
-            work_dir = tempfile.mkdtemp(prefix="freecad_mcp_fem_")
-            fea.setup_working_dir(work_dir)
-            fea.setup_ccx()
-
-            prereq_msg = fea.check_prerequisites()
-            if prereq_msg:
-                return {"success": False, "error": f"Prerequisites failed: {prereq_msg}", "working_dir": work_dir}
-
-            fea.purge_results()
-            fea.run()
-            fea.load_results()
-
-            result_obj = None
-            for member in analysis.Group:
-                if "Result" in getattr(member, "TypeId", "") and hasattr(member, "vonMises"):
-                    result_obj = member
-                    break
-            if result_obj is None:
-                return {"success": False, "error": "Solver ran but no result object was produced.", "working_dir": work_dir}
-
-            # vonMises / DisplacementLengths can be None on a degenerate run.
-            vm = list(getattr(result_obj, "vonMises", None) or [])
-            disp = list(getattr(result_obj, "DisplacementLengths", None) or [])
-            doc.recompute()
-
-            return {
-                "success": True,
-                "result_object": result_obj.Name,
-                "node_count": len(vm),
-                "max_von_mises_MPa": max(vm) if vm else None,
-                "min_von_mises_MPa": min(vm) if vm else None,
-                "max_displacement_mm": max(disp) if disp else None,
-                "working_dir": work_dir,
-            }
-        except Exception as e:
-            import traceback
-            return {
-                "success": False,
-                "error": f"{type(e).__name__}: {e}",
-                "traceback": traceback.format_exc(),
-                "working_dir": work_dir,
-            }
+        return _run_fem_analysis(doc_name, analysis_name)
 
     def _delete_object_gui(self, doc_name: str, obj_name: str):
         doc = FreeCAD.getDocument(doc_name)
@@ -689,61 +280,7 @@ class FreeCADRPC:
         height: int | None = None,
         focus_object: str | None = None,
     ):
-        try:
-            view = FreeCADGui.ActiveDocument.ActiveView
-            # Check if the view supports screenshots
-            if not hasattr(view, 'saveImage'):
-                return "Current view does not support screenshots"
-                
-            if view_name == "Isometric":
-                view.viewIsometric()
-            elif view_name == "Front":
-                view.viewFront()
-            elif view_name == "Top":
-                view.viewTop()
-            elif view_name == "Right":
-                view.viewRight()
-            elif view_name == "Back":
-                view.viewBack()
-            elif view_name == "Left":
-                view.viewLeft()
-            elif view_name == "Bottom":
-                view.viewBottom()
-            elif view_name == "Dimetric":
-                view.viewDimetric()
-            elif view_name == "Trimetric":
-                view.viewTrimetric()
-            else:
-                raise ValueError(f"Invalid view name: {view_name}")
-
-            focused_selection = False
-
-            # Focus on specific object or fit all
-            if focus_object:
-                doc = FreeCAD.ActiveDocument
-                obj = doc.getObject(focus_object) if doc else None
-                if obj:
-                    FreeCADGui.Selection.clearSelection()
-                    FreeCADGui.Selection.addSelection(obj)
-                    FreeCADGui.SendMsgToActiveView("ViewSelection")
-                    focused_selection = True
-                    _flush_gui_events()
-                    FreeCADGui.Selection.clearSelection()
-                else:
-                    view.fitAll()
-            else:
-                view.fitAll()
-
-            _flush_gui_events()
-            width, height = _resolve_screenshot_size(view, width, height)
-            view.saveImage(save_path, width, height, "Current")
-
-            if focused_selection:
-                FreeCADGui.Selection.clearSelection()
-                _flush_gui_events(delay_ms=0)
-            return True
-        except Exception as e:
-            return str(e)
+        return save_active_screenshot(save_path, view_name, width, height, focus_object)
 
 
 def start_rpc_server(port=9875):
@@ -787,10 +324,11 @@ def stop_rpc_server():
     global rpc_server_instance, rpc_server_thread
 
     if rpc_server_instance:
-        # Post the sentinel so the next process_gui_tasks tick exits without
-        # rescheduling; otherwise a subsequent start_rpc_server would leave
-        # two QTimer chains running.
-        rpc_request_queue.put(_DISPATCH_SHUTDOWN)
+        # Post the sentinel before shutting down the XML-RPC server so the
+        # next QTimer tick exits process_gui_tasks cleanly without
+        # rescheduling itself; otherwise a subsequent start_rpc_server would
+        # leave two QTimer chains running.
+        request_shutdown()
         rpc_server_instance.shutdown()
         rpc_server_thread.join()
         rpc_server_instance = None
@@ -801,162 +339,5 @@ def stop_rpc_server():
     return "RPC Server was not running."
 
 
-class StartRPCServerCommand:
-    def GetResources(self):
-        return {"MenuText": "Start RPC Server", "ToolTip": "Start RPC Server"}
-
-    def Activated(self):
-        msg = start_rpc_server()
-        FreeCAD.Console.PrintMessage(msg + "\n")
-
-    def IsActive(self):
-        return True
-
-
-class StopRPCServerCommand:
-    def GetResources(self):
-        return {"MenuText": "Stop RPC Server", "ToolTip": "Stop RPC Server"}
-
-    def Activated(self):
-        msg = stop_rpc_server()
-        FreeCAD.Console.PrintMessage(msg + "\n")
-
-    def IsActive(self):
-        return True
-
-
-class ToggleRemoteConnectionsCommand:
-    def GetResources(self):
-        return {
-            "MenuText": "Remote Connections",
-            "ToolTip": "Enable or disable remote connections for the RPC server.",
-            "Checkable": True,
-        }
-
-    def Activated(self, checked=0):
-        settings = load_settings()
-        settings["remote_enabled"] = bool(checked)
-        save_settings(settings)
-
-        if settings["remote_enabled"]:
-            allowed_ips = settings.get("allowed_ips", "127.0.0.1")
-            FreeCAD.Console.PrintMessage(
-                f"Remote connections enabled. Allowed IPs: {allowed_ips}\n"
-            )
-        else:
-            FreeCAD.Console.PrintMessage("Remote connections disabled.\n")
-
-        if rpc_server_instance:
-            FreeCAD.Console.PrintMessage(
-                "Restart the RPC server for changes to take effect.\n"
-            )
-
-    def IsActive(self):
-        return True
-
-
-class ConfigureAllowedIPsCommand:
-    def GetResources(self):
-        return {
-            "MenuText": "Configure Allowed IPs",
-            "ToolTip": "Set which IP addresses or subnets are allowed to connect to the RPC server.",
-        }
-
-    def Activated(self):
-        settings = load_settings()
-        current_ips = settings.get("allowed_ips", "127.0.0.1")
-        text, ok = QtWidgets.QInputDialog.getText(
-            None,
-            "Allowed IP Addresses",
-            "Enter allowed IP addresses or subnets (comma-separated):\n"
-            "Examples: 127.0.0.1, 192.168.1.0/24, 10.0.0.5",
-            QtWidgets.QLineEdit.Normal,
-            current_ips,
-        )
-        if ok and text.strip():
-            valid, errors = validate_allowed_ips(text.strip())
-            if errors:
-                QtWidgets.QMessageBox.warning(
-                    None,
-                    "Invalid IP Configuration",
-                    "The following errors were found:\n\n"
-                    + "\n".join(f"• {e}" for e in errors)
-                    + ("\n\nOnly valid entries will be saved."
-                       if valid else "\n\nNo valid entries found. Settings not changed."),
-                )
-            if not valid:
-                FreeCAD.Console.PrintWarning("Allowed IPs not changed — no valid entries.\n")
-                return
-            normalised = ", ".join(valid)
-            settings["allowed_ips"] = normalised
-            save_settings(settings)
-            FreeCAD.Console.PrintMessage(
-                f"Allowed IPs updated to: {normalised}\n"
-            )
-            if rpc_server_instance:
-                FreeCAD.Console.PrintMessage(
-                    "Restart the RPC server for changes to take effect.\n"
-                )
-        else:
-            FreeCAD.Console.PrintMessage("Allowed IPs not changed.\n")
-
-    def IsActive(self):
-        return True
-
-
-class ToggleAutoStartCommand:
-    def GetResources(self):
-        return {
-            "MenuText": "Auto-Start Server",
-            "ToolTip": "Automatically start the RPC server when FreeCAD launches.",
-            "Checkable": True,
-        }
-
-    def Activated(self, checked=0):
-        settings = load_settings()
-        settings["auto_start_rpc"] = bool(checked)
-        save_settings(settings)
-
-        if settings["auto_start_rpc"]:
-            FreeCAD.Console.PrintMessage(
-                "MCP RPC server will start automatically on next FreeCAD launch.\n"
-            )
-        else:
-            FreeCAD.Console.PrintMessage(
-                "MCP RPC server auto-start disabled.\n"
-            )
-
-    def IsActive(self):
-        return True
-
-
-FreeCADGui.addCommand("Start_RPC_Server", StartRPCServerCommand())
-FreeCADGui.addCommand("Stop_RPC_Server", StopRPCServerCommand())
-FreeCADGui.addCommand("Toggle_Auto_Start", ToggleAutoStartCommand())
-FreeCADGui.addCommand("Toggle_Remote_Connections", ToggleRemoteConnectionsCommand())
-FreeCADGui.addCommand("Configure_Allowed_IPs", ConfigureAllowedIPsCommand())
-
-
-def _sync_toggle_states():
-    """Sync checkable menu items with saved settings on startup."""
-    try:
-        settings = load_settings()
-        main_window = FreeCADGui.getMainWindow()
-        toggle_map = {
-            "Remote Connections": settings.get("remote_enabled", False),
-            "Auto-Start Server": settings.get("auto_start_rpc", False),
-        }
-        found = 0
-        for action in main_window.findChildren(QtWidgets.QAction):
-            if action.text() in toggle_map:
-                action.setChecked(toggle_map[action.text()])
-                found += 1
-                if found == len(toggle_map):
-                    return
-    except Exception:
-        pass
-    # Retry if menu not ready yet
-    QtCore.QTimer.singleShot(2000, _sync_toggle_states)
-
-
-QtCore.QTimer.singleShot(2000, _sync_toggle_states)
+register_commands()
+schedule_toggle_sync()
