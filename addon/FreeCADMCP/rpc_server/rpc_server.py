@@ -12,6 +12,7 @@ import io
 import os
 import tempfile
 import threading
+import traceback
 from dataclasses import dataclass, field
 from typing import Any
 from xmlrpc.server import SimpleXMLRPCServer
@@ -138,6 +139,10 @@ def _parse_allowed_ips(allowed_ips_str):
 rpc_request_queue = queue.Queue()
 rpc_response_queue = queue.Queue()
 
+# Sentinel posted on rpc_request_queue by stop_rpc_server() so the next
+# process_gui_tasks tick exits cleanly without rescheduling itself.
+_DISPATCH_SHUTDOWN = object()
+
 
 def _flush_gui_events(delay_ms: int = 50) -> None:
     FreeCADGui.updateGui()
@@ -173,12 +178,39 @@ def _resolve_screenshot_size(
 
 
 def process_gui_tasks():
-    while not rpc_request_queue.empty():
-        task = rpc_request_queue.get()
-        res = task()
-        if res is not None:
-            rpc_response_queue.put(res)
-    QtCore.QTimer.singleShot(500, process_gui_tasks)
+    """Drain queued GUI-thread callables and reschedule.
+
+    Resilience guarantees (added to fix the "empty response → permanent
+    hang → restart-required" bug):
+
+    1. Exceptions inside ``task()`` are caught and converted to an error
+       string on the response queue. The QTimer reschedule still fires,
+       so the dispatch loop survives handler bugs instead of dying.
+    2. ``None`` returns are normalised to an error string so the response
+       queue is never starved.
+    3. The ``_DISPATCH_SHUTDOWN`` sentinel lets ``stop_rpc_server`` exit
+       the loop cleanly without leaving an orphan QTimer chain.
+    """
+    try:
+        while not rpc_request_queue.empty():
+            task = rpc_request_queue.get()
+            if task is _DISPATCH_SHUTDOWN:
+                return  # exit cleanly; do not reschedule
+            try:
+                res = task()
+            except Exception as e:
+                FreeCAD.Console.PrintError(
+                    f"MCP RPC: GUI task raised {type(e).__name__}: {e}\n"
+                    f"{traceback.format_exc()}"
+                )
+                rpc_response_queue.put(f"{type(e).__name__}: {e}")
+                continue
+            if res is None:
+                rpc_response_queue.put("GUI handler returned None")
+            else:
+                rpc_response_queue.put(res)
+    finally:
+        QtCore.QTimer.singleShot(500, process_gui_tasks)
 
 
 @dataclass
@@ -755,6 +787,10 @@ def stop_rpc_server():
     global rpc_server_instance, rpc_server_thread
 
     if rpc_server_instance:
+        # Post the sentinel so the next process_gui_tasks tick exits without
+        # rescheduling; otherwise a subsequent start_rpc_server would leave
+        # two QTimer chains running.
+        rpc_request_queue.put(_DISPATCH_SHUTDOWN)
         rpc_server_instance.shutdown()
         rpc_server_thread.join()
         rpc_server_instance = None
