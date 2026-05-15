@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stlux - FreeCAD MCP Web Interface</title>
+    <style>
+        body { margin: 0; font-family: sans-serif; display: flex; height: 100vh; overflow: hidden; }
+        #sidebar { width: 300px; background: #f0f0f0; padding: 20px; box-shadow: 2px 0 5px rgba(0,0,0,0.1); z-index: 10; }
+        #viewer { flex-grow: 1; background: #333; position: relative; }
+        h1 { font-size: 1.5rem; margin-top: 0; }
+        textarea { width: 100%; height: 100px; margin-bottom: 10px; }
+        button { width: 100%; padding: 10px; background: #007bff; color: white; border: none; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        #log { margin-top: 20px; font-size: 0.8rem; background: white; padding: 10px; height: 200px; overflow-y: auto; border: 1px solid #ccc; }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <h1>Stlux</h1>
+        <p>Enter commands for FreeCAD:</p>
+        <textarea id="commandInput" placeholder="e.g., Create a box with size 10"></textarea>
+        <button id="executeBtn">Execute</button>
+        <div id="log"></div>
+    </div>
+    <div id="viewer"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="static/slicer.js"></script>
+    <script src="static/app.js"></script>
+</body>
+</html>

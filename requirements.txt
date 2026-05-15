@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+mcp[cli]>=1.12.2
+validators>=0.34.0
+python-multipart
