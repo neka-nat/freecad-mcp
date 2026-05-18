@@ -72,13 +72,9 @@ async function handleCommand(isDirect = false) {
 
     try {
         const endpoint = isDirect ? '/execute' : '/agent';
-        const token = document.getElementById('hfToken').value;
         const response = await fetch(endpoint, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': token ? `Bearer ${token}` : ''
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ command: text })
         });
         const result = await response.json();

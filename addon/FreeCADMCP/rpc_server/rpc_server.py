@@ -63,29 +63,16 @@ def start_rpc_server():
 # Start XML-RPC server in a background thread
 threading.Thread(target=start_rpc_server, daemon=True).start()
 
-# Start the Qt Event Loop if we are in GUI mode (FreeCAD --cmd)
-# In --cmd mode, we must manually process events or start an event loop
+# Use FreeCAD's timer to poll the queue in the main thread if GUI is available,
+# or a simple loop if running in cmd mode (though cmd mode is usually single-threaded anyway)
 try:
-    from PySide import QtCore, QtGui
-    import FreeCADGui
-
+    from PySide import QtCore
     timer = QtCore.QTimer()
     timer.timeout.connect(process_queue)
-    timer.start(100)
+    timer.start(100) # Poll every 100ms
     print("Queue processor started via QTimer.")
-
-    # If running via freecad --cmd, the application doesn't automatically enter the event loop
-    # We check if a GUI application exists
-    app = QtGui.qApp
-    if app:
-        print("Qt Application found, starting event loop...")
-        # Note: app.exec_() will block. For FreeCAD, we might want to just process events.
-        # But if we are a background server, blocking here is fine.
-        app.exec_()
-    else:
-        print("No Qt Application found.")
 except ImportError:
-    print("PySide not found, fallback to manual polling...")
-    while True:
-        process_queue()
-        time.sleep(0.1)
+    print("PySide not found, fallback to manual polling not implemented for CLI mode.")
+    # In CLI mode, one might need a different approach,
+    # but FreeCAD --cmd usually runs the script then exits.
+    # For a persistent server, GUI mode with Xvfb is preferred.
