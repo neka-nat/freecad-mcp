@@ -24,11 +24,12 @@ COPY --chown=user requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Create FreeCAD Mod directory and copy addon
-RUN mkdir -p $HOME/.local/share/FreeCAD/Mod
-COPY --chown=user addon/FreeCADMCP $HOME/.local/share/FreeCAD/Mod/FreeCADMCP
+# For Ubuntu's FreeCAD package, the Mod directory is usually ~/.FreeCAD/Mod
+RUN mkdir -p $HOME/.FreeCAD/Mod
+COPY --chown=user addon/FreeCADMCP $HOME/.FreeCAD/Mod/FreeCADMCP
 
-# Add the addon path to PYTHONPATH so FreeCAD can find it
-ENV PYTHONPATH=$HOME/.local/share/FreeCAD/Mod/FreeCADMCP:$PYTHONPATH
+# Add the addon path to PYTHONPATH
+ENV PYTHONPATH=$HOME/.FreeCAD/Mod/FreeCADMCP:$PYTHONPATH
 
 COPY --chown=user . .
 

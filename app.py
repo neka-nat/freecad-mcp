@@ -4,7 +4,8 @@ import xmlrpc.client
 import socket
 import re
 import base64
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Security
+from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from pydantic import BaseModel
@@ -20,6 +21,22 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(lifespan=lifespan)
+
+API_KEY_NAME = "Authorization"
+api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
+
+async def get_api_key(header_key: str = Security(api_key_header)):
+    hf_token = os.environ.get("HF_TOKEN")
+    if not hf_token:
+        # If no token set in environment, allow access (dev mode)
+        return header_key
+
+    if header_key and (header_key == f"Bearer {hf_token}" or header_key == hf_token):
+        return header_key
+
+    raise HTTPException(
+        status_code=403, detail="Could not validate credentials"
+    )
 
 # Mount directories
 os.makedirs("static", exist_ok=True)
@@ -50,11 +67,11 @@ async def health_check():
     return {"status": "degraded", "freecad": "unresponsive"}
 
 @app.post("/execute")
-async def execute_command(request: CommandRequest):
+async def execute_command(request: CommandRequest, api_key: str = Security(get_api_key)):
     return await _freecad_rpc(request.command, is_python=True)
 
 @app.post("/agent")
-async def agent_command(request: CommandRequest):
+async def agent_command(request: CommandRequest, api_key: str = Security(get_api_key)):
     """
     AI Operator endpoint.
     In a production HF Space, this would call an LLM (like Llama-3 or GPT-4)
@@ -88,7 +105,7 @@ b = doc.addObject("Part::Cylinder", "Base")
 b.Radius = {size/2}
 b.Height = {size/4}
 for i in range(8):
-    p = doc.addObject("Part::Box", f"Point{{i}}")
+    p = doc.addObject("Part::Box", "Point" + str(i))
     p.Length = {size/8}
     p.Width = {size/8}
     p.Height = {size/2}
