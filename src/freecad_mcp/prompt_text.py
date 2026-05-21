@@ -1,9 +1,13 @@
 ASSET_CREATION_STRATEGY = """
 Asset Creation Strategy for FreeCAD MCP
 
-When creating content in FreeCAD, always follow these steps:
+When creating or editing content in FreeCAD, always follow these steps:
 
-0. Before starting any task, always use get_objects() to confirm the current state of the document.
+0. Before starting any task, always use get_objects() to confirm the current state
+   of the document. Then call list_spatial_comments() for the active document and
+   treat open comments as user feedback tied to exact geometry. If a comment is
+   attached to an object, face, edge, vertex, or point, inspect that target before
+   editing it.
 
 1. Utilize the parts library:
    - Check available parts using get_parts_list().
@@ -31,6 +35,10 @@ When creating content in FreeCAD, always follow these steps:
      toward the part of the model you changed; the default is "Isometric" (top-front-right).
    - When you skipped screenshots during intermediate steps, use get_view()
      afterwards to visually inspect the result from the most informative angle.
+
+8. After applying feedback from a spatial comment, do not mark it resolved directly.
+   Use propose_spatial_comment_resolution() with a short note explaining the change;
+   the user confirms final resolution in FreeCAD.
 
 Only revert to basic creation methods in the following cases:
 - When the required asset is not available in the parts library.

@@ -227,6 +227,113 @@ def list_documents_operation(freecad: FreeCADConnection) -> ToolResponse:
     return json_response(freecad.list_documents())
 
 
+
+def create_spatial_comment_operation(
+    freecad: FreeCADConnection,
+    only_text_feedback: bool,
+    doc_name: str,
+    text: str,
+    anchor: dict[str, Any] | None = None,
+    kind: str = "edit_request",
+    author: str = "user",
+    thread_id: str | None = None,
+    capture_thumbnail: bool = False,
+    include_screenshot: bool = True,
+    view_name: str = "Isometric",
+) -> ToolResponse:
+    try:
+        data = {"text": text, "anchor": anchor, "kind": kind, "author": author}
+        if thread_id:
+            data["thread_id"] = thread_id
+        res = freecad.create_spatial_comment(doc_name, data)
+        skip_screenshot = only_text_feedback or not include_screenshot
+        screenshot = (
+            freecad.get_active_screenshot(view_name)
+            if (capture_thumbnail or not skip_screenshot)
+            else None
+        )
+        if (
+            capture_thumbnail
+            and screenshot
+            and res.get("success")
+            and res.get("comment", {}).get("id")
+        ):
+            thumb_res = freecad.update_spatial_comment(
+                doc_name,
+                res["comment"]["id"],
+                {"thumbnail_png_base64": screenshot},
+            )
+            if thumb_res.get("success"):
+                res = thumb_res
+        response = json_response(res)
+        return add_screenshot_if_available(response, screenshot, skip_screenshot)
+    except Exception as e:
+        logger.error(f"Failed to create spatial comment: {str(e)}")
+        return text_response(f"Failed to create spatial comment: {str(e)}")
+
+
+def list_spatial_comments_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    status: str | None = None,
+    object_name: str | None = None,
+    include_resolved: bool = False,
+    thread_id: str | None = None,
+) -> ToolResponse:
+    try:
+        filters: dict[str, Any] = {"include_resolved": include_resolved}
+        if status:
+            filters["status"] = status
+        if object_name:
+            filters["object_name"] = object_name
+        if thread_id:
+            filters["thread_id"] = thread_id
+        return json_response(freecad.list_spatial_comments(doc_name, filters))
+    except Exception as e:
+        logger.error(f"Failed to list spatial comments: {str(e)}")
+        return text_response(f"Failed to list spatial comments: {str(e)}")
+
+
+def propose_spatial_comment_resolution_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    comment_id: str,
+    resolution_note: str,
+) -> ToolResponse:
+    try:
+        res = freecad.update_spatial_comment(
+            doc_name,
+            comment_id,
+            {"status": "resolution_proposed", "resolution_note": resolution_note},
+        )
+        return json_response(res)
+    except Exception as e:
+        logger.error(f"Failed to propose spatial comment resolution: {str(e)}")
+        return text_response(f"Failed to propose spatial comment resolution: {str(e)}")
+
+
+def delete_spatial_comment_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    comment_id: str,
+) -> ToolResponse:
+    try:
+        return json_response(freecad.delete_spatial_comment(doc_name, comment_id))
+    except Exception as e:
+        logger.error(f"Failed to delete spatial comment: {str(e)}")
+        return text_response(f"Failed to delete spatial comment: {str(e)}")
+
+
+def get_current_selection_anchor_operation(
+    freecad: FreeCADConnection, doc_name: str
+) -> ToolResponse:
+    try:
+        return json_response(freecad.get_current_selection_anchor(doc_name))
+    except Exception as e:
+        logger.error(f"Failed to get current selection anchor: {str(e)}")
+        return text_response(f"Failed to get current selection anchor: {str(e)}")
+
+
 def get_rpc_status_operation(freecad: FreeCADConnection) -> ToolResponse:
     """Get bridge health through the GUI-independent RPC status method."""
     try:

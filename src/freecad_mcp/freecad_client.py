@@ -1,6 +1,6 @@
 import logging
 import xmlrpc.client
-from typing import Any
+from typing import Any, cast
 
 
 logger = logging.getLogger("FreeCADMCPserver")
@@ -12,6 +12,7 @@ class _TimeoutTransport(xmlrpc.client.Transport):
     The default Transport has no timeout, so a frozen FreeCAD GUI thread
     causes the MCP client to hang indefinitely (observed: 4+ minute waits).
     """
+
     def __init__(self, timeout: float = 30, **kwargs):
         super().__init__(**kwargs)
         self._timeout = timeout
@@ -20,7 +21,6 @@ class _TimeoutTransport(xmlrpc.client.Transport):
         conn = super().make_connection(host)
         conn.timeout = self._timeout
         return conn
-
 
 
 class FreeCADConnection:
@@ -44,35 +44,38 @@ class FreeCADConnection:
             close()
 
     def ping(self) -> bool:
-        return self.server.ping()
+        return cast(bool, self.server.ping())
 
     def get_rpc_status(self) -> dict[str, Any]:
-        return self.server.get_rpc_status()
+        return cast(dict[str, Any], self.server.get_rpc_status())
 
     def create_document(self, name: str) -> dict[str, Any]:
-        return self.server.create_document(name)
+        return cast(dict[str, Any], self.server.create_document(name))
 
     def create_object(self, doc_name: str, obj_data: dict[str, Any]) -> dict[str, Any]:
-        return self.server.create_object(doc_name, obj_data)
+        return cast(dict[str, Any], self.server.create_object(doc_name, obj_data))
 
-    def edit_object(self, doc_name: str, obj_name: str, obj_data: dict[str, Any]) -> dict[str, Any]:
-        return self.server.edit_object(doc_name, obj_name, obj_data)
+    def edit_object(
+        self, doc_name: str, obj_name: str, obj_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        return cast(
+            dict[str, Any], self.server.edit_object(doc_name, obj_name, obj_data)
+        )
 
     def delete_object(self, doc_name: str, obj_name: str) -> dict[str, Any]:
-        return self.server.delete_object(doc_name, obj_name)
-
+        return cast(dict[str, Any], self.server.delete_object(doc_name, obj_name))
 
     def reload_document(self, doc_name: str) -> dict[str, Any]:
-        return self.server.reload_document(doc_name)
+        return cast(dict[str, Any], self.server.reload_document(doc_name))
 
     def insert_part_from_library(self, relative_path: str) -> dict[str, Any]:
-        return self.server.insert_part_from_library(relative_path)
+        return cast(dict[str, Any], self.server.insert_part_from_library(relative_path))
 
     def execute_code(self, code: str) -> dict[str, Any]:
-        return self.server.execute_code(code)
+        return cast(dict[str, Any], self.server.execute_code(code))
 
     def execute_code_async(self, code: str) -> dict[str, Any]:
-        return self.server.execute_code_async(code)
+        return cast(dict[str, Any], self.server.execute_code_async(code))
 
     def get_active_screenshot(
         self,
@@ -82,27 +85,66 @@ class FreeCADConnection:
         focus_object: str | None = None,
     ) -> str | None:
         try:
-            return self.server.get_active_screenshot(view_name, width, height, focus_object)
+            return cast(
+                str | None,
+                self.server.get_active_screenshot(
+                    view_name, width, height, focus_object
+                ),
+            )
         except Exception as e:
             logger.error(f"Error getting screenshot: {e}")
             return None
 
     def get_objects(self, doc_name: str) -> list[dict[str, Any]]:
-        return self.server.get_objects(doc_name)
+        return cast(list[dict[str, Any]], self.server.get_objects(doc_name))
 
     def get_object(self, doc_name: str, obj_name: str) -> dict[str, Any]:
-        return self.server.get_object(doc_name, obj_name)
+        return cast(dict[str, Any], self.server.get_object(doc_name, obj_name))
 
     def get_parts_list(self) -> list[str]:
-        return self.server.get_parts_list()
+        return cast(list[str], self.server.get_parts_list())
 
     def list_documents(self) -> list[str]:
-        return self.server.list_documents()
+        return cast(list[str], self.server.list_documents())
 
-    def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600) -> dict[str, Any]:
+    def create_spatial_comment(
+        self, doc_name: str, comment_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        return cast(
+            dict[str, Any], self.server.create_spatial_comment(doc_name, comment_data)
+        )
+
+    def list_spatial_comments(
+        self, doc_name: str, filters: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        return cast(
+            dict[str, Any], self.server.list_spatial_comments(doc_name, filters or {})
+        )
+
+    def update_spatial_comment(
+        self, doc_name: str, comment_id: str, patch: dict[str, Any]
+    ) -> dict[str, Any]:
+        return cast(
+            dict[str, Any],
+            self.server.update_spatial_comment(doc_name, comment_id, patch),
+        )
+
+    def delete_spatial_comment(self, doc_name: str, comment_id: str) -> dict[str, Any]:
+        return cast(
+            dict[str, Any], self.server.delete_spatial_comment(doc_name, comment_id)
+        )
+
+    def get_current_selection_anchor(self, doc_name: str) -> dict[str, Any]:
+        return cast(dict[str, Any], self.server.get_current_selection_anchor(doc_name))
+
+    def run_fem_analysis(
+        self, doc_name: str, analysis_name: str, timeout: int = 600
+    ) -> dict[str, Any]:
         # The solver blocks the RPC response for up to `timeout` seconds, so the
         # socket must outlast it. The default 150 s transport timeout would abort
         # any solve longer than that even though the addon is still working.
         # Use a dedicated proxy whose socket timeout exceeds the solver timeout.
         proxy = self._make_proxy(max(self._timeout, timeout + 30))
-        return proxy.run_fem_analysis(doc_name, analysis_name, timeout)
+        return cast(
+            dict[str, Any], proxy.run_fem_analysis(doc_name, analysis_name, timeout)
+        )
