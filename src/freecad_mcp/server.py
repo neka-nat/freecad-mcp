@@ -11,6 +11,7 @@ from .operations import (
     create_object_operation,
     delete_object_operation,
     edit_object_operation,
+    execute_code_async_operation,
     execute_code_operation,
     get_object_operation,
     get_objects_operation,
@@ -25,9 +26,10 @@ from .server_state import ServerState
 
 
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.WARNING, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("FreeCADMCPserver")
+logger.setLevel(logging.INFO)
 
 state = ServerState()
 
@@ -271,6 +273,31 @@ def delete_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextConten
         doc_name,
         obj_name,
     )
+
+
+@mcp.tool()
+def execute_code_async(ctx: Context, code: str) -> list[TextContent]:
+    """Execute Python code in FreeCAD without waiting for completion.
+
+    Use this for long-running operations (complex boolean ops such as fuse/cut,
+    FEM mesh generation, etc.) that would otherwise exceed the 4-minute timeout.
+    The code runs in a background thread inside FreeCAD and this tool returns
+    immediately.
+
+    Typical usage pattern:
+    1. Write the result to a document object at the end of your code:
+       doc.getObject("SessionState").Label = f"done: {elapsed:.1f}s"
+    2. Call execute_code_async with your code.
+    3. Wait a moment, then call get_object("doc", "SessionState") to check
+       if the Label has been updated with the result.
+
+    Args:
+        code: The Python code to execute in the background.
+
+    Returns:
+        A message confirming that background execution has started.
+    """
+    return execute_code_async_operation(get_freecad_connection(), code)
 
 
 @mcp.tool()
