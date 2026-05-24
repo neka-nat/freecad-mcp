@@ -38,12 +38,11 @@ def create_object_operation(
             "Analysis": analysis_name,
         }
         res = freecad.create_object(doc_name, obj_data)
-        screenshot = freecad.get_active_screenshot()
-
         if res["success"]:
             response = text_response(f"Object '{res['object_name']}' created successfully")
         else:
-            response = text_response(f"Failed to create object: {res['error']}")
+            return text_response(f"Failed to create object: {res['error']}")
+        screenshot = None if only_text_feedback else freecad.get_active_screenshot()
         return add_screenshot_if_available(response, screenshot, only_text_feedback)
     except Exception as e:
         logger.error(f"Failed to create object: {str(e)}")
@@ -59,12 +58,11 @@ def edit_object_operation(
 ) -> ToolResponse:
     try:
         res = freecad.edit_object(doc_name, obj_name, {"Properties": obj_properties})
-        screenshot = freecad.get_active_screenshot()
-
         if res["success"]:
             response = text_response(f"Object '{res['object_name']}' edited successfully")
         else:
-            response = text_response(f"Failed to edit object: {res['error']}")
+            return text_response(f"Failed to edit object: {res['error']}")
+        screenshot = None if only_text_feedback else freecad.get_active_screenshot()
         return add_screenshot_if_available(response, screenshot, only_text_feedback)
     except Exception as e:
         logger.error(f"Failed to edit object: {str(e)}")
@@ -79,12 +77,11 @@ def delete_object_operation(
 ) -> ToolResponse:
     try:
         res = freecad.delete_object(doc_name, obj_name)
-        screenshot = freecad.get_active_screenshot()
-
         if res["success"]:
             response = text_response(f"Object '{res['object_name']}' deleted successfully")
         else:
-            response = text_response(f"Failed to delete object: {res['error']}")
+            return text_response(f"Failed to delete object: {res['error']}")
+        screenshot = None if only_text_feedback else freecad.get_active_screenshot()
         return add_screenshot_if_available(response, screenshot, only_text_feedback)
     except Exception as e:
         logger.error(f"Failed to delete object: {str(e)}")
@@ -98,16 +95,36 @@ def execute_code_operation(
 ) -> ToolResponse:
     try:
         res = freecad.execute_code(code)
-        screenshot = freecad.get_active_screenshot()
-
         if res["success"]:
             response = text_response(f"Code executed successfully: {res['message']}")
-        else:
-            response = text_response(f"Failed to execute code: {res['error']}")
-        return add_screenshot_if_available(response, screenshot, only_text_feedback)
+            # Only attempt screenshot when code completed and screenshots are wanted.
+            # Skipping on failure avoids a second hanging call while the worker thread
+            # may still be running.
+            screenshot = None if only_text_feedback else freecad.get_active_screenshot()
+            return add_screenshot_if_available(response, screenshot, only_text_feedback)
+        return text_response(f"Failed to execute code: {res['error']}")
     except Exception as e:
         logger.error(f"Failed to execute code: {str(e)}")
         return text_response(f"Failed to execute code: {str(e)}")
+
+
+def execute_code_async_operation(
+    freecad: FreeCADConnection,
+    code: str,
+) -> ToolResponse:
+    try:
+        res = freecad.execute_code_async(code)
+        if res["success"]:
+            return text_response(
+                "Code execution started in background.\n"
+                "Use get_object to poll a document object for completion "
+                "(e.g. check SessionState.Label). "
+                "FreeCAD's Report View will show output when done."
+            )
+        return text_response(f"Failed to start async execution: {res.get('error', 'unknown')}")
+    except Exception as e:
+        logger.error(f"Failed to start async code execution: {str(e)}")
+        return text_response(f"Failed to start async code execution: {str(e)}")
 
 
 def get_view_operation(
@@ -130,12 +147,11 @@ def insert_part_from_library_operation(
 ) -> ToolResponse:
     try:
         res = freecad.insert_part_from_library(relative_path)
-        screenshot = freecad.get_active_screenshot()
-
         if res["success"]:
             response = text_response(f"Part inserted from library: {res['message']}")
         else:
-            response = text_response(f"Failed to insert part from library: {res['error']}")
+            return text_response(f"Failed to insert part from library: {res['error']}")
+        screenshot = None if only_text_feedback else freecad.get_active_screenshot()
         return add_screenshot_if_available(response, screenshot, only_text_feedback)
     except Exception as e:
         logger.error(f"Failed to insert part from library: {str(e)}")
@@ -148,8 +164,8 @@ def get_objects_operation(
     doc_name: str,
 ) -> ToolResponse:
     try:
-        screenshot = freecad.get_active_screenshot()
         response = json_response(freecad.get_objects(doc_name))
+        screenshot = None if only_text_feedback else freecad.get_active_screenshot()
         return add_screenshot_if_available(response, screenshot, only_text_feedback)
     except Exception as e:
         logger.error(f"Failed to get objects: {str(e)}")
@@ -163,8 +179,8 @@ def get_object_operation(
     obj_name: str,
 ) -> ToolResponse:
     try:
-        screenshot = freecad.get_active_screenshot()
         response = json_response(freecad.get_object(doc_name, obj_name))
+        screenshot = None if only_text_feedback else freecad.get_active_screenshot()
         return add_screenshot_if_available(response, screenshot, only_text_feedback)
     except Exception as e:
         logger.error(f"Failed to get object: {str(e)}")
