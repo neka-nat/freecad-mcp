@@ -759,7 +759,7 @@ def start_rpc_server(port=9875):
     if remote_enabled:
         host = "0.0.0.0"
     else:
-        host = "localhost"
+        host = "127.0.0.1"
 
     rpc_server_instance = FilteredXMLRPCServer(
         (host, port), allowed_ips_str=allowed_ips, allow_none=True, logRequests=False
