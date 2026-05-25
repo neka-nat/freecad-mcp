@@ -176,6 +176,7 @@ The `--host` value is validated on startup — it must be a valid IPv4/IPv6 addr
 
 ## Tools
 
+* `Universal_Auto_Installer`: [FreeCAD-MCP Universal Installer](https://github.com/cmalf/freecad-mcp-universal-installer).
 * `create_document`: Create a new document in FreeCAD.
 * `create_object`: Create a new object in FreeCAD.
 * `edit_object`: Edit an object in FreeCAD.
