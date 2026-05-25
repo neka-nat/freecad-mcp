@@ -42,11 +42,35 @@ def _resolve_screenshot_size(
     return resolved_width, resolved_height
 
 
+_STD_COMMAND_DISPATCH = {
+    "Isometric": "Std_ViewIsometric",
+    "Front": "Std_ViewFront",
+    "Top": "Std_ViewTop",
+    "Right": "Std_ViewRight",
+    "Back": "Std_ViewRear",
+    "Left": "Std_ViewLeft",
+    "Bottom": "Std_ViewBottom",
+    "Dimetric": "Std_ViewDimetric",
+    "Trimetric": "Std_ViewTrimetric",
+}
+
+
 def apply_view_orientation(view: Any, view_name: str) -> None:
     method_name = _VIEW_DISPATCH.get(view_name)
     if method_name is None:
         raise ValueError(f"Invalid view name: {view_name}")
-    getattr(view, method_name)()
+    if hasattr(view, method_name):
+        getattr(view, method_name)()
+    else:
+        # Fallback for views that lack the direct Python method
+        # (e.g. some FreeCAD versions / view types)
+        cmd = _STD_COMMAND_DISPATCH.get(view_name)
+        if cmd:
+            FreeCADGui.runCommand(cmd)
+        else:
+            FreeCAD.Console.PrintWarning(
+                f"apply_view_orientation: no method or command for '{view_name}'\n"
+            )
 
 
 def save_active_screenshot(

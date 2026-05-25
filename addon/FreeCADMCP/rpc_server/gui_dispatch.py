@@ -23,6 +23,7 @@ Robustness and performance guarantees:
 """
 
 import queue
+import time
 import traceback
 from typing import Any, Callable
 
@@ -34,6 +35,7 @@ from PySide import QtCore, QtWidgets
 _rpc_request_queue: "queue.Queue[Any]" = queue.Queue()
 _SHUTDOWN = object()
 _processing = False  # re-entrancy guard: True while process_gui_tasks is draining
+_processing_since: float = 0.0  # wall-clock time when _processing became True
 
 
 class _WakeSignal(QtCore.QObject):
@@ -100,7 +102,7 @@ def process_gui_tasks(reschedule: bool = True) -> None:
     ``reschedule=False`` is used by the immediate-wake path so it does not
     start a second heartbeat chain alongside the existing 500 ms one.
     """
-    global _processing
+    global _processing, _processing_since
     if _processing:
         return  # re-entrant call from processEvents inside a task; skip
 
@@ -114,6 +116,7 @@ def process_gui_tasks(reschedule: bool = True) -> None:
             return  # modal dialog open; defer to next tick
 
         _processing = True
+        _processing_since = time.monotonic()
         app = QtWidgets.QApplication.instance()
         try:
             status_bar = FreeCADGui.getMainWindow().statusBar()
@@ -153,7 +156,7 @@ def request_shutdown() -> None:
     _rpc_request_queue.put(_SHUTDOWN)
 
 
-def dispatch_to_gui(task: Callable[[], Any], timeout: float = 10) -> Any:
+def dispatch_to_gui(task: Callable[[], Any], timeout: float = 60) -> Any:
     """Run ``task`` on the GUI thread and return its result.
 
     Uses a per-call response queue so a timeout in one call never corrupts
@@ -183,4 +186,14 @@ def dispatch_to_gui(task: Callable[[], Any], timeout: float = 10) -> Any:
     try:
         return response_queue.get(timeout=timeout)
     except queue.Empty:
-        return {"success": False, "error": f"GUI dispatch timed out after {timeout}s"}
+        # Diagnose why: if _processing is still True, the GUI thread is occupied
+        # by a long-running task that was queued before this one.
+        if _processing:
+            busy_for = time.monotonic() - _processing_since
+            hint = (
+                f" (GUI thread has been busy for {busy_for:.1f}s — "
+                "consider execute_code_async for heavy OCCT operations)"
+            )
+        else:
+            hint = ""
+        return {"success": False, "error": f"GUI dispatch timed out after {timeout}s{hint}"}

@@ -46,8 +46,8 @@ def _err(res) -> dict:
 
 class FreeCADRPC:
     """RPC server for FreeCAD"""
-    TIMEOUT = 10
-    EXECUTE_CODE_TIMEOUT = 30  # GUI-thread execution; use execute_code_async for heavy OCCT ops
+    TIMEOUT = 60               # generous wait for GUI thread to become free
+    EXECUTE_CODE_TIMEOUT = 90  # GUI-thread execution; use execute_code_async for heavy OCCT ops
 
     def ping(self):
         return True
@@ -158,7 +158,12 @@ class FreeCADRPC:
                 "success": True,
                 "message": "Python code executed successfully.\nOutput: " + output_buffer.getvalue(),
             }
-        FreeCAD.Console.PrintError(f"Error executing Python code: {res}\n")
+        # Log the offending code (truncated) to make errors traceable
+        code_preview = code if len(code) <= 800 else code[:800] + "\n...(truncated)"
+        FreeCAD.Console.PrintError(
+            f"Error executing Python code: {res}\n"
+            f"--- code ---\n{code_preview}\n--- end ---\n"
+        )
         return _err(res)
 
     def get_objects(self, doc_name):
