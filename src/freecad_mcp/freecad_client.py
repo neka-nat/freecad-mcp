@@ -5,31 +5,31 @@ from typing import Any
 
 logger = logging.getLogger("FreeCADMCPserver")
 
-_SCREENSHOT_SUPPORT_CHECK = """
-import FreeCAD
-import FreeCADGui
 
-if FreeCAD.Gui.ActiveDocument and FreeCAD.Gui.ActiveDocument.ActiveView:
-    view_type = type(FreeCAD.Gui.ActiveDocument.ActiveView).__name__
+class _TimeoutTransport(xmlrpc.client.Transport):
+    """XML-RPC transport with a configurable socket timeout.
 
-    # These view types don't support screenshots
-    unsupported_views = ['SpreadsheetGui::SheetView', 'DrawingGui::DrawingView', 'TechDrawGui::MDIViewPage']
+    The default Transport has no timeout, so a frozen FreeCAD GUI thread
+    causes the MCP client to hang indefinitely (observed: 4+ minute waits).
+    """
+    def __init__(self, timeout: float = 30, **kwargs):
+        super().__init__(**kwargs)
+        self._timeout = timeout
 
-    if view_type in unsupported_views or not hasattr(FreeCAD.Gui.ActiveDocument.ActiveView, 'saveImage'):
-        print("Current view does not support screenshots")
-        False
-    else:
-        print(f"Current view supports screenshots: {view_type}")
-        True
-else:
-    print("No active view")
-    False
-"""
+    def make_connection(self, host):
+        conn = super().make_connection(host)
+        conn.timeout = self._timeout
+        return conn
+
 
 
 class FreeCADConnection:
-    def __init__(self, host: str = "localhost", port: int = 9875):
-        self.server = xmlrpc.client.ServerProxy(f"http://{host}:{port}", allow_none=True)
+    def __init__(self, host: str = "localhost", port: int = 9875, timeout: float = 150):
+        self.server = xmlrpc.client.ServerProxy(
+            f"http://{host}:{port}",
+            allow_none=True,
+            transport=_TimeoutTransport(timeout=timeout),
+        )
 
     def disconnect(self) -> None:
         # Transport.close() clears cached HTTP connections if one was opened.
@@ -59,6 +59,9 @@ class FreeCADConnection:
     def execute_code(self, code: str) -> dict[str, Any]:
         return self.server.execute_code(code)
 
+    def execute_code_async(self, code: str) -> dict[str, Any]:
+        return self.server.execute_code_async(code)
+
     def get_active_screenshot(
         self,
         view_name: str = "Isometric",
@@ -67,11 +70,6 @@ class FreeCADConnection:
         focus_object: str | None = None,
     ) -> str | None:
         try:
-            result = self.server.execute_code(_SCREENSHOT_SUPPORT_CHECK)
-            if not result.get("success", False) or "Current view does not support screenshots" in result.get("message", ""):
-                logger.info("Screenshot unavailable in current view (likely Spreadsheet or TechDraw view)")
-                return None
-
             return self.server.get_active_screenshot(view_name, width, height, focus_object)
         except Exception as e:
             logger.error(f"Error getting screenshot: {e}")
