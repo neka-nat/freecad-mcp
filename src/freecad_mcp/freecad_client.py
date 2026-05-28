@@ -53,6 +53,10 @@ class FreeCADConnection:
     def delete_object(self, doc_name: str, obj_name: str) -> dict[str, Any]:
         return self.server.delete_object(doc_name, obj_name)
 
+
+    def reload_document(self, doc_name: str) -> dict[str, Any]:
+        return self.server.reload_document(doc_name)
+
     def insert_part_from_library(self, relative_path: str) -> dict[str, Any]:
         return self.server.insert_part_from_library(relative_path)
 

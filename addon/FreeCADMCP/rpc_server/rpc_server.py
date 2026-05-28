@@ -86,6 +86,18 @@ class FreeCADRPC:
             return {"success": True, "object_name": obj_name}
         return _err(res)
 
+
+    def reload_document(self, doc_name: str) -> dict[str, Any]:
+        """Close and re-open a document by name to pick up external file
+        changes (e.g. edits made by another process such as `freecadcmd`
+        running headlessly). Returns success once the new document is
+        loaded from disk.
+        """
+        res = dispatch_to_gui(lambda: self._reload_document_gui(doc_name))
+        if _ok(res):
+            return {"success": True, "document_name": doc_name}
+        return _err(res)
+
     def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600) -> dict[str, Any]:
         """Run the CalculiX solver on an existing Fem::FemAnalysis and return summary results."""
         try:
@@ -294,6 +306,29 @@ class FreeCADRPC:
             return True
         except Exception as e:
             return str(e)
+
+
+    def _reload_document_gui(self, doc_name: str):
+        if doc_name not in FreeCAD.listDocuments():
+            return f"Document '{doc_name}' is not loaded."
+        doc = FreeCAD.getDocument(doc_name)
+        file_path = doc.FileName
+        if not file_path:
+            return (
+                f"Document '{doc_name}' has no file on disk "
+                "(unsaved scratch document); nothing to reload from."
+            )
+        if not os.path.exists(file_path):
+            return f"File for '{doc_name}' not found at {file_path!r}."
+        # Close, then reopen from the same file. Reopen preserves the
+        # original document name when the file was previously saved
+        # under that name.
+        FreeCAD.closeDocument(doc_name)
+        FreeCAD.openDocument(file_path)
+        FreeCAD.Console.PrintMessage(
+            f"Document '{doc_name}' reloaded from '{file_path}' via RPC.\n"
+        )
+        return True
 
     def _insert_part_from_library(self, relative_path):
         try:

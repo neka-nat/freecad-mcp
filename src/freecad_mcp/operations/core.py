@@ -228,3 +228,23 @@ def run_fem_analysis_operation(
     except Exception as e:
         logger.error(f"Failed to run FEM analysis: {str(e)}")
         return text_response(f"Failed to run FEM analysis: {str(e)}")
+
+
+def reload_document_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+) -> ToolResponse:
+    """Close and re-open a document so the GUI picks up external file
+    changes (e.g. headless edits via `freecadcmd`).
+    """
+    try:
+        res = freecad.reload_document(doc_name)
+        if res.get("success"):
+            return text_response(
+                f"Document '{res['document_name']}' reloaded from disk."
+            )
+        return text_response(f"Failed to reload document: {res.get('error')}")
+    except Exception as e:
+        logger.error(f"Failed to reload document: {str(e)}")
+        return text_response(f"Failed to reload document: {str(e)}")
+
