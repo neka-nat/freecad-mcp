@@ -14,6 +14,21 @@ class Object:
     properties: dict[str, Any] = field(default_factory=dict)
 
 
+def _to_shape_color(val: Any) -> tuple[float, float, float, float]:
+    """Normalise a color to a 4-float RGBA tuple.
+
+    Accepts RGB triples (alpha defaults to 1.0) and RGBA quads, matching what
+    FreeCAD's ``ShapeColor`` accepts.
+    """
+    if not isinstance(val, (list, tuple)) or len(val) not in (3, 4):
+        raise ValueError(
+            f"ShapeColor must be an RGB or RGBA sequence, got {val!r}."
+        )
+    r, g, b = (float(val[0]), float(val[1]), float(val[2]))
+    a = float(val[3]) if len(val) == 4 else 1.0
+    return (r, g, b, a)
+
+
 def parse_reference_entry(entry: Any) -> tuple[str, Any]:
     """Normalise a single ``References`` entry to ``(object_name, sub_element)``.
 
@@ -105,12 +120,12 @@ def set_object_property(
                     setattr(obj, prop, val)
             # ShapeColor is a property of the ViewObject
             elif prop == "ShapeColor" and isinstance(val, (list, tuple)):
-                setattr(obj.ViewObject, prop, (float(val[0]), float(val[1]), float(val[2]), float(val[3])))
+                setattr(obj.ViewObject, prop, _to_shape_color(val))
 
             elif prop == "ViewObject" and isinstance(val, dict):
                 for k, v in val.items():
                     if k == "ShapeColor":
-                        setattr(obj.ViewObject, k, (float(v[0]), float(v[1]), float(v[2]), float(v[3])))
+                        setattr(obj.ViewObject, k, _to_shape_color(v))
                     else:
                         setattr(obj.ViewObject, k, v)
 

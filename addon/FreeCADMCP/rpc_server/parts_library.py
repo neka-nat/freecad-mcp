@@ -11,6 +11,11 @@ def insert_part_from_library(relative_path):
     if not os.path.exists(part_path):
         raise FileNotFoundError(f"Not found: {part_path}")
 
+    # mergeProject inserts into the active document; create one if none is open
+    # so we fail with a clear path instead of an AttributeError on None.
+    if FreeCADGui.ActiveDocument is None:
+        FreeCAD.newDocument()
+
     FreeCADGui.ActiveDocument.mergeProject(part_path)
 
 

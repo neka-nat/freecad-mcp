@@ -88,8 +88,9 @@ def create_object_gui(doc_name: str, obj: Object):
     Returns ``True`` on success, or an error string on failure (matching the
     legacy GUI-handler return contract).
     """
-    doc = FreeCAD.getDocument(doc_name)
-    if not doc:
+    try:
+        doc = FreeCAD.getDocument(doc_name)
+    except Exception:
         FreeCAD.Console.PrintError(f"Document '{doc_name}' not found.\n")
         return f"Document '{doc_name}' not found.\n"
     try:

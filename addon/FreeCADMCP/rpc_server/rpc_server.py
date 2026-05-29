@@ -164,22 +164,23 @@ class FreeCADRPC:
         return _err(res)
 
     def get_objects(self, doc_name):
-        doc = FreeCAD.getDocument(doc_name)
-        if doc:
-            return [serialize_object(obj) for obj in doc.Objects]
-        else:
+        # FreeCAD.getDocument raises (not returns None) for an unknown name.
+        try:
+            doc = FreeCAD.getDocument(doc_name)
+        except Exception:
             return []
+        return [serialize_object(obj) for obj in doc.Objects]
 
     def get_object(self, doc_name, obj_name):
-        doc = FreeCAD.getDocument(doc_name)
-        if doc:
-            obj = doc.getObject(obj_name)
-            if obj:
-                return serialize_object(obj)
-            else:
-                return None
-        else:
+        # FreeCAD.getDocument raises (not returns None) for an unknown name.
+        try:
+            doc = FreeCAD.getDocument(doc_name)
+        except Exception:
             return None
+        obj = doc.getObject(obj_name)
+        if obj:
+            return serialize_object(obj)
+        return None
 
     def insert_part_from_library(self, relative_path):
         res = dispatch_to_gui(lambda: self._insert_part_from_library(relative_path))
@@ -244,8 +245,9 @@ class FreeCADRPC:
         return create_object_gui(doc_name, obj)
 
     def _edit_object_gui(self, doc_name: str, obj: Object):
-        doc = FreeCAD.getDocument(doc_name)
-        if not doc:
+        try:
+            doc = FreeCAD.getDocument(doc_name)
+        except Exception:
             FreeCAD.Console.PrintError(f"Document '{doc_name}' not found.\n")
             return f"Document '{doc_name}' not found.\n"
 
@@ -266,8 +268,9 @@ class FreeCADRPC:
         return _run_fem_analysis(doc_name, analysis_name)
 
     def _delete_object_gui(self, doc_name: str, obj_name: str):
-        doc = FreeCAD.getDocument(doc_name)
-        if not doc:
+        try:
+            doc = FreeCAD.getDocument(doc_name)
+        except Exception:
             FreeCAD.Console.PrintError(f"Document '{doc_name}' not found.\n")
             return f"Document '{doc_name}' not found.\n"
 
