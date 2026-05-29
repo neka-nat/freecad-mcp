@@ -19,6 +19,7 @@ from .operations import (
     get_view_operation,
     insert_part_from_library_operation,
     list_documents_operation,
+    reload_document_operation,
     run_fem_analysis_operation,
 )
 from .prompt_text import ASSET_CREATION_STRATEGY
@@ -415,6 +416,35 @@ def get_parts_list(ctx: Context) -> list[TextContent]:
     """Get the list of parts in the parts library addon.
     """
     return get_parts_list_operation(get_freecad_connection())
+
+
+@mcp.tool()
+def reload_document(ctx: Context, doc_name: str) -> list[TextContent]:
+    """Close and re-open a document to pick up external file changes.
+
+    Use this AFTER the document's .FCStd file has been modified by
+    something outside of FreeCAD's GUI process — for example, a
+    headless `freecadcmd` script that edited and saved the file. The
+    open GUI document is otherwise unaware of on-disk changes; this
+    tool closes the stale in-memory copy and reopens the file from
+    disk so the GUI shows current geometry.
+
+    Args:
+        doc_name: The name of the open document to reload. Must match
+            the name shown by ``list_documents``.
+
+    Returns:
+        A message confirming the document was reloaded, or describing
+        the failure (document not loaded, no associated file, etc).
+
+    Examples:
+        ```json
+        {
+            "doc_name": "chassis"
+        }
+        ```
+    """
+    return reload_document_operation(get_freecad_connection(), doc_name)
 
 
 @mcp.tool()

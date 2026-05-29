@@ -11,6 +11,7 @@ from .core import (
     get_view_operation,
     insert_part_from_library_operation,
     list_documents_operation,
+    reload_document_operation,
     run_fem_analysis_operation,
 )
 
@@ -27,5 +28,6 @@ __all__ = [
     "get_view_operation",
     "insert_part_from_library_operation",
     "list_documents_operation",
+    "reload_document_operation",
     "run_fem_analysis_operation",
 ]
