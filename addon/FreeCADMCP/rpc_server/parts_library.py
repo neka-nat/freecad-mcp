@@ -1,5 +1,4 @@
 import os
-from functools import cache
 
 import FreeCAD
 import FreeCADGui
@@ -15,12 +14,13 @@ def insert_part_from_library(relative_path):
     FreeCADGui.ActiveDocument.mergeProject(part_path)
 
 
-@cache
 def get_parts_list() -> list[str]:
     parts_lib_path = os.path.join(FreeCAD.getUserAppDataDir(), "Mod", "parts_library")
 
     if not os.path.exists(parts_lib_path):
-        raise FileNotFoundError(f"Not found: {parts_lib_path}")
+        # Library addon not installed — return empty so the caller can show a
+        # friendly "no parts found" message instead of raising over XML-RPC.
+        return []
 
     parts = []
 

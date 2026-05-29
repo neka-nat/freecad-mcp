@@ -188,7 +188,11 @@ def get_object_operation(
 
 
 def get_parts_list_operation(freecad: FreeCADConnection) -> ToolResponse:
-    parts = freecad.get_parts_list()
+    try:
+        parts = freecad.get_parts_list()
+    except Exception as e:
+        logger.error(f"Failed to get parts list: {str(e)}")
+        return text_response(f"Failed to get parts list: {str(e)}")
     if parts:
         return json_response(parts)
     return text_response("No parts found in the parts library. You must add parts_library addon.")

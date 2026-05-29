@@ -14,9 +14,45 @@ class Object:
     properties: dict[str, Any] = field(default_factory=dict)
 
 
+def parse_reference_entry(entry: Any) -> tuple[str, Any]:
+    """Normalise a single ``References`` entry to ``(object_name, sub_element)``.
+
+    Accepts both the documented dict form
+    ``{"object_name": "Box", "face": "Face1"}`` and the legacy
+    ``["Box", "Face1"]`` pair form.
+    """
+    if isinstance(entry, dict):
+        ref_name = entry.get("object_name", entry.get("Object"))
+        face = entry.get("face", entry.get("Face"))
+        if ref_name is None:
+            raise ValueError(
+                f"Reference entry {entry!r} is missing an 'object_name' key."
+            )
+        return ref_name, face
+    if isinstance(entry, (list, tuple)) and len(entry) == 2:
+        return entry[0], entry[1]
+    raise ValueError(
+        f"Invalid reference entry {entry!r}; expected "
+        "{'object_name': ..., 'face': ...} or [object_name, face]."
+    )
+
+
+def resolve_references(doc: FreeCAD.Document, val: Any) -> list[tuple[Any, Any]]:
+    """Resolve a ``References`` list into ``(DocumentObject, sub_element)`` tuples."""
+    refs = []
+    for entry in val:
+        ref_name, face = parse_reference_entry(entry)
+        ref_obj = doc.getObject(ref_name)
+        if ref_obj is None:
+            raise ValueError(f"Referenced object '{ref_name}' not found.")
+        refs.append((ref_obj, face))
+    return refs
+
+
 def set_object_property(
     doc: FreeCAD.Document, obj: FreeCAD.DocumentObject, properties: dict[str, Any]
 ):
+    failures = []
     for prop, val in properties.items():
         try:
             if prop in obj.PropertiesList:
@@ -63,14 +99,7 @@ def set_object_property(
                         raise ValueError(f"Referenced object '{val}' not found.")
 
                 elif prop == "References" and isinstance(val, list):
-                    refs = []
-                    for ref_name, face in val:
-                        ref_obj = doc.getObject(ref_name)
-                        if ref_obj:
-                            refs.append((ref_obj, face))
-                        else:
-                            raise ValueError(f"Referenced object '{ref_name}' not found.")
-                    setattr(obj, prop, refs)
+                    setattr(obj, prop, resolve_references(doc, val))
 
                 else:
                     setattr(obj, prop, val)
@@ -90,3 +119,10 @@ def set_object_property(
 
         except Exception as e:
             FreeCAD.Console.PrintError(f"Property '{prop}' assignment error: {e}\n")
+            failures.append(f"{prop}: {e}")
+
+    if failures:
+        raise ValueError(
+            "Failed to set propert" + ("y" if len(failures) == 1 else "ies")
+            + ": " + "; ".join(failures)
+        )

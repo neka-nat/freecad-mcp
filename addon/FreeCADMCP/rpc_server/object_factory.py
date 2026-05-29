@@ -9,7 +9,7 @@ public entry point that selects the branch.
 import FreeCAD
 import ObjectsFem
 
-from .property_mapper import Object, set_object_property
+from rpc_server.property_mapper import Object, set_object_property
 
 
 def _create_fem_mesh(doc: FreeCAD.Document, obj: Object) -> None:
@@ -93,7 +93,12 @@ def create_object_gui(doc_name: str, obj: Object):
         FreeCAD.Console.PrintError(f"Document '{doc_name}' not found.\n")
         return f"Document '{doc_name}' not found.\n"
     try:
-        if obj.type == "Fem::FemMeshGmsh" and obj.analysis:
+        if obj.type == "Fem::FemMeshGmsh":
+            if not obj.analysis:
+                return (
+                    "Fem::FemMeshGmsh requires an 'analysis_name' naming the "
+                    "Fem::AnalysisPython container to add the mesh to."
+                )
             _create_fem_mesh(doc, obj)
         elif obj.type.startswith("Fem::"):
             _create_fem_object(doc, obj)

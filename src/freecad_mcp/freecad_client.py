@@ -25,8 +25,13 @@ class _TimeoutTransport(xmlrpc.client.Transport):
 
 class FreeCADConnection:
     def __init__(self, host: str = "localhost", port: int = 9875, timeout: float = 150):
-        self.server = xmlrpc.client.ServerProxy(
-            f"http://{host}:{port}",
+        self._uri = f"http://{host}:{port}"
+        self._timeout = timeout
+        self.server = self._make_proxy(timeout)
+
+    def _make_proxy(self, timeout: float) -> xmlrpc.client.ServerProxy:
+        return xmlrpc.client.ServerProxy(
+            self._uri,
             allow_none=True,
             transport=_TimeoutTransport(timeout=timeout),
         )
@@ -88,4 +93,9 @@ class FreeCADConnection:
         return self.server.list_documents()
 
     def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600) -> dict[str, Any]:
-        return self.server.run_fem_analysis(doc_name, analysis_name, timeout)
+        # The solver blocks the RPC response for up to `timeout` seconds, so the
+        # socket must outlast it. The default 150 s transport timeout would abort
+        # any solve longer than that even though the addon is still working.
+        # Use a dedicated proxy whose socket timeout exceeds the solver timeout.
+        proxy = self._make_proxy(max(self._timeout, timeout + 30))
+        return proxy.run_fem_analysis(doc_name, analysis_name, timeout)
