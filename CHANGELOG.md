@@ -29,6 +29,9 @@ Releases up to and including `0.1.18` predate this file; see the
   `_with_screenshot` helper (no behavior change).
 
 ### Fixed
+- `ShapeColor` now accepts a 3-component `[r, g, b]` color (alpha defaults to
+  `1.0`) in addition to `[r, g, b, a]`. Previously a 3-element color raised
+  `IndexError` and was silently dropped.
 - `execute_code_async` no longer tells the model to poll the removed
   `SessionState.Label` pattern; the runtime hint now matches the tool
   docstring.

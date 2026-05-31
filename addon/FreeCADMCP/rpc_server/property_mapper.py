@@ -14,6 +14,20 @@ class Object:
     properties: dict[str, Any] = field(default_factory=dict)
 
 
+def _to_color(val: Any) -> tuple[float, float, float, float]:
+    """Coerce an RGB or RGBA sequence into a 4-float RGBA tuple.
+
+    FreeCAD's ``ShapeColor`` expects four components; callers (and LLMs) often
+    supply only ``[r, g, b]``. Accept both and default alpha to ``1.0`` rather
+    than raising ``IndexError`` and silently dropping the color.
+    """
+    if not isinstance(val, (list, tuple)) or len(val) < 3:
+        raise ValueError(f"color must have 3 or 4 components, got {val!r}")
+    r, g, b = float(val[0]), float(val[1]), float(val[2])
+    a = float(val[3]) if len(val) >= 4 else 1.0
+    return (r, g, b, a)
+
+
 def set_object_property(
     doc: FreeCAD.Document, obj: FreeCAD.DocumentObject, properties: dict[str, Any]
 ):
@@ -76,12 +90,12 @@ def set_object_property(
                     setattr(obj, prop, val)
             # ShapeColor is a property of the ViewObject
             elif prop == "ShapeColor" and isinstance(val, (list, tuple)):
-                setattr(obj.ViewObject, prop, (float(val[0]), float(val[1]), float(val[2]), float(val[3])))
+                setattr(obj.ViewObject, prop, _to_color(val))
 
             elif prop == "ViewObject" and isinstance(val, dict):
                 for k, v in val.items():
                     if k == "ShapeColor":
-                        setattr(obj.ViewObject, k, (float(v[0]), float(v[1]), float(v[2]), float(v[3])))
+                        setattr(obj.ViewObject, k, _to_color(v))
                     else:
                         setattr(obj.ViewObject, k, v)
 
