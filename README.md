@@ -174,6 +174,28 @@ Pass the `--host` flag with the IP address or hostname of the machine running Fr
 
 The `--host` value is validated on startup — it must be a valid IPv4/IPv6 address or hostname.
 
+### Security considerations
+
+The RPC server executes whatever the MCP client asks of it — including the
+`execute_code` / `execute_code_async` tools, which run **arbitrary Python
+inside the FreeCAD process**. This is by design (it is what makes the server
+useful), but it means anyone who can reach the RPC port effectively has code
+execution on the machine running FreeCAD.
+
+When **Remote Connections** is enabled the server binds to `0.0.0.0` and is
+reachable from the network. The **Allowed IPs** list is the only thing gating
+access — there is no authentication and no transport encryption (it is plain
+XML-RPC over HTTP). Therefore:
+
+- Keep the default (`127.0.0.1`, localhost only) unless you specifically need
+  remote control.
+- When you do enable remote access, restrict **Allowed IPs** to the narrowest
+  set of trusted addresses/subnets possible.
+- Prefer a trusted LAN or an SSH/VPN tunnel over exposing the port directly to
+  an untrusted network.
+- Treat the FreeCAD machine as you would any host that accepts remote code
+  execution.
+
 ## Tools
 
 * `create_document`: Create a new document in FreeCAD.
