@@ -6,7 +6,6 @@ from mcp.types import ImageContent
 from ..freecad_client import FreeCADConnection
 from ..responses import ToolResponse, add_screenshot_if_available, json_response, text_response
 
-
 logger = logging.getLogger("FreeCADMCPserver")
 
 
@@ -117,9 +116,10 @@ def execute_code_async_operation(
         if res["success"]:
             return text_response(
                 "Code execution started in background.\n"
-                "Use get_object to poll a document object for completion "
-                "(e.g. check SessionState.Label). "
-                "FreeCAD's Report View will show output when done."
+                "It runs on a separate thread and must not touch the FreeCAD "
+                "document, GUI, selection, or recompute/save. "
+                "Output (or any error) will appear in FreeCAD's Report View "
+                "when it completes."
             )
         return text_response(f"Failed to start async execution: {res.get('error', 'unknown')}")
     except Exception as e:

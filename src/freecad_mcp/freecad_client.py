@@ -2,7 +2,6 @@ import logging
 import xmlrpc.client
 from typing import Any
 
-
 logger = logging.getLogger("FreeCADMCPserver")
 
 

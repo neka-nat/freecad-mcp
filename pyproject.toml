@@ -1,20 +1,41 @@
 [project]
 name = "freecad-mcp"
 version = "0.1.18"
-description = "Add your description here"
+description = "A Model Context Protocol (MCP) server for controlling FreeCAD from AI assistants such as Claude Desktop."
 readme = "README.md"
 authors = [
     { name = "neka-nat", email = "nekanat.stock@gmail.com" }
 ]
 license = { text = "MIT" }
 requires-python = ">=3.12"
+keywords = ["freecad", "mcp", "model-context-protocol", "cad", "claude", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
 dependencies = [
     "mcp[cli]>=1.12.2",
     "validators>=0.34.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/neka-nat/freecad-mcp"
+Repository = "https://github.com/neka-nat/freecad-mcp"
+Issues = "https://github.com/neka-nat/freecad-mcp/issues"
+
 [project.scripts]
 freecad-mcp = "freecad_mcp.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
 
 [tool.hatch.build.targets.sdist]
 exclude = ["assets", "results"]
@@ -22,3 +43,32 @@ exclude = ["assets", "results"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+# The addon runs only inside FreeCAD and imports FreeCAD/PySide, which are
+# unavailable here; lint the MCP server package only.
+src = ["src"]
+extend-exclude = ["addon", "examples"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# Tool docstrings double as the schemas the model reads, so they are
+# intentionally long-form prose; line length is not enforced.
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/freecad_mcp"]
+ignore_missing_imports = true
+
+# The XML-RPC ServerProxy is dynamically typed: every call returns the broad
+# `_Marshallable` union, so mypy cannot verify the narrowed return types of
+# these thin pass-through wrappers. The annotations document the real wire
+# contract; suppress the unavoidable boundary noise here only.
+[[tool.mypy.overrides]]
+module = "freecad_mcp.freecad_client"
+disable_error_code = ["return-value"]

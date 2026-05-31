@@ -1,6 +1,7 @@
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, Literal
+from typing import Any, Literal
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import ImageContent, TextContent
@@ -25,7 +26,6 @@ from .operations import (
 from .prompt_text import ASSET_CREATION_STRATEGY
 from .server_state import ServerState
 
-
 logging.basicConfig(
     level=logging.WARNING, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
@@ -36,7 +36,7 @@ state = ServerState()
 
 
 @asynccontextmanager
-async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
+async def server_lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
     try:
         logger.info("FreeCADMCP server starting up")
         try:
@@ -77,7 +77,7 @@ def get_freecad_connection() -> FreeCADConnection:
 
 
 @mcp.tool()
-def create_document(ctx: Context, name: str) -> list[TextContent]:
+def create_document(ctx: Context, name: str) -> list[TextContent | ImageContent]:
     """Create a new document in FreeCAD.
 
     Args:
@@ -104,7 +104,7 @@ def create_object(
     obj_type: str,
     obj_name: str,
     analysis_name: str | None = None,
-    obj_properties: dict[str, Any] = None,
+    obj_properties: dict[str, Any] | None = None,
 ) -> list[TextContent | ImageContent]:
     """Create a new object in FreeCAD.
     Object type is starts with "Part::" or "Draft::" or "PartDesign::" or "Fem::".
@@ -277,7 +277,7 @@ def delete_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextConten
 
 
 @mcp.tool()
-def execute_code_async(ctx: Context, code: str) -> list[TextContent]:
+def execute_code_async(ctx: Context, code: str) -> list[TextContent | ImageContent]:
     """Execute Python code in FreeCAD without waiting for completion.
 
     Use this ONLY for long-running background computations that do NOT touch the
@@ -412,14 +412,14 @@ def get_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextContent |
 
 
 @mcp.tool()
-def get_parts_list(ctx: Context) -> list[TextContent]:
+def get_parts_list(ctx: Context) -> list[TextContent | ImageContent]:
     """Get the list of parts in the parts library addon.
     """
     return get_parts_list_operation(get_freecad_connection())
 
 
 @mcp.tool()
-def reload_document(ctx: Context, doc_name: str) -> list[TextContent]:
+def reload_document(ctx: Context, doc_name: str) -> list[TextContent | ImageContent]:
     """Close and re-open a document to pick up external file changes.
 
     Use this AFTER the document's .FCStd file has been modified by
@@ -448,7 +448,7 @@ def reload_document(ctx: Context, doc_name: str) -> list[TextContent]:
 
 
 @mcp.tool()
-def list_documents(ctx: Context) -> list[TextContent]:
+def list_documents(ctx: Context) -> list[TextContent | ImageContent]:
     """Get the list of open documents in FreeCAD.
 
     Returns:
