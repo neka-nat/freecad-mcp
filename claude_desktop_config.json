@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "freecad": {
+      "command": "C:\\Users\\AXIO\\.local\\bin\\uvx.exe",
+      "args": [
+        "freecad-mcp"
+      ]
+    }
+  }
+}
