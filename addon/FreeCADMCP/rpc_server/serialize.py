@@ -52,11 +52,20 @@ def serialize_shape(shape):
 def serialize_view_object(view):
     if view is None:
         return None
-    return {
-        "ShapeColor": serialize_value(view.ShapeColor),
-        "Transparency": view.Transparency,
-        "Visibility": view.Visibility,
-    }
+    result = {}
+    try:
+        result["ShapeColor"] = serialize_value(view.ShapeColor)
+    except AttributeError:
+        pass
+    try:
+        result["Transparency"] = view.Transparency
+    except AttributeError:
+        pass
+    try:
+        result["Visibility"] = view.Visibility
+    except AttributeError:
+        pass
+    return result
 
 
 def serialize_object(obj):
