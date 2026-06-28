@@ -1,3 +1,14 @@
+import sys as _sys
+import os as _os
+try:
+    _addon_dir = _os.path.dirname(_os.path.abspath(__file__))
+except NameError:
+    import inspect as _inspect
+    _addon_dir = _os.path.dirname(_os.path.abspath(_inspect.getfile(_inspect.currentframe())))
+if _addon_dir not in _sys.path:
+    _sys.path.insert(0, _addon_dir)
+
+
 class FreeCADMCPAddonWorkbench(Workbench):
     MenuText = "MCP Addon"
     ToolTip = "Addon for MCP Communication"

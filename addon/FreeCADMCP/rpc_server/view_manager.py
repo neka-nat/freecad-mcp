@@ -5,7 +5,7 @@ from typing import Any
 import FreeCAD
 import FreeCADGui
 
-from .gui_dispatch import _flush_gui_events
+from rpc_server.gui_dispatch import _flush_gui_events
 
 
 _VIEW_DISPATCH = {

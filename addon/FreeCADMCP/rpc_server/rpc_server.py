@@ -11,22 +11,22 @@ from typing import Any
 
 from PySide import QtCore
 
-from .commands import register_commands, schedule_toggle_sync
-from .fem_executor import run_fem_analysis as _run_fem_analysis
-from .gui_dispatch import (
+from rpc_server.commands import register_commands, schedule_toggle_sync
+from rpc_server.fem_executor import run_fem_analysis as _run_fem_analysis
+from rpc_server.gui_dispatch import (
     cleanup_waker,
     dispatch_to_gui,
     init_waker,
     process_gui_tasks,
     request_shutdown,
 )
-from .ip_filter import FilteredXMLRPCServer, validate_allowed_ips
-from .object_factory import create_object_gui
-from .parts_library import get_parts_list, insert_part_from_library
-from .property_mapper import Object, set_object_property
-from .serialize import serialize_object
-from .settings import load_settings, save_settings
-from .view_manager import save_active_screenshot
+from rpc_server.ip_filter import FilteredXMLRPCServer, validate_allowed_ips
+from rpc_server.object_factory import create_object_gui
+from rpc_server.parts_library import get_parts_list, insert_part_from_library
+from rpc_server.property_mapper import Object, set_object_property
+from rpc_server.serialize import serialize_object
+from rpc_server.settings import load_settings, save_settings
+from rpc_server.view_manager import save_active_screenshot
 
 rpc_server_thread = None
 rpc_server_instance = None
@@ -119,8 +119,6 @@ class FreeCADRPC:
         exceed the MCP timeout. The caller should poll a document object for
         completion status (e.g. check SessionState.Label via get_object).
         """
-        output_buffer = io.StringIO()
-
         def _set_status(msg):
             dispatch_to_gui(lambda: FreeCADGui.getMainWindow().statusBar().showMessage(msg))
 
@@ -128,14 +126,13 @@ class FreeCADRPC:
             dispatch_to_gui(lambda: FreeCADGui.getMainWindow().statusBar().clearMessage())
 
         def worker() -> None:
+            # NOTE: we do NOT redirect sys.stdout here. contextlib.redirect_stdout
+            # swaps stdout process-wide, not per-thread, so it would race with the
+            # GUI thread and other concurrent work. Background code should report
+            # via FreeCAD.Console (which is thread-safe) instead.
             try:
-                with contextlib.redirect_stdout(output_buffer):
-                    exec(code, globals())
-                out = output_buffer.getvalue()
-                log_msg = "Async code execution completed."
-                if out:
-                    log_msg += f"\nOutput:\n{out}"
-                FreeCAD.Console.PrintMessage(log_msg + "\n")
+                exec(code, globals())
+                FreeCAD.Console.PrintMessage("Async code execution completed.\n")
             except Exception as e:
                 import traceback as _tb
                 FreeCAD.Console.PrintError(
@@ -179,22 +176,23 @@ class FreeCADRPC:
         return _err(res)
 
     def get_objects(self, doc_name):
-        doc = FreeCAD.getDocument(doc_name)
-        if doc:
-            return [serialize_object(obj) for obj in doc.Objects]
-        else:
+        # FreeCAD.getDocument raises (not returns None) for an unknown name.
+        try:
+            doc = FreeCAD.getDocument(doc_name)
+        except Exception:
             return []
+        return [serialize_object(obj) for obj in doc.Objects]
 
     def get_object(self, doc_name, obj_name):
-        doc = FreeCAD.getDocument(doc_name)
-        if doc:
-            obj = doc.getObject(obj_name)
-            if obj:
-                return serialize_object(obj)
-            else:
-                return None
-        else:
+        # FreeCAD.getDocument raises (not returns None) for an unknown name.
+        try:
+            doc = FreeCAD.getDocument(doc_name)
+        except Exception:
             return None
+        obj = doc.getObject(obj_name)
+        if obj:
+            return serialize_object(obj)
+        return None
 
     def insert_part_from_library(self, relative_path):
         res = dispatch_to_gui(lambda: self._insert_part_from_library(relative_path))
@@ -259,8 +257,9 @@ class FreeCADRPC:
         return create_object_gui(doc_name, obj)
 
     def _edit_object_gui(self, doc_name: str, obj: Object):
-        doc = FreeCAD.getDocument(doc_name)
-        if not doc:
+        try:
+            doc = FreeCAD.getDocument(doc_name)
+        except Exception:
             FreeCAD.Console.PrintError(f"Document '{doc_name}' not found.\n")
             return f"Document '{doc_name}' not found.\n"
 
@@ -270,19 +269,6 @@ class FreeCADRPC:
             return f"Object '{obj.name}' not found in document '{doc_name}'.\n"
 
         try:
-            if hasattr(obj_ins, "References") and "References" in obj.properties:
-                refs = []
-                for ref_name, face in obj.properties["References"]:
-                    ref_obj = doc.getObject(ref_name)
-                    if ref_obj:
-                        refs.append((ref_obj, face))
-                    else:
-                        raise ValueError(f"Referenced object '{ref_name}' not found.")
-                obj_ins.References = refs
-                FreeCAD.Console.PrintMessage(
-                    f"References updated for '{obj.name}' in '{doc_name}'.\n"
-                )
-                del obj.properties["References"]
             set_object_property(doc, obj_ins, obj.properties)
             doc.recompute()
             FreeCAD.Console.PrintMessage(f"Object '{obj.name}' updated via RPC.\n")
@@ -294,8 +280,9 @@ class FreeCADRPC:
         return _run_fem_analysis(doc_name, analysis_name)
 
     def _delete_object_gui(self, doc_name: str, obj_name: str):
-        doc = FreeCAD.getDocument(doc_name)
-        if not doc:
+        try:
+            doc = FreeCAD.getDocument(doc_name)
+        except Exception:
             FreeCAD.Console.PrintError(f"Document '{doc_name}' not found.\n")
             return f"Document '{doc_name}' not found.\n"
 

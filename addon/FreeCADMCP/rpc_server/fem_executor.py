@@ -15,8 +15,9 @@ def run_fem_analysis(doc_name: str, analysis_name: str) -> dict:
     """
     work_dir = None
     try:
-        doc = FreeCAD.getDocument(doc_name)
-        if not doc:
+        try:
+            doc = FreeCAD.getDocument(doc_name)
+        except Exception:
             return {"success": False, "error": f"Document '{doc_name}' not found."}
         analysis = doc.getObject(analysis_name)
         if analysis is None:

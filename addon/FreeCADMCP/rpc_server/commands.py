@@ -12,8 +12,8 @@ import FreeCAD
 import FreeCADGui
 from PySide import QtCore, QtWidgets
 
-from .ip_filter import validate_allowed_ips
-from .settings import load_settings, save_settings
+from rpc_server.ip_filter import validate_allowed_ips
+from rpc_server.settings import load_settings, save_settings
 
 
 class StartRPCServerCommand:
@@ -157,25 +157,36 @@ def register_commands() -> None:
     FreeCADGui.addCommand("Configure_Allowed_IPs", ConfigureAllowedIPsCommand())
 
 
-def _sync_toggle_states() -> None:
-    """Sync checkable menu items with saved settings on startup."""
+# Map command objectName -> settings key. Matching on objectName rather than
+# the localized menu text keeps this working under translation.
+_TOGGLE_COMMANDS = {
+    "Toggle_Remote_Connections": "remote_enabled",
+    "Toggle_Auto_Start": "auto_start_rpc",
+}
+_SYNC_MAX_RETRIES = 10  # ~20 s at 2 s/retry before giving up
+
+
+def _sync_toggle_states(retries_left: int = _SYNC_MAX_RETRIES) -> None:
+    """Sync checkable menu items with saved settings on startup.
+
+    The menu actions are created asynchronously, so retry a bounded number of
+    times until they exist rather than polling forever.
+    """
     try:
         settings = load_settings()
         main_window = FreeCADGui.getMainWindow()
-        toggle_map = {
-            "Remote Connections": settings.get("remote_enabled", False),
-            "Auto-Start Server": settings.get("auto_start_rpc", False),
-        }
         found = 0
         for action in main_window.findChildren(QtWidgets.QAction):
-            if action.text() in toggle_map:
-                action.setChecked(toggle_map[action.text()])
+            key = _TOGGLE_COMMANDS.get(action.objectName())
+            if key is not None:
+                action.setChecked(bool(settings.get(key, False)))
                 found += 1
-                if found == len(toggle_map):
-                    return
+        if found == len(_TOGGLE_COMMANDS):
+            return
     except Exception:
         pass
-    QtCore.QTimer.singleShot(2000, _sync_toggle_states)
+    if retries_left > 0:
+        QtCore.QTimer.singleShot(2000, lambda: _sync_toggle_states(retries_left - 1))
 
 
 def schedule_toggle_sync() -> None:
