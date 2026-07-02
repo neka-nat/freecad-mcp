@@ -80,6 +80,34 @@ def run_fem_analysis(doc_name: str, analysis_name: str) -> dict:
             "max_displacement_mm": max(disp) if disp else None,
             "working_dir": work_dir,
         }
+    except (AttributeError, TypeError) as e:
+        return {
+            "success": False,
+            "error": f"FreeCAD object access error: {e}",
+            "traceback": traceback.format_exc(),
+            "working_dir": work_dir,
+        }
+    except (ImportError, ModuleNotFoundError) as e:
+        return {
+            "success": False,
+            "error": f"Missing FEM dependencies: {e}",
+            "traceback": traceback.format_exc(),
+            "working_dir": work_dir,
+        }
+    except (OSError, IOError) as e:
+        return {
+            "success": False,
+            "error": f"File system or CalculiX binary error: {e}",
+            "traceback": traceback.format_exc(),
+            "working_dir": work_dir,
+        }
+    except RuntimeError as e:
+        return {
+            "success": False,
+            "error": f"CalculiX solver runtime error: {e}",
+            "traceback": traceback.format_exc(),
+            "working_dir": work_dir,
+        }
     except Exception as e:
         return {
             "success": False,
