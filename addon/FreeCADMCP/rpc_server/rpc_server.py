@@ -26,6 +26,9 @@ from rpc_server.parts_library import get_parts_list, insert_part_from_library
 from rpc_server.property_mapper import Object, set_object_property
 from rpc_server.serialize import serialize_object
 from rpc_server.settings import load_settings, save_settings
+from rpc_server.step_io import export_step as _export_step
+from rpc_server.step_io import import_step as _import_step
+from rpc_server.step_io import list_solids_with_bbox as _list_solids_with_bbox
 from rpc_server.view_manager import save_active_screenshot
 
 rpc_server_thread = None
@@ -194,6 +197,37 @@ class FreeCADRPC:
             return serialize_object(obj)
         return None
 
+    def list_solids_with_bbox(self, doc_name: str, obj_name: str | None = None) -> dict[str, Any]:
+        """List every solid in a document (or a single object) with its
+        bounding box dimensions, center, and volume."""
+        return _list_solids_with_bbox(doc_name, obj_name)
+
+    def export_step(
+        self, doc_name: str, save_path: str, obj_names: list[str] | None = None
+    ) -> dict[str, Any]:
+        """Export objects (or all exportable objects) in a document to a STEP file."""
+        return _export_step(doc_name, save_path, obj_names)
+
+    def import_step(
+        self,
+        doc_name: str,
+        file_path: str,
+        preserve_hierarchy: bool = True,
+        timeout: int = 300,
+    ) -> dict[str, Any]:
+        """Import a STEP file into a document, creating the document if needed."""
+        try:
+            timeout_s = int(timeout)
+        except (TypeError, ValueError):
+            return {"success": False, "error": f"invalid timeout: {timeout!r}"}
+        res = dispatch_to_gui(
+            lambda: _import_step(doc_name, file_path, preserve_hierarchy),
+            timeout=timeout_s,
+        )
+        if isinstance(res, dict):
+            return res
+        return {"success": False, "error": str(res)}
+
     def insert_part_from_library(self, relative_path):
         res = dispatch_to_gui(lambda: self._insert_part_from_library(relative_path))
         if _ok(res):
@@ -246,6 +280,35 @@ class FreeCADRPC:
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
+
+    def save_view_png(
+        self,
+        save_path: str,
+        view_name: str = "Isometric",
+        width: int | None = None,
+        height: int | None = None,
+        focus_object: str | None = None,
+    ) -> dict[str, Any]:
+        """Save a screenshot of the active view directly to save_path (unlike
+        get_active_screenshot, which returns a base64 string and discards the file)."""
+        def task():
+            try:
+                active_view = FreeCADGui.ActiveDocument.ActiveView
+            except Exception:
+                return False
+            if active_view is None or not hasattr(active_view, "saveImage"):
+                return False
+            return save_active_screenshot(save_path, view_name, width, height, focus_object)
+
+        res = dispatch_to_gui(task)
+        if _ok(res):
+            return {"success": True, "save_path": save_path}
+        if res is False:
+            return {
+                "success": False,
+                "error": "Current view does not support screenshots (e.g. TechDraw or Spreadsheet).",
+            }
+        return _err(res)
 
     def _create_document_gui(self, name):
         doc = FreeCAD.newDocument(name)

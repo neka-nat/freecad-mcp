@@ -90,6 +90,37 @@ class FreeCADConnection:
     def get_object(self, doc_name: str, obj_name: str) -> dict[str, Any]:
         return self.server.get_object(doc_name, obj_name)
 
+    def list_solids_with_bbox(self, doc_name: str, obj_name: str | None = None) -> dict[str, Any]:
+        return self.server.list_solids_with_bbox(doc_name, obj_name)
+
+    def export_step(
+        self, doc_name: str, save_path: str, obj_names: list[str] | None = None
+    ) -> dict[str, Any]:
+        return self.server.export_step(doc_name, save_path, obj_names)
+
+    def import_step(
+        self,
+        doc_name: str,
+        file_path: str,
+        preserve_hierarchy: bool = True,
+        timeout: int = 300,
+    ) -> dict[str, Any]:
+        # Large STEP files can take a while to parse; use a dedicated proxy
+        # whose socket timeout exceeds the import timeout, same rationale as
+        # run_fem_analysis's dedicated proxy below.
+        proxy = self._make_proxy(max(self._timeout, timeout + 30))
+        return proxy.import_step(doc_name, file_path, preserve_hierarchy, timeout)
+
+    def save_view_png(
+        self,
+        save_path: str,
+        view_name: str = "Isometric",
+        width: int | None = None,
+        height: int | None = None,
+        focus_object: str | None = None,
+    ) -> dict[str, Any]:
+        return self.server.save_view_png(save_path, view_name, width, height, focus_object)
+
     def get_parts_list(self) -> list[str]:
         return self.server.get_parts_list()
 

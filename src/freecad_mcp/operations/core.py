@@ -187,6 +187,81 @@ def get_object_operation(
         return text_response(f"Failed to get object: {str(e)}")
 
 
+def list_solids_with_bbox_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    obj_name: str | None = None,
+) -> ToolResponse:
+    try:
+        res = freecad.list_solids_with_bbox(doc_name, obj_name)
+        if res.get("success"):
+            return json_response(res["solids"])
+        return text_response(f"Failed to list solids: {res.get('error')}")
+    except Exception as e:
+        logger.error(f"Failed to list solids: {str(e)}")
+        return text_response(f"Failed to list solids: {str(e)}")
+
+
+def export_step_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    save_path: str,
+    obj_names: list[str] | None = None,
+) -> ToolResponse:
+    try:
+        res = freecad.export_step(doc_name, save_path, obj_names)
+        if res.get("success"):
+            return text_response(
+                f"Exported {res['object_count']} object(s) from '{doc_name}' to '{res['save_path']}'."
+            )
+        return text_response(f"Failed to export STEP: {res.get('error')}")
+    except Exception as e:
+        logger.error(f"Failed to export STEP: {str(e)}")
+        return text_response(f"Failed to export STEP: {str(e)}")
+
+
+def import_step_operation(
+    freecad: FreeCADConnection,
+    only_text_feedback: bool,
+    doc_name: str,
+    file_path: str,
+    preserve_hierarchy: bool = True,
+    timeout: int = 300,
+) -> ToolResponse:
+    try:
+        res = freecad.import_step(doc_name, file_path, preserve_hierarchy, timeout)
+        if res.get("success"):
+            response = text_response(
+                f"Imported into document '{res['document_name']}': "
+                f"{', '.join(res['imported_objects']) or '(no new objects)'}"
+            )
+        else:
+            return text_response(f"Failed to import STEP: {res.get('error')}")
+        screenshot = None if only_text_feedback else freecad.get_active_screenshot()
+        return add_screenshot_if_available(response, screenshot, only_text_feedback)
+    except Exception as e:
+        logger.error(f"Failed to import STEP: {str(e)}")
+        return text_response(f"Failed to import STEP: {str(e)}")
+
+
+def save_view_png_operation(
+    freecad: FreeCADConnection,
+    save_path: str,
+    view_name: str = "Isometric",
+    width: int | None = None,
+    height: int | None = None,
+    focus_object: str | None = None,
+) -> ToolResponse:
+    try:
+        res = freecad.save_view_png(save_path, view_name, width, height, focus_object)
+        if res.get("success"):
+            return text_response(f"Saved view to '{res['save_path']}'.")
+        return text_response(f"Failed to save view: {res.get('error')}")
+    except Exception as e:
+        logger.error(f"Failed to save view: {str(e)}")
+        return text_response(f"Failed to save view: {str(e)}")
+
+
 def get_parts_list_operation(freecad: FreeCADConnection) -> ToolResponse:
     try:
         parts = freecad.get_parts_list()
