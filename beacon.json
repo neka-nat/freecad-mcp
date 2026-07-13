@@ -1,0 +1,23 @@
+{
+  "beacon_manifest": "0.1",
+  "id": "neka-nat/freecad-mcp",
+  "name": "Freecad Mcp",
+  "description": "Open-source AI agent \u2014 claude, freecad, mcp, model.",
+  "capabilities": [
+    "claude",
+    "freecad",
+    "mcp",
+    "model",
+    "context",
+    "protocol",
+    "server"
+  ],
+  "interfaces": [
+    {
+      "type": "mcp",
+      "endpoint": "https://github.com/neka-nat/freecad-mcp"
+    }
+  ],
+  "source": "https://github.com/neka-nat/freecad-mcp",
+  "homepage": "https://github.com/neka-nat/freecad-mcp"
+}

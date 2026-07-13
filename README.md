@@ -195,3 +195,9 @@ The `--host` value is validated on startup — it must be a valid IPv4/IPv6 addr
 </a>
 
 Made with [contrib.rocks](https://contrib.rocks).
+
+## Discovery
+
+[![Beacon Verified](https://registry-ruby.vercel.app/api/v1/agents/neka-nat%2Ffreecad-mcp/badge.svg)](https://portal-five-phi-54.vercel.app/?q=neka-nat%2Ffreecad-mcp)
+
+Listed on [Beacon](https://portal-five-phi-54.vercel.app) — searchable index of open-source MCP servers.
