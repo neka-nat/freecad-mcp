@@ -28,7 +28,7 @@ When creating content in FreeCAD, always follow these steps:
      bulk property edits, or intermediate steps in a longer sequence of
      changes where only the final state needs visual confirmation.
    - Pass view_name (e.g. "Front", "Top", "Right") to orient the screenshot
-     toward the part of the model you changed; the default is "Isometric".
+     toward the part of the model you changed; the default is "Isometric" (top-front-right).
    - When you skipped screenshots during intermediate steps, use get_view()
      afterwards to visually inspect the result from the most informative angle.
 
