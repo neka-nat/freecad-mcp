@@ -113,6 +113,8 @@ If you want to save token, you can set `only_text_feedback` to `true` and use on
 }
 ```
 
+Screenshots can also be controlled per tool call instead of globally: every tool that returns a screenshot accepts an optional `include_screenshot` parameter (pass `false` to get text-only feedback, e.g. for analytical scripts or intermediate steps) and an optional `view_name` parameter to orient the screenshot ("Isometric" by default, or "Front", "Top", "Right", etc.). The `--only-text-feedback` flag always wins: when it is set, no screenshots are returned regardless of `include_screenshot`.
+
 
 For developer.
 First, you need clone this repository.
@@ -187,6 +189,8 @@ The `--host` value is validated on startup — it must be a valid IPv4/IPv6 addr
 * `get_object`: Get an object in a document.
 * `get_parts_list`: Get the list of parts in the [parts library](https://github.com/FreeCAD/FreeCAD-library).
 * `run_fem_analysis`: Run the CalculiX solver on an existing `Fem::FemAnalysis` and return summary results (max von Mises stress, max displacement, node count, working directory). Auto-creates a `SolverCcxTools` if the analysis has none. See [`examples/cantilever_fem.py`](examples/cantilever_fem.py) for an end-to-end usage example.
+
+Tools that return a screenshot (`create_object`, `edit_object`, `delete_object`, `execute_code`, `insert_part_from_library`, `get_objects`, `get_object`, `run_fem_analysis`) accept optional `include_screenshot` (default `true`) and `view_name` (default `"Isometric"`) parameters to suppress or reorient the returned image per call.
 
 ## Contributors
 
