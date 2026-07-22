@@ -61,6 +61,12 @@ class ToggleRemoteConnectionsCommand:
             FreeCAD.Console.PrintMessage(
                 f"Remote connections enabled. Allowed IPs: {allowed_ips}\n"
             )
+            if not settings.get("auth_token", ""):
+                FreeCAD.Console.PrintWarning(
+                    "Remote connections have no auth token configured — anyone on "
+                    "an allowed IP can execute code in FreeCAD. Set one via "
+                    "'Set Auth Token' in the FreeCAD MCP menu.\n"
+                )
         else:
             FreeCAD.Console.PrintMessage("Remote connections disabled.\n")
 
@@ -123,6 +129,44 @@ class ConfigureAllowedIPsCommand:
         return True
 
 
+class SetAuthTokenCommand:
+    def GetResources(self):
+        return {
+            "MenuText": "Set Auth Token",
+            "ToolTip": "Set the shared-secret token clients must present to connect. Blank disables authentication.",
+        }
+
+    def Activated(self):
+        from . import rpc_server
+        settings = load_settings()
+        current = settings.get("auth_token", "")
+        text, ok = QtWidgets.QInputDialog.getText(
+            None,
+            "Auth Token",
+            "Enter the auth token clients must present (leave blank to disable\n"
+            "authentication). The MCP server passes it via --auth-token or the\n"
+            "FREECAD_MCP_TOKEN environment variable.",
+            QtWidgets.QLineEdit.Normal,
+            current,
+        )
+        if not ok:
+            FreeCAD.Console.PrintMessage("Auth token not changed.\n")
+            return
+        settings["auth_token"] = text.strip()
+        save_settings(settings)
+        if settings["auth_token"]:
+            FreeCAD.Console.PrintMessage("Auth token set — clients must authenticate.\n")
+        else:
+            FreeCAD.Console.PrintMessage("Auth token cleared — authentication disabled.\n")
+        if rpc_server.rpc_server_instance:
+            FreeCAD.Console.PrintMessage(
+                "Restart the RPC server for changes to take effect.\n"
+            )
+
+    def IsActive(self):
+        return True
+
+
 class ToggleAutoStartCommand:
     def GetResources(self):
         return {
@@ -155,6 +199,7 @@ def register_commands() -> None:
     FreeCADGui.addCommand("Toggle_Auto_Start", ToggleAutoStartCommand())
     FreeCADGui.addCommand("Toggle_Remote_Connections", ToggleRemoteConnectionsCommand())
     FreeCADGui.addCommand("Configure_Allowed_IPs", ConfigureAllowedIPsCommand())
+    FreeCADGui.addCommand("Set_Auth_Token", SetAuthTokenCommand())
 
 
 # Map command objectName -> settings key. Matching on objectName rather than
