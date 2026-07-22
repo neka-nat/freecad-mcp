@@ -9,16 +9,14 @@ import tempfile
 import threading
 from typing import Any
 
-from PySide import QtCore
-
 from rpc_server.commands import register_commands, schedule_toggle_sync
 from rpc_server.fem_executor import run_fem_analysis as _run_fem_analysis
 from rpc_server.gui_dispatch import (
     cleanup_waker,
     dispatch_to_gui,
     init_waker,
-    process_gui_tasks,
     request_shutdown,
+    start_heartbeat,
 )
 from rpc_server.ip_filter import FilteredXMLRPCServer, validate_allowed_ips
 from rpc_server.object_factory import create_object_gui
@@ -365,7 +363,7 @@ def start_rpc_server(port=9875):
     rpc_server_thread.start()
 
     init_waker()
-    QtCore.QTimer.singleShot(500, process_gui_tasks)
+    start_heartbeat()
 
     msg = f"RPC Server started at {host}:{port}."
     if remote_enabled:
