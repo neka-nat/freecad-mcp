@@ -106,7 +106,7 @@ def process_gui_tasks() -> None:
 
     Rescheduling is owned by ``_heartbeat_tick``; this function only drains.
     """
-    global _processing, _processing_since, _shutdown_requested
+    global _processing, _processing_since
     if _processing:
         return  # re-entrant call from processEvents inside a task; skip
 
@@ -136,10 +136,13 @@ def process_gui_tasks() -> None:
             while not _rpc_request_queue.empty():
                 task = _rpc_request_queue.get()
                 if task is _SHUTDOWN:
-                    # Safety net in case the sentinel is consumed by a wake-path
-                    # drain before request_shutdown's flag write is observed.
-                    _shutdown_requested = True
-                    return
+                    if _shutdown_requested:
+                        return  # server stopping; abandon the rest of this drain
+                    # Stale sentinel: the server was stopped and started again
+                    # before any drain consumed it (start_heartbeat cleared the
+                    # flag). Re-setting the flag here would kill the new
+                    # heartbeat chain — just skip it.
+                    continue
                 try:
                     task()
                 except Exception as e:
