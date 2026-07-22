@@ -16,6 +16,14 @@ dependencies = [
 [project.scripts]
 freecad-mcp = "freecad_mcp.server:main"
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.hatch.build.targets.sdist]
 exclude = ["assets", "results"]
 
