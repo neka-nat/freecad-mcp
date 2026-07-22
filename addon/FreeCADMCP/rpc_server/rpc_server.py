@@ -31,6 +31,17 @@ from rpc_server.view_manager import save_active_screenshot
 rpc_server_thread = None
 rpc_server_instance = None
 
+# Persistent namespace for execute_code / execute_code_async. A dedicated dict
+# (instead of this module's globals()) keeps user code from shadowing server
+# internals like dispatch_to_gui while preserving the documented pattern of
+# sharing module-level variables between successive calls.
+_EXEC_NAMESPACE: dict[str, Any] = {
+    "FreeCAD": FreeCAD,
+    "App": FreeCAD,
+    "FreeCADGui": FreeCADGui,
+    "Gui": FreeCADGui,
+}
+
 
 def _ok(res) -> bool:
     """True when a GUI-thread handler returned success."""
@@ -131,7 +142,7 @@ class FreeCADRPC:
             # GUI thread and other concurrent work. Background code should report
             # via FreeCAD.Console (which is thread-safe) instead.
             try:
-                exec(code, globals())
+                exec(code, _EXEC_NAMESPACE)
                 FreeCAD.Console.PrintMessage("Async code execution completed.\n")
             except Exception as e:
                 import traceback as _tb
@@ -157,7 +168,7 @@ class FreeCADRPC:
 
         def task():
             with contextlib.redirect_stdout(output_buffer):
-                exec(code, globals())
+                exec(code, _EXEC_NAMESPACE)
             return True
 
         res = dispatch_to_gui(task, timeout=self.EXECUTE_CODE_TIMEOUT)
