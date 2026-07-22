@@ -117,8 +117,10 @@ def execute_code_async_operation(
         if res["success"]:
             return text_response(
                 "Code execution started in background.\n"
-                "Use get_object to poll a document object for completion "
-                "(e.g. check SessionState.Label). "
+                "The background code must not touch the FreeCAD document or GUI; "
+                "it should store results in a module-level Python variable. "
+                "After the expected computation time, read the variable back "
+                "(and apply results to the document) via execute_code. "
                 "FreeCAD's Report View will show output when done."
             )
         return text_response(f"Failed to start async execution: {res.get('error', 'unknown')}")

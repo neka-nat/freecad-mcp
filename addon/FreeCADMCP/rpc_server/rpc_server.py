@@ -116,8 +116,10 @@ class FreeCADRPC:
         """Start code execution in a background thread and return immediately.
 
         Use for long-running OCCT operations (fuse/cut/loft) that would otherwise
-        exceed the MCP timeout. The caller should poll a document object for
-        completion status (e.g. check SessionState.Label via get_object).
+        exceed the MCP timeout. Background code must not touch the FreeCAD
+        document or GUI; it should store results in a module-level Python
+        variable, which the caller later reads back (and applies to the
+        document) via execute_code on the GUI thread.
         """
         def _set_status(msg):
             dispatch_to_gui(lambda: FreeCADGui.getMainWindow().statusBar().showMessage(msg))
