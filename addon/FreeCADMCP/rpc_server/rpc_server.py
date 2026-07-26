@@ -53,9 +53,13 @@ class FreeCADRPC:
         return True
 
     def create_document(self, name="New_Document"):
+        # The GUI handler reports the document's ACTUAL name — FreeCAD
+        # sanitises requested names ("My Doc" -> "My_Doc") and de-duplicates
+        # ("Doc" -> "Doc001"); reporting the requested name breaks every
+        # follow-up call that uses it.
         res = dispatch_to_gui(lambda: self._create_document_gui(name))
-        if _ok(res):
-            return {"success": True, "document_name": name}
+        if isinstance(res, dict) and res.get("success"):
+            return res
         return _err(res)
 
     def create_object(self, doc_name, obj_data: dict[str, Any]):
@@ -65,9 +69,11 @@ class FreeCADRPC:
             analysis=obj_data.get("Analysis", None),
             properties=obj_data.get("Properties", {}),
         )
+        # create_object_gui reports the created object's actual Name (see
+        # its docstring) — same sanitise/de-duplicate concern as documents.
         res = dispatch_to_gui(lambda: self._create_object_gui(doc_name, obj))
-        if _ok(res):
-            return {"success": True, "object_name": obj.name}
+        if isinstance(res, dict) and res.get("success"):
+            return res
         return _err(res)
 
     def edit_object(self, doc_name: str, obj_name: str, properties: dict[str, Any]) -> dict[str, Any]:
@@ -250,8 +256,8 @@ class FreeCADRPC:
     def _create_document_gui(self, name):
         doc = FreeCAD.newDocument(name)
         doc.recompute()
-        FreeCAD.Console.PrintMessage(f"Document '{name}' created via RPC.\n")
-        return True
+        FreeCAD.Console.PrintMessage(f"Document '{doc.Name}' created via RPC.\n")
+        return {"success": True, "document_name": doc.Name}
 
     def _create_object_gui(self, doc_name, obj: Object):
         return create_object_gui(doc_name, obj)
