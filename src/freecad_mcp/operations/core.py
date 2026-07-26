@@ -137,7 +137,14 @@ def get_view_operation(
     screenshot = freecad.get_active_screenshot(view_name, width, height, focus_object)
     if screenshot is not None:
         return [ImageContent(type="image", data=screenshot, mimeType="image/png")]
-    return text_response("Cannot get screenshot in the current view type (such as TechDraw or Spreadsheet)")
+    # The RPC returns None for several distinct failures; don't misdiagnose
+    # them all as a view-type problem.
+    return text_response(
+        "Could not capture a screenshot. Possible causes: no document is open, "
+        "the active view does not support screenshots (e.g. TechDraw or "
+        "Spreadsheet), or the capture itself failed. FreeCAD's Report View "
+        "logs the specific reason."
+    )
 
 
 def insert_part_from_library_operation(
