@@ -1,5 +1,4 @@
 import FreeCAD as App
-import json
 
 
 def _get_optional_app_type(name: str) -> type | tuple[type, ...] | None:
