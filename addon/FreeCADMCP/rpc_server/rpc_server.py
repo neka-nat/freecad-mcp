@@ -222,9 +222,16 @@ class FreeCADRPC:
         os.close(fd)
 
         def task():
+            # Each failure logs its own reason: the RPC's None return is
+            # ambiguous by contract, and clients were blaming every failure
+            # on "wrong view type".
             try:
                 active_view = FreeCADGui.ActiveDocument.ActiveView
             except Exception:
+                FreeCAD.Console.PrintWarning(
+                    "MCP RPC: screenshot requested but no document/view is "
+                    "active (open or create a document first)\n"
+                )
                 return False
             if active_view is None or not hasattr(active_view, "saveImage"):
                 view_type = type(active_view).__name__ if active_view is not None else "None"
