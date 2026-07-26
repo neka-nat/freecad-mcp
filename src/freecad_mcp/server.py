@@ -300,11 +300,15 @@ def execute_code_async(ctx: Context, code: str) -> list[TextContent]:
 
     Typical usage pattern:
     1. Fetch shapes into local variables first (via execute_code on the GUI thread).
-    2. Store intermediate results in a module-level Python variable (not in the
-       FreeCAD document) so execute_code can read them later.
+    2. Have the background code keep an explicit job state in a module-level
+       variable (not in the FreeCAD document), e.g.
+       ``_job = {"done": False, "result": None, "error": None}``, and set
+       ``_job["done"] = True`` with the result (or the error) when it finishes.
     3. Run the heavy computation via execute_code_async.
-    4. After the expected computation time has elapsed, apply results to the
-       document via execute_code (which runs on the GUI thread).
+    4. Poll ``_job["done"]`` via execute_code and, only once it is True, read
+       ``_job["result"]`` and apply it to the document via execute_code (which
+       runs on the GUI thread). Do not wait a fixed time and then read — the
+       result may be missing or stale if the computation has not finished.
 
     Args:
         code: Background-safe Python code to execute.

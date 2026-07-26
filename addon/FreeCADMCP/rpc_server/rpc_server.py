@@ -117,9 +117,12 @@ class FreeCADRPC:
 
         Use for long-running OCCT operations (fuse/cut/loft) that would otherwise
         exceed the MCP timeout. Background code must not touch the FreeCAD
-        document or GUI; it should store results in a module-level Python
-        variable, which the caller later reads back (and applies to the
-        document) via execute_code on the GUI thread.
+        document or GUI; it should keep an explicit job state in a module-level
+        variable (e.g. ``{"done": False, "result": None, "error": None}``) and
+        set ``done`` True with the result or error when it finishes. The caller
+        polls ``done`` via execute_code and only reads/applies the result once
+        it is True — reading after a fixed wait can pick up a missing or stale
+        result.
         """
         def _set_status(msg):
             dispatch_to_gui(lambda: FreeCADGui.getMainWindow().statusBar().showMessage(msg))

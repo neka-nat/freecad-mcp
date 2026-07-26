@@ -117,11 +117,15 @@ def execute_code_async_operation(
         if res["success"]:
             return text_response(
                 "Code execution started in background.\n"
-                "The background code must not touch the FreeCAD document or GUI; "
-                "it should store results in a module-level Python variable. "
-                "After the expected computation time, read the variable back "
-                "(and apply results to the document) via execute_code. "
-                "FreeCAD's Report View will show output when done."
+                "The background code must not touch the FreeCAD document or GUI. "
+                "Give it an explicit completion flag in a module-level variable — "
+                "initialise e.g. `_job = {'done': False, 'result': None, "
+                "'error': None}`, and set `_job['done'] = True` (with the result "
+                "or the error) when it finishes. Poll `_job['done']` via "
+                "execute_code and only read `_job['result']` / apply it to the "
+                "document once done is True — do NOT wait a fixed time and read, "
+                "which can pick up a missing or stale result. FreeCAD's Report "
+                "View also shows output when done."
             )
         return text_response(f"Failed to start async execution: {res.get('error', 'unknown')}")
     except Exception as e:
