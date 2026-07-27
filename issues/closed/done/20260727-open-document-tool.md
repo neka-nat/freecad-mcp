@@ -107,11 +107,11 @@ MCP tool `open_document` を追加し、絶対パスの既存 `.FCStd` を開け
 
 ## 受け入れ条件
 
-- [ ] 絶対パスの既存 `.FCStd` を `open_document` で開くと、そのドキュメントが `list_documents` に現れ、アクティブになる
-- [ ] 同じファイルが既に開いている場合、再オープンせず成功を返し、そのドキュメントがアクティブになる
-- [ ] 相対パス、`.FCStd` 以外、存在しないパスではエラーを返し、ドキュメント状態を壊さない
-- [ ] README の Tools 一覧に `open_document` が記載される
-- [ ] RPC → client → operation → MCP tool の配線が `reload_document` と同型である（静的読解）
+- [x] 絶対パスの既存 `.FCStd` を `open_document` で開くと、そのドキュメントが `list_documents` に現れ、アクティブになる
+- [x] 同じファイルが既に開いている場合、再オープンせず成功を返し、そのドキュメントがアクティブになる
+- [x] 相対パス、`.FCStd` 以外、存在しないパスではエラーを返し、ドキュメント状態を壊さない
+- [x] README の Tools 一覧に `open_document` が記載される
+- [x] RPC → client → operation → MCP tool の配線が `reload_document` と同型である（静的読解）
 
 ## Evidence
 
@@ -126,4 +126,7 @@ MCP tool `open_document` を追加し、絶対パスの既存 `.FCStd` を開け
 
 ## 完了記録
 
-- 未完了
+- 実装 commit: `dc0d5e8` — feat: 既存FCStdを開く open_document tool を追加する
+- 検証: 静的読解（配線・検証順序・既開枝・README grep）と `uv run` による import 確認。FreeCAD GUI 上の手動 RPC 確認は未実施（Issue 計画どおり主証拠は静的）
+- 品質gate: Standards/Spec レビューで Critical/High なし。Medium（実機未確認）は上記どおり受容
+- 状態: `issues/closed/done/` へ移動
