@@ -98,6 +98,15 @@ class FreeCADRPC:
             return {"success": True, "document_name": doc_name}
         return _err(res)
 
+    def open_document(self, file_path: str) -> dict[str, Any]:
+        """Open an existing .FCStd from an absolute path, or activate it
+        if the same file is already loaded.
+        """
+        res = dispatch_to_gui(lambda: self._open_document_gui(file_path))
+        if isinstance(res, dict) and res.get("success"):
+            return res
+        return _err(res)
+
     def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600) -> dict[str, Any]:
         """Run the CalculiX solver on an existing Fem::FemAnalysis and return summary results."""
         try:
@@ -316,6 +325,38 @@ class FreeCADRPC:
             f"Document '{doc_name}' reloaded from '{file_path}' via RPC.\n"
         )
         return True
+
+    def _open_document_gui(self, file_path: str):
+        if not isinstance(file_path, str) or not file_path:
+            return "file_path must be a non-empty string."
+        if not os.path.isabs(file_path):
+            return f"Path must be absolute: {file_path!r}."
+        if not file_path.lower().endswith(".fcstd"):
+            return f"Only .FCStd files are supported: {file_path!r}."
+        if not os.path.isfile(file_path):
+            return f"File not found: {file_path!r}."
+
+        target = os.path.realpath(file_path)
+        for name, doc in FreeCAD.listDocuments().items():
+            existing = getattr(doc, "FileName", None) or ""
+            if existing and os.path.realpath(existing) == target:
+                FreeCAD.setActiveDocument(name)
+                FreeCAD.Console.PrintMessage(
+                    f"Document '{name}' already open from '{file_path}'; activated via RPC.\n"
+                )
+                return {"success": True, "document_name": name}
+
+        try:
+            doc = FreeCAD.openDocument(file_path)
+        except Exception as e:
+            return str(e)
+        if doc is None:
+            return f"Failed to open document: {file_path!r}."
+        FreeCAD.setActiveDocument(doc.Name)
+        FreeCAD.Console.PrintMessage(
+            f"Document '{doc.Name}' opened from '{file_path}' via RPC.\n"
+        )
+        return {"success": True, "document_name": doc.Name}
 
     def _insert_part_from_library(self, relative_path):
         try:

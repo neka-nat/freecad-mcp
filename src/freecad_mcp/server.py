@@ -19,6 +19,7 @@ from .operations import (
     get_view_operation,
     insert_part_from_library_operation,
     list_documents_operation,
+    open_document_operation,
     reload_document_operation,
     run_fem_analysis_operation,
 )
@@ -445,6 +446,32 @@ def reload_document(ctx: Context, doc_name: str) -> list[TextContent]:
         ```
     """
     return reload_document_operation(get_freecad_connection(), doc_name)
+
+
+@mcp.tool()
+def open_document(ctx: Context, file_path: str) -> list[TextContent]:
+    """Open an existing FreeCAD document from an absolute .FCStd path.
+
+    If the same file is already open, the existing document is reused
+    and activated (it is not closed and re-opened). Use
+    ``reload_document`` when you need to pick up on-disk changes.
+
+    Args:
+        file_path: Absolute path to a ``.FCStd`` file. Relative paths
+            and non-``.FCStd`` files are rejected.
+
+    Returns:
+        A message confirming the document was opened (or already open
+        and activated), or describing the failure.
+
+    Examples:
+        ```json
+        {
+            "file_path": "/Users/me/models/chassis.FCStd"
+        }
+        ```
+    """
+    return open_document_operation(get_freecad_connection(), file_path)
 
 
 @mcp.tool()

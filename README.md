@@ -177,6 +177,7 @@ The `--host` value is validated on startup — it must be a valid IPv4/IPv6 addr
 ## Tools
 
 * `create_document`: Create a new document in FreeCAD.
+* `open_document`: Open an existing `.FCStd` document from an absolute path (activates an already-open copy instead of re-opening).
 * `create_object`: Create a new object in FreeCAD.
 * `edit_object`: Edit an object in FreeCAD.
 * `delete_object`: Delete an object in FreeCAD.

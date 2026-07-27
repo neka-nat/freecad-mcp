@@ -256,3 +256,22 @@ def reload_document_operation(
         logger.error(f"Failed to reload document: {str(e)}")
         return text_response(f"Failed to reload document: {str(e)}")
 
+
+def open_document_operation(
+    freecad: FreeCADConnection,
+    file_path: str,
+) -> ToolResponse:
+    """Open an existing .FCStd from an absolute path, or activate it if
+    already loaded.
+    """
+    try:
+        res = freecad.open_document(file_path)
+        if res.get("success"):
+            return text_response(
+                f"Document '{res['document_name']}' is open from '{file_path}'."
+            )
+        return text_response(f"Failed to open document: {res.get('error')}")
+    except Exception as e:
+        logger.error(f"Failed to open document: {str(e)}")
+        return text_response(f"Failed to open document: {str(e)}")
+
