@@ -46,6 +46,7 @@ git clone https://github.com/neka-nat/freecad-mcp.git
 cd freecad-mcp
 
 # For Linux (Ubuntu/Debian)
+mkdir -p ~/.FreeCAD/Mod/
 cp -r addon/FreeCADMCP ~/.FreeCAD/Mod/
 
 # For Linux (Arch/CachyOS, FreeCAD 1.1 from extra/freecad)
@@ -53,6 +54,7 @@ mkdir -p ~/.local/share/FreeCAD/v1-1/Mod/
 cp -r addon/FreeCADMCP ~/.local/share/FreeCAD/v1-1/Mod/
 
 # For macOS (FreeCAD 1.1)
+mkdir -p ~/Library/Application\ Support/FreeCAD/v1-1/Mod/
 cp -r addon/FreeCADMCP ~/Library/Application\ Support/FreeCAD/v1-1/Mod/
 ```
 
