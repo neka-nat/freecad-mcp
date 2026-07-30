@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from typing import Any
 
 from mcp.types import ImageContent
@@ -88,15 +89,16 @@ def delete_object_operation(
         return text_response(f"Failed to delete object: {str(e)}")
 
 
-def execute_code_operation(
+def _execute_code(
     freecad: FreeCADConnection,
     only_text_feedback: bool,
     code: str,
+    source: str = "Code",
 ) -> ToolResponse:
     try:
         res = freecad.execute_code(code)
         if res["success"]:
-            response = text_response(f"Code executed successfully: {res['message']}")
+            response = text_response(f"{source} executed successfully: {res['message']}")
             # Only attempt screenshot when code completed and screenshots are wanted.
             # Skipping on failure avoids a second hanging call while the worker thread
             # may still be running.
@@ -106,6 +108,49 @@ def execute_code_operation(
     except Exception as e:
         logger.error(f"Failed to execute code: {str(e)}")
         return text_response(f"Failed to execute code: {str(e)}")
+
+
+def execute_code_operation(
+    freecad: FreeCADConnection,
+    only_text_feedback: bool,
+    code: str,
+) -> ToolResponse:
+    return _execute_code(freecad, only_text_feedback, code)
+
+
+def execute_code_from_file_operation(
+    freecad: FreeCADConnection,
+    only_text_feedback: bool,
+    file_path: str,
+) -> ToolResponse:
+    try:
+        path = Path(file_path).expanduser()
+    except RuntimeError as e:
+        return text_response(
+            f"Failed to execute code from file: cannot expand '~' in '{file_path}': {e}"
+        )
+    if not path.is_absolute():
+        return text_response(
+            f"Failed to execute code from file: path must be absolute, got '{file_path}'"
+        )
+    try:
+        # utf-8-sig transparently strips a UTF-8 BOM, which would otherwise
+        # reach exec() as U+FEFF and raise SyntaxError.
+        code = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        return text_response(
+            f"Failed to execute code from file: file not found: '{path}'. "
+            "The file must exist on the machine running the MCP server."
+        )
+    except UnicodeDecodeError as e:
+        return text_response(
+            f"Failed to execute code from file: '{path}' is not valid UTF-8 text: {e}"
+        )
+    except (OSError, ValueError) as e:
+        return text_response(f"Failed to execute code from file: cannot read '{path}': {e}")
+    if not code.strip():
+        return text_response(f"Failed to execute code from file: '{path}' is empty")
+    return _execute_code(freecad, only_text_feedback, code, source=f"Code from '{path}'")
 
 
 def execute_code_async_operation(

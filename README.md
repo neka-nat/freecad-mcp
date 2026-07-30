@@ -183,6 +183,7 @@ The `--host` value is validated on startup — it must be a valid IPv4/IPv6 addr
 * `edit_object`: Edit an object in FreeCAD.
 * `delete_object`: Delete an object in FreeCAD.
 * `execute_code`: Execute arbitrary Python code in FreeCAD.
+* `execute_code_from_file`: Execute Python code from a file on the machine running the MCP server. Useful for long scripts that are iterated on: the agent writes the script to a file once, then edits it selectively and re-runs it without resending the full source each time.
 * `insert_part_from_library`: Insert a part from the [parts library](https://github.com/FreeCAD/FreeCAD-library).
 * `get_view`: Get a screenshot of the active view.
 * `get_objects`: Get all objects in a document.

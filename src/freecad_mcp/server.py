@@ -19,6 +19,7 @@ from .operations import (
     delete_object_operation,
     edit_object_operation,
     execute_code_async_operation,
+    execute_code_from_file_operation,
     execute_code_operation,
     get_object_operation,
     get_objects_operation,
@@ -326,6 +327,11 @@ def execute_code_async(ctx: Context, code: str) -> list[TextContent]:
 def execute_code(ctx: Context, code: str) -> list[TextContent | ImageContent]:
     """Execute arbitrary Python code in FreeCAD.
 
+    Best suited for short one-off snippets. For long scripts you intend to
+    iterate on, write them to a file and use execute_code_from_file instead,
+    so you can edit the file selectively and re-run it without resending the
+    full source each time.
+
     Args:
         code: The Python code to execute.
 
@@ -333,6 +339,39 @@ def execute_code(ctx: Context, code: str) -> list[TextContent | ImageContent]:
         A message indicating the success or failure of the code execution, the output of the code execution, and a screenshot of the object.
     """
     return execute_code_operation(get_freecad_connection(), state.only_text_feedback, code)
+
+
+@mcp.tool()
+def execute_code_from_file(ctx: Context, file_path: str) -> list[TextContent | ImageContent]:
+    """Execute Python code from a file in FreeCAD.
+
+    Prefer this over execute_code for long scripts that will be modified and
+    re-run (e.g. a script that parametrically generates a model): write the
+    script to a file once, then selectively edit the file and re-run this tool
+    instead of resending the entire source as a string each time. You can also
+    format, lint, or check the file before executing it.
+
+    The file is read by the MCP server, so the path must exist on the machine
+    where the MCP server runs (not necessarily the machine running FreeCAD when
+    connecting to a remote host). The code itself executes inside FreeCAD on
+    the GUI thread, exactly like execute_code.
+
+    The script is exec()'d inside FreeCAD's embedded interpreter, not run as a
+    standalone program: __name__ is not "__main__" (code behind an
+    `if __name__ == "__main__":` guard is silently skipped), and __file__ does
+    not point at this file. Put the code to run at the top level of the file
+    and use absolute paths inside the script.
+
+    Args:
+        file_path: Absolute path to a UTF-8 encoded Python file to execute
+            ("~" is expanded).
+
+    Returns:
+        A message indicating the success or failure of the code execution, the output of the code execution, and a screenshot of the object.
+    """
+    return execute_code_from_file_operation(
+        get_freecad_connection(), state.only_text_feedback, file_path
+    )
 
 
 @mcp.tool()

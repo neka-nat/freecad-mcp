@@ -20,6 +20,7 @@ When creating content in FreeCAD, always follow these steps:
 5. After editing an object, always verify that the set properties have been correctly applied by using get_object().
 
 6. If detailed customization or specialized operations are necessary, use execute_code() to run custom Python scripts.
+   For long scripts that will be modified and re-run, write the script to a file and use execute_code_from_file() so the file can be edited selectively instead of resending the entire script.
 
 Only revert to basic creation methods in the following cases:
 - When the required asset is not available in the parts library.
