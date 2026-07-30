@@ -13,6 +13,7 @@ from .core import (
     list_documents_operation,
     reload_document_operation,
     run_fem_analysis_operation,
+    run_macro_operation,
 )
 
 __all__ = [
@@ -30,4 +31,5 @@ __all__ = [
     "list_documents_operation",
     "reload_document_operation",
     "run_fem_analysis_operation",
+    "run_macro_operation",
 ]

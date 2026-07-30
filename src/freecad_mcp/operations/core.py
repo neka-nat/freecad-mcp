@@ -127,6 +127,25 @@ def execute_code_async_operation(
         return text_response(f"Failed to start async code execution: {str(e)}")
 
 
+def run_macro_operation(
+    freecad: FreeCADConnection,
+    only_text_feedback: bool,
+    macro_path: str,
+    timeout: int = 90,
+) -> ToolResponse:
+    try:
+        res = freecad.run_macro(macro_path, timeout)
+        if res.get("success"):
+            response = text_response(f"Macro executed successfully.\nOutput: {res.get('output', '')}")
+        else:
+            return text_response(f"Failed to run macro: {res.get('error')}")
+        screenshot = None if only_text_feedback else freecad.get_active_screenshot()
+        return add_screenshot_if_available(response, screenshot, only_text_feedback)
+    except Exception as e:
+        logger.error(f"Failed to run macro: {str(e)}")
+        return text_response(f"Failed to run macro: {str(e)}")
+
+
 def get_view_operation(
     freecad: FreeCADConnection,
     view_name: str,

@@ -28,6 +28,7 @@ from .operations import (
     list_documents_operation,
     reload_document_operation,
     run_fem_analysis_operation,
+    run_macro_operation,
 )
 from .prompt_text import ASSET_CREATION_STRATEGY
 from .server_state import ServerState
@@ -333,6 +334,31 @@ def execute_code(ctx: Context, code: str) -> list[TextContent | ImageContent]:
         A message indicating the success or failure of the code execution, the output of the code execution, and a screenshot of the object.
     """
     return execute_code_operation(get_freecad_connection(), state.only_text_feedback, code)
+
+
+@mcp.tool()
+def run_macro(
+    ctx: Context, macro_path: str, timeout: int = 90
+) -> list[TextContent | ImageContent]:
+    """Execute a FreeCAD macro (.FCMacro or .py) file on the GUI thread.
+
+    Unlike execute_code, this sets __file__ to the macro's own path and
+    temporarily adds its directory to sys.path before running it, so macros
+    that rely on __file__ for relative resource loading or that import
+    sibling helper modules work the same way they would from FreeCAD's
+    Macro menu.
+
+    Args:
+        macro_path: The local filesystem path of the macro file to run.
+        timeout: Seconds to wait for the macro to finish (default 90).
+
+    Returns:
+        A message with the macro's captured stdout output (or the error),
+        and a screenshot of the object.
+    """
+    return run_macro_operation(
+        get_freecad_connection(), state.only_text_feedback, macro_path, timeout
+    )
 
 
 @mcp.tool()

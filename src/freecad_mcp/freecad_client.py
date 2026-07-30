@@ -71,6 +71,13 @@ class FreeCADConnection:
     def execute_code_async(self, code: str) -> dict[str, Any]:
         return self.server.execute_code_async(code)
 
+    def run_macro(self, macro_path: str, timeout: int = 90) -> dict[str, Any]:
+        # Macros can run arbitrarily long; use a dedicated proxy whose socket
+        # timeout exceeds the requested run timeout, same rationale as
+        # run_fem_analysis's dedicated proxy below.
+        proxy = self._make_proxy(max(self._timeout, timeout + 30))
+        return proxy.run_macro(macro_path, timeout)
+
     def get_active_screenshot(
         self,
         view_name: str = "Isometric",

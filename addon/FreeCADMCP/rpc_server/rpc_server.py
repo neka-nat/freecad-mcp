@@ -21,6 +21,7 @@ from rpc_server.gui_dispatch import (
     request_shutdown,
 )
 from rpc_server.ip_filter import FilteredXMLRPCServer, validate_allowed_ips
+from rpc_server.macro_runner import run_macro as _run_macro
 from rpc_server.object_factory import create_object_gui
 from rpc_server.parts_library import get_parts_list, insert_part_from_library
 from rpc_server.property_mapper import Object, set_object_property
@@ -181,6 +182,31 @@ class FreeCADRPC:
             f"--- code ---\n{code_preview}\n--- end ---\n"
         )
         return _err(res)
+
+    def run_macro(self, macro_path: str, timeout: int = 90) -> dict[str, Any]:
+        """Execute a FreeCAD macro (.FCMacro/.py) file on the GUI thread.
+
+        Unlike execute_code, this sets __file__ to the macro's own path and
+        temporarily adds its directory to sys.path, so macros that rely on
+        __file__ for relative resource loading or sibling-module imports
+        work the same way they would from FreeCAD's Macro menu.
+        """
+        try:
+            timeout_s = int(timeout)
+        except (TypeError, ValueError):
+            return {"success": False, "error": f"invalid timeout: {timeout!r}"}
+
+        def task():
+            return _run_macro(macro_path, globals())
+
+        res = dispatch_to_gui(task, timeout=timeout_s)
+        if isinstance(res, dict):
+            if res.get("success"):
+                FreeCAD.Console.PrintMessage(f"Macro '{macro_path}' executed via RPC.\n")
+            else:
+                FreeCAD.Console.PrintError(f"Error executing macro '{macro_path}': {res.get('error')}\n")
+            return res
+        return {"success": False, "error": str(res)}
 
     def get_objects(self, doc_name):
         # FreeCAD.getDocument raises (not returns None) for an unknown name.
