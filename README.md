@@ -189,6 +189,10 @@ The `--host` value is validated on startup — it must be a valid IPv4/IPv6 addr
 * `get_object`: Get an object in a document.
 * `get_parts_list`: Get the list of parts in the [parts library](https://github.com/FreeCAD/FreeCAD-library).
 * `run_fem_analysis`: Run the CalculiX solver on an existing `Fem::FemAnalysis` and return summary results (max von Mises stress, max displacement, node count, working directory). Auto-creates a `SolverCcxTools` if the analysis has none. See [`examples/cantilever_fem.py`](examples/cantilever_fem.py) for an end-to-end usage example.
+* `list_solids_with_bbox`: List every solid in a document (or a single object), with bounding box dimensions, center, and volume.
+* `export_step`: Export objects from a document to a STEP file.
+* `import_step`: Import a STEP file into a document (creating it if needed), preserving assembly hierarchy by default.
+* `save_view_png`: Save a screenshot of the active view directly to a local file path (unlike `get_view`, which returns the image inline).
 
 ## Contributors
 

@@ -20,14 +20,18 @@ from .operations import (
     edit_object_operation,
     execute_code_async_operation,
     execute_code_operation,
+    export_step_operation,
     get_object_operation,
     get_objects_operation,
     get_parts_list_operation,
     get_view_operation,
+    import_step_operation,
     insert_part_from_library_operation,
     list_documents_operation,
+    list_solids_with_bbox_operation,
     reload_document_operation,
     run_fem_analysis_operation,
+    save_view_png_operation,
 )
 from .prompt_text import ASSET_CREATION_STRATEGY
 from .server_state import ServerState
@@ -419,6 +423,25 @@ def get_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextContent |
 
 
 @mcp.tool()
+def list_solids_with_bbox(
+    ctx: Context, doc_name: str, obj_name: str | None = None
+) -> list[TextContent]:
+    """List every solid in a document (or a single object), with bounding box
+    dimensions, center, and volume.
+
+    Args:
+        doc_name: The name of the document to inspect.
+        obj_name: Restrict the listing to a single object's solids. If not
+            specified, lists solids across every object in the document.
+
+    Returns:
+        A list of solids, each with object_name, solid_index, volume_mm3,
+        and bounding_box (x_length, y_length, z_length, center).
+    """
+    return list_solids_with_bbox_operation(get_freecad_connection(), doc_name, obj_name)
+
+
+@mcp.tool()
 def get_parts_list(ctx: Context) -> list[TextContent]:
     """Get the list of parts in the parts library addon.
     """
@@ -503,6 +526,95 @@ def run_fem_analysis(
         doc_name,
         analysis_name,
         timeout,
+    )
+
+
+@mcp.tool()
+def export_step(
+    ctx: Context,
+    doc_name: str,
+    save_path: str,
+    obj_names: list[str] | None = None,
+) -> list[TextContent]:
+    """Export objects from a document to a STEP file.
+
+    Args:
+        doc_name: The name of the document to export from.
+        save_path: The local filesystem path to write the STEP file to
+            (should end in .step or .stp).
+        obj_names: Names of the objects to export. If not specified, exports
+            every object in the document that has a non-null Shape.
+
+    Returns:
+        A message indicating success (with object count and path) or failure.
+    """
+    return export_step_operation(get_freecad_connection(), doc_name, save_path, obj_names)
+
+
+@mcp.tool()
+def import_step(
+    ctx: Context,
+    doc_name: str,
+    file_path: str,
+    preserve_hierarchy: bool = True,
+    timeout: int = 300,
+) -> list[TextContent | ImageContent]:
+    """Import a STEP file into a document, creating the document if it doesn't exist.
+
+    Uses FreeCAD's non-GUI Import module, which is more reliable than
+    ImportGui.insert for programmatic use (avoids "Unknown document" errors
+    when the target document isn't already the GUI's active document).
+
+    Args:
+        doc_name: The document to import into (created if it doesn't exist).
+        file_path: The local filesystem path of the STEP file to read.
+        preserve_hierarchy: If True (default), preserves the STEP file's
+            assembly/part structure as separate objects. If False, merges
+            everything into a single Part::Feature object.
+        timeout: Seconds to wait for the import (default 300). Increase for
+            very large STEP files.
+
+    Returns:
+        A message listing the newly created object names, and a screenshot.
+    """
+    return import_step_operation(
+        get_freecad_connection(),
+        state.only_text_feedback,
+        doc_name,
+        file_path,
+        preserve_hierarchy,
+        timeout,
+    )
+
+
+@mcp.tool()
+def save_view_png(
+    ctx: Context,
+    save_path: str,
+    view_name: Literal["Isometric", "Front", "Top", "Right", "Back", "Left", "Bottom", "Dimetric", "Trimetric"] = "Isometric",
+    width: int | None = None,
+    height: int | None = None,
+    focus_object: str | None = None,
+) -> list[TextContent]:
+    """Save a screenshot of the active view directly to a local file path.
+
+    Unlike get_view (which returns the image inline as base64, useful for
+    chat review), this writes a persistent PNG file — useful for archiving
+    review images or including screenshots in reports.
+
+    Args:
+        save_path: The local filesystem path to write the PNG to.
+        view_name: The view orientation to use before capturing.
+        width: The width of the screenshot in pixels. If not specified, uses the viewport width.
+        height: The height of the screenshot in pixels. If not specified, uses the viewport height.
+        focus_object: The name of the object to focus on. If not specified, fits all objects in the view.
+
+    Returns:
+        A message confirming the save path, or describing the failure
+        (e.g. the current view type does not support screenshots).
+    """
+    return save_view_png_operation(
+        get_freecad_connection(), save_path, view_name, width, height, focus_object
     )
 
 
