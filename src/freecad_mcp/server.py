@@ -114,11 +114,17 @@ def create_object(
     obj_properties: dict[str, Any] = None,
 ) -> list[TextContent | ImageContent]:
     """Create a new object in FreeCAD.
-    Object type is starts with "Part::" or "Draft::" or "PartDesign::" or "Fem::".
+
+    ``obj_type`` must name a type registered in FreeCAD's C++ type system, such
+    as "Part::", "PartDesign::" or "Fem::" types. Note that a number of FreeCAD
+    features are implemented in Python rather than C++ (the whole Draft
+    workbench, and Part::Tube among the Part primitives). Those are not
+    registered types, so this tool cannot create them -- build them with
+    ``execute_code`` instead.
 
     Args:
         doc_name: The name of the document to create the object in.
-        obj_type: The type of the object to create (e.g. 'Part::Box', 'Part::Cylinder', 'Draft::Circle', 'PartDesign::Body', etc.).
+        obj_type: The type of the object to create (e.g. 'Part::Box', 'Part::Cylinder', 'Part::Cut', 'PartDesign::Body', etc.).
         obj_name: The name of the object to create.
         obj_properties: The properties of the object to create.
 
@@ -157,12 +163,17 @@ def create_object(
         }
         ```
 
-        If you want to create a circle with a radius of 10, you can use the following data.
+        If you want to cut one solid out of another, create both solids first,
+        then reference them by name as 'Base' and 'Tool'.
         ```json
         {
-            "doc_name": "MyCircle",
-            "obj_name": "Circle",
-            "obj_type": "Draft::Circle",
+            "doc_name": "MyPart",
+            "obj_name": "Cut",
+            "obj_type": "Part::Cut",
+            "obj_properties": {
+                "Base": "Box",
+                "Tool": "Cylinder"
+            }
         }
         ```
 
