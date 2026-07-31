@@ -20,6 +20,7 @@ from rpc_server.gui_dispatch import (
     process_gui_tasks,
     request_shutdown,
 )
+from rpc_server import macros
 from rpc_server.ip_filter import FilteredXMLRPCServer, validate_allowed_ips
 from rpc_server.object_factory import create_object_gui
 from rpc_server.parts_library import get_parts_list, insert_part_from_library
@@ -43,6 +44,21 @@ def _err(res) -> dict:
     if isinstance(res, dict):
         return res
     return {"success": False, "error": str(res)}
+
+
+def _macro_call(func, *args) -> dict:
+    """Run a macro helper, turning its exceptions into a failure dict.
+
+    Left to itself, an exception here crosses XML-RPC as a Fault and reaches
+    the caller as a transport error rather than a readable message. The macro
+    helpers raise ValueError for every user-correctable problem (bad name,
+    missing file, ambiguous edit), so those become ordinary results.
+    """
+    try:
+        return func(*args)
+    except Exception as e:
+        FreeCAD.Console.PrintError(f"MCP macro error: {type(e).__name__}: {e}\n")
+        return {"success": False, "error": str(e)}
 
 
 class FreeCADRPC:
@@ -206,6 +222,25 @@ class FreeCADRPC:
         if _ok(res):
             return {"success": True, "message": "Part inserted from library."}
         return _err(res)
+
+    # --- Macros -------------------------------------------------------
+    # Authoring is plain file I/O and safe on the RPC thread; only run_macro
+    # needs the GUI thread, and it manages that itself.
+
+    def list_macros(self):
+        return _macro_call(macros.list_macros)
+
+    def get_macro(self, name):
+        return _macro_call(macros.get_macro, name)
+
+    def create_macro(self, name, code, overwrite=False):
+        return _macro_call(macros.create_macro, name, code, overwrite)
+
+    def edit_macro(self, name, old_string, new_string, replace_all=False):
+        return _macro_call(macros.edit_macro, name, old_string, new_string, replace_all)
+
+    def run_macro(self, name):
+        return _macro_call(macros.run_macro, name)
 
     def list_documents(self):
         return list(FreeCAD.listDocuments().keys())

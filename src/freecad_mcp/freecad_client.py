@@ -96,6 +96,23 @@ class FreeCADConnection:
     def list_documents(self) -> list[str]:
         return self.server.list_documents()
 
+    def list_macros(self) -> dict[str, Any]:
+        return self.server.list_macros()
+
+    def get_macro(self, name: str) -> dict[str, Any]:
+        return self.server.get_macro(name)
+
+    def create_macro(self, name: str, code: str, overwrite: bool = False) -> dict[str, Any]:
+        return self.server.create_macro(name, code, overwrite)
+
+    def edit_macro(
+        self, name: str, old_string: str, new_string: str, replace_all: bool = False
+    ) -> dict[str, Any]:
+        return self.server.edit_macro(name, old_string, new_string, replace_all)
+
+    def run_macro(self, name: str) -> dict[str, Any]:
+        return self.server.run_macro(name)
+
     def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600) -> dict[str, Any]:
         # The solver blocks the RPC response for up to `timeout` seconds, so the
         # socket must outlast it. The default 150 s transport timeout would abort
