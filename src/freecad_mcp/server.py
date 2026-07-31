@@ -116,11 +116,24 @@ def create_object(
     """Create a new object in FreeCAD.
 
     ``obj_type`` must name a type registered in FreeCAD's C++ type system, such
-    as "Part::", "PartDesign::" or "Fem::" types. Note that a number of FreeCAD
-    features are implemented in Python rather than C++ (the whole Draft
-    workbench, and Part::Tube among the Part primitives). Those are not
-    registered types, so this tool cannot create them -- build them with
-    ``execute_code`` instead.
+    as "Part::", "PartDesign::" or "Fem::" types. A number of FreeCAD features
+    are implemented in Python rather than C++ and so are not registered types;
+    of those, these are supported here through dedicated factories, and each
+    requires the properties listed beside it:
+
+        Part::Tube        InnerRadius, OuterRadius, Height
+        Draft::Circle     Radius
+        Draft::Rectangle  Length, Height
+        Draft::Polygon    FacesNumber, Radius
+        Draft::Wire       Points (list of {x, y, z}), optional Closed
+
+    Any other Python-implemented type (Draft::Point, Draft::Ellipse, ...) must
+    be built with ``execute_code`` instead.
+
+    Note that the Draft factories name objects themselves, so for those the
+    returned object_name will differ from the requested obj_name, which is
+    applied to the object's Label instead. Always use the returned name in
+    later get_object/edit_object calls.
 
     Args:
         doc_name: The name of the document to create the object in.
@@ -173,6 +186,21 @@ def create_object(
             "obj_properties": {
                 "Base": "Box",
                 "Tool": "Cylinder"
+            }
+        }
+        ```
+
+        If you want to create a pipe with an outer diameter of 250, a 10 wall
+        and a length of 500, you can use the following data.
+        ```json
+        {
+            "doc_name": "MyPipe",
+            "obj_name": "Pipe",
+            "obj_type": "Part::Tube",
+            "obj_properties": {
+                "OuterRadius": 125,
+                "InnerRadius": 115,
+                "Height": 500
             }
         }
         ```
