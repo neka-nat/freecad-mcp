@@ -77,8 +77,48 @@ def _create_fem_object(doc: FreeCAD.Document, obj: Object):
     return res
 
 
+#: Python-implemented features that look like ordinary types but are absent
+#: from FreeCAD's C++ type registry, mapped to the factory that does build
+#: them. ``doc.addObject`` rejects every key here.
+_UNREGISTERED_TYPE_HINTS = {
+    "Part::Tube": "BasicShapes.Shapes.addTube(doc, name)",
+    "Draft::Circle": "Draft.make_circle(radius)",
+    "Draft::Rectangle": "Draft.make_rectangle(length, height)",
+    "Draft::Polygon": "Draft.make_polygon(nfaces, radius)",
+    "Draft::Wire": "Draft.make_wire(points, closed=False)",
+    "Draft::Point": "Draft.make_point(x, y, z)",
+}
+
+
+def _unregistered_type_message(obj_type: str) -> str:
+    """Explain an ``addObject`` type-registry miss in terms the caller can act on.
+
+    FreeCAD's own error ("is not a document object type") gives no hint that
+    the type may be perfectly real but Python-implemented, which sends callers
+    hunting for a typo that isn't there.
+    """
+    hint = _UNREGISTERED_TYPE_HINTS.get(obj_type)
+    if hint is None and obj_type.startswith("Draft::"):
+        hint = "the matching Draft.make_* factory"
+    suggestion = (
+        f" It is implemented in Python rather than C++, so build it with "
+        f"execute_code instead, e.g. {hint}."
+        if hint
+        else " Check the spelling, or build it with execute_code."
+    )
+    return (
+        f"'{obj_type}' is not a type registered with FreeCAD, so create_object "
+        f"cannot make it.{suggestion}"
+    )
+
+
 def _create_generic_object(doc: FreeCAD.Document, obj: Object):
-    res = doc.addObject(obj.type, obj.name)
+    try:
+        res = doc.addObject(obj.type, obj.name)
+    except Exception as e:
+        if "not a document object type" in str(e):
+            raise ValueError(_unregistered_type_message(obj.type)) from e
+        raise
     set_object_property(doc, res, obj.properties)
     FreeCAD.Console.PrintMessage(
         f"{res.TypeId} '{res.Name}' added to '{doc.Name}' via RPC.\n"
