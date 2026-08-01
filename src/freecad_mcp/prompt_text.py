@@ -21,6 +21,17 @@ When creating content in FreeCAD, always follow these steps:
 
 6. If detailed customization or specialized operations are necessary, use execute_code() to run custom Python scripts.
 
+7. Manage screenshot feedback to save tokens. Tools that modify or inspect the
+   model accept optional `include_screenshot` and `view_name` parameters:
+   - Pass include_screenshot=False when the image would not be informative:
+     analytical or computational scripts whose result is printed output,
+     bulk property edits, or intermediate steps in a longer sequence of
+     changes where only the final state needs visual confirmation.
+   - Pass view_name (e.g. "Front", "Top", "Right") to orient the screenshot
+     toward the part of the model you changed; the default is "Isometric" (top-front-right).
+   - When you skipped screenshots during intermediate steps, use get_view()
+     afterwards to visually inspect the result from the most informative angle.
+
 Only revert to basic creation methods in the following cases:
 - When the required asset is not available in the parts library.
 - When a basic shape is explicitly requested.
