@@ -83,7 +83,7 @@ def get_freecad_connection() -> FreeCADConnection:
     return state.freecad_connection
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def create_document(ctx: Context, name: str) -> list[TextContent]:
     """Create a new document in FreeCAD.
 
@@ -104,7 +104,7 @@ def create_document(ctx: Context, name: str) -> list[TextContent]:
     return create_document_operation(get_freecad_connection(), name)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def create_object(
     ctx: Context,
     doc_name: str,
@@ -240,7 +240,7 @@ def create_object(
     )
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def edit_object(
     ctx: Context, doc_name: str, obj_name: str, obj_properties: dict[str, Any]
 ) -> list[TextContent | ImageContent]:
@@ -264,7 +264,7 @@ def edit_object(
     )
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def delete_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextContent | ImageContent]:
     """Delete an object in FreeCAD.
 
@@ -283,7 +283,7 @@ def delete_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextConten
     )
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def execute_code_async(ctx: Context, code: str) -> list[TextContent]:
     """Execute Python code in FreeCAD without waiting for completion.
 
@@ -322,7 +322,7 @@ def execute_code_async(ctx: Context, code: str) -> list[TextContent]:
     return execute_code_async_operation(get_freecad_connection(), code)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def execute_code(ctx: Context, code: str) -> list[TextContent | ImageContent]:
     """Execute arbitrary Python code in FreeCAD.
 
@@ -335,7 +335,7 @@ def execute_code(ctx: Context, code: str) -> list[TextContent | ImageContent]:
     return execute_code_operation(get_freecad_connection(), state.only_text_feedback, code)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def get_view(
     ctx: Context,
     view_name: Literal["Isometric", "Front", "Top", "Right", "Back", "Left", "Bottom", "Dimetric", "Trimetric"],
@@ -367,7 +367,7 @@ def get_view(
     return get_view_operation(get_freecad_connection(), view_name, width, height, focus_object)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def insert_part_from_library(ctx: Context, relative_path: str) -> list[TextContent | ImageContent]:
     """Insert a part from the parts library addon.
 
@@ -384,7 +384,7 @@ def insert_part_from_library(ctx: Context, relative_path: str) -> list[TextConte
     )
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def get_objects(ctx: Context, doc_name: str) -> list[TextContent | ImageContent]:
     """Get all objects in a document.
     You can use this tool to get the objects in a document to see what you can check or edit.
@@ -398,7 +398,7 @@ def get_objects(ctx: Context, doc_name: str) -> list[TextContent | ImageContent]
     return get_objects_operation(get_freecad_connection(), state.only_text_feedback, doc_name)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def get_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextContent | ImageContent]:
     """Get an object from a document.
     You can use this tool to get the properties of an object to see what you can check or edit.
@@ -418,14 +418,14 @@ def get_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextContent |
     )
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def get_parts_list(ctx: Context) -> list[TextContent]:
     """Get the list of parts in the parts library addon.
     """
     return get_parts_list_operation(get_freecad_connection())
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def reload_document(ctx: Context, doc_name: str) -> list[TextContent]:
     """Close and re-open a document to pick up external file changes.
 
@@ -454,7 +454,7 @@ def reload_document(ctx: Context, doc_name: str) -> list[TextContent]:
     return reload_document_operation(get_freecad_connection(), doc_name)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def list_documents(ctx: Context) -> list[TextContent]:
     """Get the list of open documents in FreeCAD.
 
@@ -464,7 +464,7 @@ def list_documents(ctx: Context) -> list[TextContent]:
     return list_documents_operation(get_freecad_connection())
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def run_fem_analysis(
     ctx: Context,
     doc_name: str,
