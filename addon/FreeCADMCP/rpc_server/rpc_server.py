@@ -30,6 +30,7 @@ from rpc_server.view_manager import save_active_screenshot
 
 rpc_server_thread = None
 rpc_server_instance = None
+_stop_thread = None  # drains shutdown off the GUI thread; see stop_rpc_server
 
 
 def _ok(res) -> bool:
@@ -53,9 +54,13 @@ class FreeCADRPC:
         return True
 
     def create_document(self, name="New_Document"):
+        # The GUI handler reports the document's ACTUAL name — FreeCAD
+        # sanitises requested names ("My Doc" -> "My_Doc") and de-duplicates
+        # ("Doc" -> "Doc001"); reporting the requested name breaks every
+        # follow-up call that uses it.
         res = dispatch_to_gui(lambda: self._create_document_gui(name))
-        if _ok(res):
-            return {"success": True, "document_name": name}
+        if isinstance(res, dict) and res.get("success"):
+            return res
         return _err(res)
 
     def create_object(self, doc_name, obj_data: dict[str, Any]):
@@ -65,9 +70,11 @@ class FreeCADRPC:
             analysis=obj_data.get("Analysis", None),
             properties=obj_data.get("Properties", {}),
         )
+        # create_object_gui reports the created object's actual Name (see
+        # its docstring) — same sanitise/de-duplicate concern as documents.
         res = dispatch_to_gui(lambda: self._create_object_gui(doc_name, obj))
-        if _ok(res):
-            return {"success": True, "object_name": obj.name}
+        if isinstance(res, dict) and res.get("success"):
+            return res
         return _err(res)
 
     def edit_object(self, doc_name: str, obj_name: str, properties: dict[str, Any]) -> dict[str, Any]:
@@ -250,8 +257,8 @@ class FreeCADRPC:
     def _create_document_gui(self, name):
         doc = FreeCAD.newDocument(name)
         doc.recompute()
-        FreeCAD.Console.PrintMessage(f"Document '{name}' created via RPC.\n")
-        return True
+        FreeCAD.Console.PrintMessage(f"Document '{doc.Name}' created via RPC.\n")
+        return {"success": True, "document_name": doc.Name}
 
     def _create_object_gui(self, doc_name, obj: Object):
         return create_object_gui(doc_name, obj)
@@ -341,6 +348,14 @@ def start_rpc_server(port=9875):
     if rpc_server_instance:
         return "RPC Server already running."
 
+    # A previous stop may still be draining an in-flight request off-thread;
+    # binding before its server_close() would hit the old socket.
+    if _stop_thread is not None and _stop_thread.is_alive():
+        _stop_thread.join(timeout=5.0)
+        if _stop_thread.is_alive():
+            return ("RPC Server is still stopping (a request is draining); "
+                    "try again in a few seconds.")
+
     settings = load_settings()
     remote_enabled = settings.get("remote_enabled", False)
     allowed_ips = settings.get("allowed_ips", "127.0.0.1")
@@ -374,19 +389,43 @@ def start_rpc_server(port=9875):
 
 
 def stop_rpc_server():
-    global rpc_server_instance, rpc_server_thread
+    global rpc_server_instance, rpc_server_thread, _stop_thread
 
-    if rpc_server_instance:
-        request_shutdown()
-        cleanup_waker()
-        rpc_server_instance.shutdown()
-        rpc_server_thread.join()
-        rpc_server_instance = None
-        rpc_server_thread = None
+    if not rpc_server_instance:
+        return "RPC Server was not running."
+
+    server = rpc_server_instance
+    thread = rpc_server_thread
+    rpc_server_instance = None
+    rpc_server_thread = None
+
+    request_shutdown()
+    cleanup_waker()
+
+    def _shutdown_and_close():
+        # shutdown() blocks until serve_forever drains the in-flight request,
+        # and that request may itself be waiting on dispatch_to_gui — running
+        # this on the GUI thread (menu command) froze the UI for up to the
+        # dispatch timeout. server_close() must always follow: without it the
+        # listening socket stays bound and Stop -> Start fails with
+        # EADDRINUSE (the restart the README asks for after changing Remote
+        # Connections or Allowed IPs).
+        try:
+            server.shutdown()
+            if thread is not None:
+                thread.join(timeout=10.0)
+                if thread.is_alive():
+                    FreeCAD.Console.PrintWarning(
+                        "MCP RPC: server thread still draining a request; "
+                        "socket closes when it finishes.\n"
+                    )
+        finally:
+            server.server_close()
         FreeCAD.Console.PrintMessage("RPC Server stopped.\n")
-        return "RPC Server stopped."
 
-    return "RPC Server was not running."
+    _stop_thread = threading.Thread(target=_shutdown_and_close, daemon=True)
+    _stop_thread.start()
+    return "RPC Server stopping…"
 
 
 register_commands()

@@ -12,11 +12,12 @@ import ObjectsFem
 from rpc_server.property_mapper import Object, set_object_property
 
 
-def _create_fem_mesh(doc: FreeCAD.Document, obj: Object) -> None:
+def _create_fem_mesh(doc: FreeCAD.Document, obj: Object):
     """Create a ``Fem::FemMeshGmsh`` and run Gmsh to populate it.
 
     Accepts both the FreeCAD 0.x and 1.x property names (``Part``/``Shape``,
     ``ElementSize{Max,Min}``/``CharacteristicLength{Max,Min}``).
+    Returns the created mesh object.
     """
     from femmesh.gmshtools import GmshTools
 
@@ -50,9 +51,10 @@ def _create_fem_mesh(doc: FreeCAD.Document, obj: Object) -> None:
     FreeCAD.Console.PrintMessage(
         f"FEM Mesh '{res.Name}' generated successfully in '{doc.Name}'.\n"
     )
+    return res
 
 
-def _create_fem_object(doc: FreeCAD.Document, obj: Object) -> None:
+def _create_fem_object(doc: FreeCAD.Document, obj: Object):
     """Create a ``Fem::*`` object via the appropriate ``ObjectsFem.makeXxx`` factory."""
     fem_make_methods = {
         "MaterialCommon": ObjectsFem.makeMaterialSolid,
@@ -72,21 +74,25 @@ def _create_fem_object(doc: FreeCAD.Document, obj: Object) -> None:
     )
     if obj.type != "Fem::AnalysisPython" and obj.analysis:
         getattr(doc, obj.analysis).addObject(res)
+    return res
 
 
-def _create_generic_object(doc: FreeCAD.Document, obj: Object) -> None:
+def _create_generic_object(doc: FreeCAD.Document, obj: Object):
     res = doc.addObject(obj.type, obj.name)
     set_object_property(doc, res, obj.properties)
     FreeCAD.Console.PrintMessage(
         f"{res.TypeId} '{res.Name}' added to '{doc.Name}' via RPC.\n"
     )
+    return res
 
 
 def create_object_gui(doc_name: str, obj: Object):
     """Create an object in ``doc_name`` according to ``obj.type``.
 
-    Returns ``True`` on success, or an error string on failure (matching the
-    legacy GUI-handler return contract).
+    Returns the created object's actual ``Name`` on success (FreeCAD
+    sanitises and de-duplicates requested names — ``Box`` may come back as
+    ``Box001`` — and every later get_object/edit_object call needs the real
+    one), or an error string on failure.
     """
     try:
         doc = FreeCAD.getDocument(doc_name)
@@ -100,13 +106,13 @@ def create_object_gui(doc_name: str, obj: Object):
                     "Fem::FemMeshGmsh requires an 'analysis_name' naming the "
                     "Fem::AnalysisPython container to add the mesh to."
                 )
-            _create_fem_mesh(doc, obj)
+            created = _create_fem_mesh(doc, obj)
         elif obj.type.startswith("Fem::"):
-            _create_fem_object(doc, obj)
+            created = _create_fem_object(doc, obj)
         else:
-            _create_generic_object(doc, obj)
+            created = _create_generic_object(doc, obj)
 
         doc.recompute()
-        return True
+        return {"success": True, "object_name": created.Name}
     except Exception as e:
         return str(e)

@@ -14,7 +14,9 @@ def run_fem_analysis(doc_name: str, analysis_name: str) -> dict:
     so the caller can pass it through to the wire response unchanged.
     """
     work_dir = None
+    stage = "initialization"
     try:
+        stage = "document lookup"
         try:
             doc = FreeCAD.getDocument(doc_name)
         except Exception:
@@ -25,6 +27,7 @@ def run_fem_analysis(doc_name: str, analysis_name: str) -> dict:
         if analysis.TypeId not in ("Fem::FemAnalysis", "Fem::FemAnalysisPython"):
             return {"success": False, "error": f"'{analysis_name}' is not a FEM analysis (TypeId={analysis.TypeId})."}
 
+        stage = "solver resolution"
         solver = None
         for member in analysis.Group:
             tid = getattr(member, "TypeId", "")
@@ -41,8 +44,10 @@ def run_fem_analysis(doc_name: str, analysis_name: str) -> dict:
             solver = solver_factory(doc, "CalculiX")
             analysis.addObject(solver)
 
+        stage = "femtools import"
         from femtools import ccxtools
 
+        stage = "solver setup"
         fea = ccxtools.FemToolsCcx(analysis=analysis, solver=solver)
         fea.update_objects()
 
@@ -50,12 +55,24 @@ def run_fem_analysis(doc_name: str, analysis_name: str) -> dict:
         fea.setup_working_dir(work_dir)
         fea.setup_ccx()
 
+        stage = "prerequisite check"
         prereq_msg = fea.check_prerequisites()
         if prereq_msg:
             return {"success": False, "error": f"Prerequisites failed: {prereq_msg}", "working_dir": work_dir}
 
+        stage = "solver execution"
         fea.purge_results()
-        fea.run()
+        # FemToolsCcx.run() reports CalculiX failures by returning False rather
+        # than raising; None is returned on success in some FreeCAD versions,
+        # so only an explicit False is treated as a failure.
+        if fea.run() is False:
+            return {
+                "success": False,
+                "error": "CalculiX solver run failed (fea.run() returned False); inspect the .dat/.frd output in working_dir.",
+                "working_dir": work_dir,
+            }
+
+        stage = "result loading"
         fea.load_results()
 
         result_obj = None
@@ -66,6 +83,7 @@ def run_fem_analysis(doc_name: str, analysis_name: str) -> dict:
         if result_obj is None:
             return {"success": False, "error": "Solver ran but no result object was produced.", "working_dir": work_dir}
 
+        stage = "result extraction"
         # vonMises / DisplacementLengths can be None on a degenerate run.
         vm = list(getattr(result_obj, "vonMises", None) or [])
         disp = list(getattr(result_obj, "DisplacementLengths", None) or [])
@@ -83,7 +101,7 @@ def run_fem_analysis(doc_name: str, analysis_name: str) -> dict:
     except Exception as e:
         return {
             "success": False,
-            "error": f"{type(e).__name__}: {e}",
+            "error": f"FEM analysis failed during {stage}: {type(e).__name__}: {e}",
             "traceback": traceback.format_exc(),
             "working_dir": work_dir,
         }

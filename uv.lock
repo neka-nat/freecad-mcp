@@ -66,7 +66,7 @@ wheels = [
 
 [[package]]
 name = "freecad-mcp"
-version = "0.1.17"
+version = "0.1.20"
 source = { editable = "." }
 dependencies = [
     { name = "mcp", extra = ["cli"] },
@@ -75,7 +75,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mcp", extras = ["cli"], specifier = ">=1.12.2" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.12.2,<3" },
     { name = "validators", specifier = ">=0.34.0" },
 ]
 

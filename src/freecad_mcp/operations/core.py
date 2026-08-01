@@ -146,10 +146,14 @@ def get_view_operation(
     height: int | None = None,
     focus_object: str | None = None,
 ) -> ToolResponse:
-    screenshot = freecad.get_active_screenshot(view_name, width, height, focus_object)
-    if screenshot is not None:
-        return [ImageContent(type="image", data=screenshot, mimeType="image/png")]
-    return text_response("Cannot get screenshot in the current view type (such as TechDraw or Spreadsheet)")
+    try:
+        screenshot = freecad.get_active_screenshot(view_name, width, height, focus_object)
+        if screenshot is not None:
+            return [ImageContent(type="image", data=screenshot, mimeType="image/png")]
+        return text_response("Cannot get screenshot in the current view type (such as TechDraw or Spreadsheet)")
+    except Exception as e:
+        logger.error(f"Failed to get view: {str(e)}")
+        return text_response(f"Failed to get view: {str(e)}")
 
 
 def insert_part_from_library_operation(

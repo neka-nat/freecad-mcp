@@ -23,6 +23,7 @@ Robustness and performance guarantees:
 """
 
 import queue
+import threading
 import time
 import traceback
 from typing import Any, Callable
@@ -165,12 +166,20 @@ def dispatch_to_gui(task: Callable[[], Any], timeout: float = 60) -> Any:
     the response for a subsequent call. Wakes the GUI thread immediately via
     a Qt signal instead of waiting for the next 500 ms heartbeat.
 
+    On timeout the queued task is cancelled: if it has not started yet it
+    will never run, so a caller retrying after a timeout cannot trigger a
+    double execution. A task already running on the GUI thread cannot be
+    interrupted; only its result is discarded.
+
     Returns the task's return value on success, an error string if the task
     raises, or ``{"success": False, "error": ...}`` on timeout.
     """
     response_queue: "queue.Queue[Any]" = queue.Queue(maxsize=1)
+    cancelled = threading.Event()
 
     def _wrapped() -> None:
+        if cancelled.is_set():
+            return  # caller timed out and went away; don't run a stale task
         try:
             res = task()
         except Exception as e:
@@ -188,6 +197,7 @@ def dispatch_to_gui(task: Callable[[], Any], timeout: float = 60) -> Any:
     try:
         return response_queue.get(timeout=timeout)
     except queue.Empty:
+        cancelled.set()  # a not-yet-started task must not run after we give up
         # Diagnose why: if _processing is still True, the GUI thread is occupied
         # by a long-running task that was queued before this one.
         if _processing:
