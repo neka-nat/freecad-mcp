@@ -31,12 +31,30 @@ def _get_view_size(view: Any) -> tuple[int, int]:
         return 1024, 768
 
 
+# Longest edge used when the caller does not ask for a specific size. The
+# screenshot's cost to an LLM client scales with its pixel count, and hosts
+# commonly downscale anything larger than ~1.5k px before the model ever sees
+# it, so rendering at the full window size just inflates the payload. An
+# explicit width/height is always honoured as given.
+MAX_AUTO_SCREENSHOT_EDGE = 1024
+
+
+def _scale_to_max_edge(width: int, height: int, max_edge: int) -> tuple[int, int]:
+    longest = max(width, height)
+    if longest <= max_edge:
+        return width, height
+    scale = max_edge / longest
+    return max(1, int(width * scale)), max(1, int(height * scale))
+
+
 def _resolve_screenshot_size(
     view: Any,
     width: int | None,
     height: int | None,
 ) -> tuple[int, int]:
     view_width, view_height = _get_view_size(view)
+    if width is None and height is None:
+        return _scale_to_max_edge(view_width, view_height, MAX_AUTO_SCREENSHOT_EDGE)
     resolved_width = view_width if width is None else max(1, int(width))
     resolved_height = view_height if height is None else max(1, int(height))
     return resolved_width, resolved_height
