@@ -14,6 +14,7 @@ from .core import (
     reload_document_operation,
     run_fem_analysis_operation,
 )
+from .web_search import web_search_operation
 
 __all__ = [
     "create_document_operation",
@@ -30,4 +31,5 @@ __all__ = [
     "list_documents_operation",
     "reload_document_operation",
     "run_fem_analysis_operation",
+    "web_search_operation",
 ]

@@ -28,6 +28,7 @@ from .operations import (
     list_documents_operation,
     reload_document_operation,
     run_fem_analysis_operation,
+    web_search_operation,
 )
 from .prompt_text import ASSET_CREATION_STRATEGY
 from .server_state import ServerState
@@ -603,6 +604,57 @@ def run_fem_analysis(
         include_screenshot,
         view_name,
     )
+
+
+@mcp.tool(structured_output=False)
+def web_search_technical(
+    ctx: Context,
+    query: str,
+    count: int = 5,
+    domains: list[str] | None = None,
+    freshness: str | None = None,
+) -> list[TextContent | ImageContent]:
+    """Search the web for technical documentation, specifications, and engineering resources.
+    
+    This tool is particularly useful when working with FreeCAD for finding:
+    - Material properties and specifications
+    - CAD part libraries and component databases  
+    - Engineering standards and design guidelines
+    - Manufacturing and fabrication information
+    - Technical documentation and tutorials
+    
+    The search uses You.com's Search API with optional authentication via YDC_API_KEY environment variable.
+    Without an API key, provides 100 free searches per day per IP address.
+    
+    Args:
+        query: Search query (e.g. "aluminum 6061 properties", "M8 bolt dimensions")
+        count: Number of results to return (1-20, default 5)
+        domains: Optional list of domains to search within (e.g. ["matweb.com", "mcmaster.com"])
+        freshness: Optional freshness filter ("hour", "day", "week", "month", "year")
+    
+    Returns:
+        Formatted search results with titles, URLs, and descriptions
+    
+    Examples:
+        Search for material properties:
+        ```json
+        {
+            "query": "steel yield strength table",
+            "count": 5,
+            "domains": ["matweb.com", "engineeringtoolbox.com"]
+        }
+        ```
+        
+        Find CAD components:
+        ```json
+        {
+            "query": "metric fastener dimensions M6",
+            "count": 3,
+            "freshness": "year"
+        }
+        ```
+    """
+    return web_search_operation(query, count, domains, freshness)
 
 
 @mcp.prompt()

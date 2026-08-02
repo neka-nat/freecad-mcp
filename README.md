@@ -191,6 +191,46 @@ The `--host` value is validated on startup — it must be a valid IPv4/IPv6 addr
 * `get_object`: Get an object in a document.
 * `get_parts_list`: Get the list of parts in the [parts library](https://github.com/FreeCAD/FreeCAD-library).
 * `run_fem_analysis`: Run the CalculiX solver on an existing `Fem::FemAnalysis` and return summary results (max von Mises stress, max displacement, node count, working directory). Auto-creates a `SolverCcxTools` if the analysis has none. See [`examples/cantilever_fem.py`](examples/cantilever_fem.py) for an end-to-end usage example.
+* **`web_search_technical`**: Search the web for technical documentation, specifications, and engineering resources using You.com's Search API. Perfect for finding material properties, CAD part libraries, engineering standards, and technical documentation while working with FreeCAD.
+
+### Web Search Integration
+
+The `web_search_technical` tool integrates You.com's Search API to help you find technical information while working on CAD projects:
+
+**Key Features:**
+- Search for material properties and specifications
+- Find CAD part libraries and component databases  
+- Locate engineering standards and design guidelines
+- Access manufacturing and fabrication resources
+- Discover technical documentation and tutorials
+
+**Authentication (Optional):**
+- Set `YDC_API_KEY` environment variable for authenticated access and higher quotas
+- Without API key: 100 free searches per day per IP address
+- Get an API key at: [you.com/platform/api-keys](https://you.com/platform/api-keys)
+
+**Usage Examples:**
+```json
+// Search for material properties
+{
+  "tool": "web_search_technical",
+  "arguments": {
+    "query": "aluminum 6061 mechanical properties",
+    "count": 5,
+    "domains": ["matweb.com", "engineeringtoolbox.com"]
+  }
+}
+
+// Find standard fastener dimensions
+{
+  "tool": "web_search_technical", 
+  "arguments": {
+    "query": "M8 bolt dimensions ISO 4762",
+    "count": 3,
+    "freshness": "year"
+  }
+}
+```
 
 Tools that return a screenshot (`create_object`, `edit_object`, `delete_object`, `execute_code`, `insert_part_from_library`, `get_objects`, `get_object`, `run_fem_analysis`) accept optional `include_screenshot` (default `true`) and `view_name` (default `"Isometric"`) parameters to suppress or reorient the returned image per call.
 
