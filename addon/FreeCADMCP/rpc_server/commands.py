@@ -10,7 +10,15 @@ reflects saved settings on the checkable items.
 
 import FreeCAD
 import FreeCADGui
-from PySide import QtCore, QtWidgets
+from PySide import QtCore, QtGui, QtWidgets
+
+# QAction location differs between FreeCAD's Qt bindings:
+#   PySide (Qt4): QtGui.QAction
+#   PySide2/6: QtWidgets.QAction
+try:
+    _QAction = QtWidgets.QAction
+except AttributeError:
+    _QAction = QtGui.QAction
 
 from rpc_server.ip_filter import validate_allowed_ips
 from rpc_server.settings import load_settings, save_settings
@@ -157,37 +165,92 @@ def register_commands() -> None:
     FreeCADGui.addCommand("Configure_Allowed_IPs", ConfigureAllowedIPsCommand())
 
 
-# Map command objectName -> settings key. Matching on objectName rather than
-# the localized menu text keeps this working under translation.
-_TOGGLE_COMMANDS = {
-    "Toggle_Remote_Connections": "remote_enabled",
-    "Toggle_Auto_Start": "auto_start_rpc",
+# Map action menu text -> settings key.  Using text is more reliable than
+# objectName since FreeCAD sets the former from GetResources() but does not
+# guarantee objectName for every command.
+_TOGGLE_COMMANDS: dict[str, str] = {
+    "Remote Connections": "remote_enabled",
+    "Auto-Start Server": "auto_start_rpc",
 }
-_SYNC_MAX_RETRIES = 10  # ~20 s at 2 s/retry before giving up
 
 
-def _sync_toggle_states(retries_left: int = _SYNC_MAX_RETRIES) -> None:
+def _log(msg: str) -> None:
+    FreeCAD.Console.PrintMessage(f"[MCP sync] {msg}\n")
+
+
+def _sync_toggle_states() -> bool | None:
     """Sync checkable menu items with saved settings on startup.
 
-    The menu actions are created asynchronously, so retry a bounded number of
-    times until they exist rather than polling forever.
+    The MCP workbench must be activated first so its QAction objects are
+    created in the main window's widget hierarchy.  We temporarily activate
+    it, sync and verify the states, then restore the previous workbench.
+
+    Returns True if all actions were found and verified to match the desired
+    state.  Returns False (and schedules a retry) if anything failed — missing
+    action, wrong current state, or an exception during the attempt.
     """
     try:
         settings = load_settings()
+
         main_window = FreeCADGui.getMainWindow()
-        found = 0
-        for action in main_window.findChildren(QtWidgets.QAction):
-            key = _TOGGLE_COMMANDS.get(action.objectName())
+
+        # MCP actions only exist in the widget hierarchy after their workbench
+        # has been activated (toolbar/menu creation is lazy).  Activate it now,
+        # remembering what was active before so we can restore it.
+        prev_wb = FreeCADGui.activeWorkbench()
+        FreeCADGui.activateWorkbench("FreeCADMCPAddonWorkbench")
+
+        all_actions = main_window.findChildren(_QAction)
+
+        matched_keys: set[str] = set()
+        for action in all_actions:
+            key = _TOGGLE_COMMANDS.get(action.text())
             if key is not None:
-                action.setChecked(bool(settings.get(key, False)))
-                found += 1
-        if found == len(_TOGGLE_COMMANDS):
-            return
-    except Exception:
-        pass
-    if retries_left > 0:
-        QtCore.QTimer.singleShot(2000, lambda: _sync_toggle_states(retries_left - 1))
+                desired = bool(settings.get(key, False))
+                action.setChecked(desired)
+                matched_keys.add(key)
+
+        # All actions must be present before verification
+        if len(matched_keys) != len(_TOGGLE_COMMANDS):
+            _log(f"incomplete match: got {len(matched_keys)} of {len(_TOGGLE_COMMANDS)}")
+            return False
+
+        # Verify every action actually ended up in the correct state
+        for action in all_actions:
+            key = _TOGGLE_COMMANDS.get(action.text())
+            if key is not None:
+                desired = bool(settings.get(key, False))
+                actual = action.isChecked()
+                if actual != desired:
+                    _log(f"verification failed: '{action.text()}' expected {desired}, got {actual}")
+                    return False
+
+        # Restore the previous workbench so we don't surprise the user.
+        prev_name = getattr(prev_wb, 'name', None) or ""
+        if callable(prev_name):
+            prev_name = prev_name()
+        if prev_name and prev_name != "FreeCADMCPAddonWorkbench":
+            FreeCADGui.activateWorkbench(prev_name)
+
+        _log("all actions synced and verified")
+        return True  # all found and verified
+
+    except Exception as e:
+        FreeCAD.Console.PrintWarning(f"[MCP sync] exception: {e}\n")
+        return False
+
+
+def _schedule_sync_retry() -> None:
+    """Schedule the next sync attempt after a delay."""
+    QtCore.QTimer.singleShot(2000, _try_sync_toggle_states)
+
+
+def _try_sync_toggle_states() -> None:
+    result = _sync_toggle_states()
+    if result is False:
+        _schedule_sync_retry()
 
 
 def schedule_toggle_sync() -> None:
-    QtCore.QTimer.singleShot(2000, _sync_toggle_states)
+    """Kick off the first sync attempt after a short startup delay."""
+    QtCore.QTimer.singleShot(2000, _try_sync_toggle_states)
