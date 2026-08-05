@@ -105,11 +105,26 @@ python3 install.py            # install the addon + wire up Claude Desktop
 python3 install.py --check    # report what is installed, change nothing
 ```
 
-It finds the right `Mod` directory for your FreeCAD version, backs up anything it replaces,
-*merges* into `claude_desktop_config.json` without disturbing other MCP servers, and then tells
-you what it found — including the two failure modes that are otherwise invisible: an installed
-addon older than the source, and a client pointing at the published package while you edit a
-checkout. `--symlink --dev` sets up for development, `--uninstall` reverses it.
+It asks where the addon should go, offers the MCP clients it can find, backs up anything it
+replaces, and *merges* into each config without disturbing other servers. Then it reports the
+failure modes that are otherwise invisible: an installed addon older than the source, a client
+pointing at the published package while you edit a checkout, a lost settings file, and whether
+anything is listening on port 9875. `--symlink --dev` sets up for development, `--uninstall`
+reverses it, `-y` takes the defaults without asking.
+
+> ### ⚠️ Only Claude is tested
+>
+> This fork was developed and verified against **Claude Desktop** and **Claude Code**. Those are
+> the two the installer writes with confidence.
+>
+> **Cursor, Gemini CLI and Codex CLI are offered as-is.** Their config locations come from each
+> project's own documentation and share the `mcpServers` shape (Codex uses TOML, so its own
+> `codex mcp add` is used instead of writing the file). None of them has been tested against
+> this server end to end — reports welcome.
+>
+> **ChatGPT desktop** adds connectors through the app's settings, so there is no file to write.
+> **Grok** is not an MCP client: the "grok mcp" projects are MCP *servers* wrapping the Grok
+> CLI, which is the opposite direction — there is nothing to configure.
 
 <details>
 <summary>Or do it by hand</summary>

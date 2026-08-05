@@ -162,6 +162,21 @@ def install_addon(mod_dir: Path, symlink: bool, dry_run: bool) -> bool:
 
 
 # ----------------------------------------------------------------- client config
+#
+# Config locations verified against each project's own documentation (Aug 2026).
+# Three clients share the same `mcpServers` JSON shape, so one writer covers all
+# of them; the rest are reported rather than guessed at.
+#
+#   Claude Desktop  ~/Library/Application Support/Claude/claude_desktop_config.json
+#                   %APPDATA%\\Claude\\... on Windows, ~/.config/Claude/... on Linux
+#   Cursor          ~/.cursor/mcp.json   (a project .cursor/mcp.json overrides it)
+#   Gemini CLI      ~/.gemini/settings.json  (or a project .gemini/settings.json)
+#   Claude Code     no file we should edit -- `claude mcp add` owns that state
+#   Codex CLI       ~/.codex/config.toml, [mcp_servers.<name>] -- TOML, not JSON,
+#                   and `codex mcp add` exists, so let it write its own format
+#   ChatGPT desktop connectors are added in the app UI; there is no config file
+#   Grok            not an MCP client. The "grok mcp" projects are MCP *servers*
+#                   wrapping the Grok CLI -- the opposite direction. Nothing to do.
 
 def claude_desktop_config() -> Path:
     system = platform.system()
@@ -173,17 +188,49 @@ def claude_desktop_config() -> Path:
     return Path.home() / ".config" / "Claude" / "claude_desktop_config.json"
 
 
+JSON_CLIENTS = {
+    "claude-desktop": ("Claude Desktop", claude_desktop_config),
+    "cursor": ("Cursor", lambda: Path.home() / ".cursor" / "mcp.json"),
+    "gemini": ("Gemini CLI", lambda: Path.home() / ".gemini" / "settings.json"),
+}
+CLI_CLIENTS = {
+    "claude-code": ("Claude Code", "claude"),
+    "codex": ("Codex CLI", "codex"),
+}
+
+
+def client_present(key: str) -> bool:
+    home = Path.home()
+    if key == "claude-desktop":
+        return claude_desktop_config().exists() or Path("/Applications/Claude.app").exists()
+    if key == "cursor":
+        return (home / ".cursor").exists() or Path("/Applications/Cursor.app").exists()
+    if key == "gemini":
+        return shutil.which("gemini") is not None or (home / ".gemini").exists()
+    if key in CLI_CLIENTS:
+        return shutil.which(CLI_CLIENTS[key][1]) is not None or (home / f".{key.split('-')[0]}").exists()
+    return False
+
+
+def all_clients() -> list[tuple[str, str, bool]]:
+    """(key, label, present) for every client this script can set up."""
+    out = [(k, label, client_present(k)) for k, (label, _) in JSON_CLIENTS.items()]
+    out += [(k, label, client_present(k)) for k, (label, _) in CLI_CLIENTS.items()]
+    return out
+
+
 def server_entry(mode: str) -> dict:
     if mode == "released":
         return {"command": "uvx", "args": ["freecad-mcp"]}
     return {"command": "uv", "args": ["--directory", str(PROJECT), "run", "freecad-mcp"]}
 
 
-def configure_client(mode: str, dry_run: bool) -> bool:
-    config = claude_desktop_config()
-    head(f"Claude Desktop -> {config}")
-
+def write_json_client(key: str, mode: str, dry_run: bool) -> bool:
+    label, path_fn = JSON_CLIENTS[key]
+    config = path_fn()
     entry = server_entry(mode)
+    head(f"{label} -> {config}")
+
     if dry_run:
         info(f"would set mcpServers.freecad = {json.dumps(entry)}")
         return True
@@ -196,7 +243,7 @@ def configure_client(mode: str, dry_run: bool) -> bool:
             bad(f"existing config is not valid JSON ({e}); refusing to touch it")
             info("fix or move it, then re-run")
             return False
-        backup = config.with_suffix(f".json.backup-{STAMP}")
+        backup = config.with_suffix(config.suffix + f".backup-{STAMP}")
         shutil.copy2(config, backup)
         ok(f"backed up to {backup.name}")
     else:
@@ -218,6 +265,160 @@ def configure_client(mode: str, dry_run: bool) -> bool:
     if others:
         info(f"left untouched: {', '.join(others)}")
     return True
+
+
+def write_cli_client(key: str, mode: str, dry_run: bool) -> bool:
+    """Let the client's own CLI write its config.
+
+    Codex uses TOML and Claude Code keeps MCP state in a file full of unrelated
+    session data. Both ship an `mcp add` command, which is the supported way in
+    and cannot drift from their format the way a hand-rolled writer would.
+    """
+    label, exe = CLI_CLIENTS[key]
+    entry = server_entry(mode)
+    cmd = [exe, "mcp", "add", "freecad", "--", entry["command"], *entry["args"]]
+    head(f"{label} -> {exe} mcp add")
+
+    if dry_run:
+        info("would run: " + " ".join(cmd))
+        return True
+    if not shutil.which(exe):
+        warn(f"{exe} not on PATH; skipped")
+        return True
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except Exception as e:
+        bad(f"could not run {exe}: {e}")
+        return False
+    if result.returncode == 0:
+        ok("registered")
+        return True
+    message = (result.stderr or result.stdout).strip().splitlines()
+    already = any("already exists" in line.lower() for line in message)
+    if already:
+        ok("already registered")
+        info(f"replace it with: {exe} mcp remove freecad && " + " ".join(cmd))
+        return True
+    warn(f"{exe} declined: {message[0] if message else 'unknown error'}")
+    info("run it yourself: " + " ".join(cmd))
+    return True
+
+
+def configure_clients(keys: list[str], mode: str, dry_run: bool) -> bool:
+    fine = True
+    for key in keys:
+        if key in JSON_CLIENTS:
+            fine &= write_json_client(key, mode, dry_run)
+        elif key in CLI_CLIENTS:
+            fine &= write_cli_client(key, mode, dry_run)
+    return fine
+
+
+def report_unwritable_clients() -> None:
+    """Clients with no config we can safely write."""
+    notes = []
+    if Path("/Applications/ChatGPT.app").exists():
+        notes.append(("ChatGPT desktop",
+                      "add the connector in the app's settings -- there is no config file"))
+    if notes:
+        head("Also installed, but set up in-app")
+        for label, how in notes:
+            print(f"  {DIM}.{OFF} {label}")
+            info(how)
+
+
+# ------------------------------------------------------------------------ asking
+
+def interactive() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def ask_choice(question: str, options: list[str], default: int = 0) -> int:
+    """Numbered menu. Returns the chosen index; the default on a bare Enter."""
+    print(f"\n{BOLD}{question}{OFF}")
+    for i, option in enumerate(options, 1):
+        mark = " (default)" if i - 1 == default else ""
+        print(f"  {i}. {option}{DIM}{mark}{OFF}")
+    while True:
+        raw = input("  choice [Enter for default]: ").strip()
+        if not raw:
+            return default
+        if raw.isdigit() and 1 <= int(raw) <= len(options):
+            return int(raw) - 1
+        print(f"  {YELLOW}enter a number between 1 and {len(options)}{OFF}")
+
+
+def ask_yes(question: str, default: bool = True) -> bool:
+    suffix = "[Y/n]" if default else "[y/N]"
+    while True:
+        raw = input(f"  {question} {suffix} ").strip().lower()
+        if not raw:
+            return default
+        if raw in ("y", "yes"):
+            return True
+        if raw in ("n", "no"):
+            return False
+
+
+def ask_mod_dir(chosen: Path, probed: list[Path]) -> Path:
+    """Confirm where the addon goes, offering every candidate plus a free path.
+
+    Worth asking rather than assuming: FreeCAD 1.1 silently ignores an addon left
+    in the 1.0 directory, and someone running two versions side by side has no
+    way to tell this script which they meant.
+    """
+    existing = [p for p in probed if p.is_dir()]
+    options = [f"{p}{'' if p.is_dir() else '   (will be created)'}" for p in probed]
+    options.append("somewhere else (type a path)")
+    default = probed.index(chosen) if chosen in probed else 0
+
+    if len(existing) <= 1:
+        print(f"\n{BOLD}FreeCAD modules directory{OFF}")
+        print(f"  {chosen}")
+        if ask_yes("use this?", True):
+            return chosen
+    index = ask_choice("Where should the addon go?", options, default)
+    if index < len(probed):
+        return probed[index]
+    while True:
+        raw = input("  path to a Mod directory: ").strip()
+        if raw:
+            return Path(raw).expanduser()
+
+
+def ask_clients() -> list[str]:
+    """Pick which MCP clients to wire up. Detected ones are the default."""
+    clients = all_clients()
+    detected = [k for k, _, present in clients if present]
+
+    print(f"\n{BOLD}MCP clients{OFF}")
+    for i, (_, label, present) in enumerate(clients, 1):
+        mark = f"{GREEN}found{OFF}" if present else f"{DIM}not detected{OFF}"
+        print(f"  {i}. {label}  [{mark}]")
+    print(f"  {DIM}Only Claude Desktop and Claude Code are tested; the rest are")
+    print(f"  best-effort from each project's documented config location.{OFF}")
+
+    suggestion = ",".join(str(i) for i, (_, _, p) in enumerate(clients, 1) if p) or "none"
+    raw = input(f"\n  numbers, comma-separated, or 'none' [{suggestion}]: ").strip().lower()
+    if raw == "none":
+        return []
+    if not raw:
+        return detected
+    picked = []
+    for part in raw.replace(" ", "").split(","):
+        if part.isdigit() and 1 <= int(part) <= len(clients):
+            picked.append(clients[int(part) - 1][0])
+    return picked
+
+
+def ask_mode() -> str:
+    index = ask_choice(
+        "Which build should the client launch?",
+        ["the published package  (uvx freecad-mcp)",
+         f"this checkout  (uv --directory {PROJECT})"],
+        0,
+    )
+    return "released" if index == 0 else "dev"
 
 
 # ------------------------------------------------------------------------ checks
@@ -375,6 +576,11 @@ def main() -> int:
     parser.add_argument("--uninstall", action="store_true", help="remove the addon and the client entry")
     parser.add_argument("--mod-dir", type=Path, help="install into this Mod directory explicitly")
     parser.add_argument("--no-client", action="store_true", help="install the addon only")
+    parser.add_argument("--client", action="append", metavar="NAME",
+                        help="configure this client (repeatable): "
+                             + ", ".join(k for k, _, _ in all_clients()))
+    parser.add_argument("-y", "--yes", action="store_true",
+                        help="take the defaults; ask nothing (for scripts)")
     args = parser.parse_args()
 
     print(f"{BOLD}FreeCAD MCP installer{OFF}  {DIM}({PROJECT}){OFF}")
@@ -403,19 +609,35 @@ def main() -> int:
         print("\nRestart FreeCAD and Claude Desktop to finish.")
         return 0
 
-    if not (mod_dir.exists() or args.mod_dir):
+    asking = interactive() and not args.yes and not args.dry_run and not args.mod_dir
+    if asking:
+        mod_dir = ask_mod_dir(mod_dir, probed)
+    elif not (mod_dir.exists() or args.mod_dir):
         warn(f"{mod_dir} does not exist yet; it will be created")
         info("if FreeCAD keeps its modules elsewhere, cancel and pass --mod-dir")
 
     if not install_addon(mod_dir, args.symlink, args.dry_run):
         return 1
 
-    if not args.no_client:
-        if not configure_client("dev" if args.dev else "released", args.dry_run):
-            return 1
+    if args.no_client:
+        clients, mode = [], "released"
+    elif args.client:
+        clients, mode = args.client, ("dev" if args.dev else "released")
+    elif asking:
+        clients = ask_clients()
+        mode = ask_mode() if clients else "released"
+    else:
+        clients = [k for k, _, present in all_clients() if present and k == "claude-desktop"]
+        mode = "dev" if args.dev else "released"
+
+    if clients and not configure_clients(clients, mode, args.dry_run):
+        return 1
+    if not clients and not args.no_client:
+        info("no MCP client configured")
 
     if not args.dry_run:
         run_checks(mod_dir)
+    report_unwritable_clients()
 
     head("Two restarts are needed")
     print("  1. FreeCAD          -- it loads addons once at startup")
