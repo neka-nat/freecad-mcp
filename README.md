@@ -60,13 +60,17 @@ Inspection is never gated — refusing `get_objects` would leave a client unable
 call was refused. Enforcement lives in the **addon**, not the MCP server, because the addon is
 the side that cannot be bypassed by another client, a script, or a remote machine.
 
+![The MCP Server Settings dialog: live server status and bound address, auto-start, remote connections with the allowed-IP field, and the five capability checkboxes with the code-execution warning](screenshots/settings-dialog.png)
+
+*The gear dialog. The allowed-IP field is greyed until remote connections are enabled, and the
+orange warning appears only when code execution is ticked — a permanent warning is one you learn
+to ignore.*
+
 ### A rebuilt FreeCAD interface
 
 Always visible from **any** workbench, at the far left of the top toolbar:
 
-```
-[green dot] MCP On/Off    [gear]    [folder]
-```
+![The MCP toolbar: a green status dot labelled MCP On/Off, a gear for settings, and a folder for the document location](screenshots/toolbar.png)
 
 - **MCP On/Off** — one button replacing the old always-enabled Start/Stop pair. Red = stopped,
   green = running, amber = shutting down. Three states because the stop drains on a background
