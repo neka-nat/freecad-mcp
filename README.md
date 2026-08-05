@@ -100,6 +100,20 @@ writes to a temp file and `os.replace`s it into position.
 
 ## Install
 
+```bash
+python3 install.py            # install the addon + wire up Claude Desktop
+python3 install.py --check    # report what is installed, change nothing
+```
+
+It finds the right `Mod` directory for your FreeCAD version, backs up anything it replaces,
+*merges* into `claude_desktop_config.json` without disturbing other MCP servers, and then tells
+you what it found — including the two failure modes that are otherwise invisible: an installed
+addon older than the source, and a client pointing at the published package while you edit a
+checkout. `--symlink --dev` sets up for development, `--uninstall` reverses it.
+
+<details>
+<summary>Or do it by hand</summary>
+
 ### 1. The FreeCAD addon
 
 Copy `addon/FreeCADMCP` into FreeCAD's `Mod` directory:
@@ -134,6 +148,8 @@ This checkout:
 ```
 
 Restart the MCP client afterwards — it launches the server at startup.
+
+</details>
 
 Options: `--only-text-feedback` suppresses all screenshots; `--host <ip>` connects to FreeCAD on
 another machine (enable **Remote Connections** and set the allowed IPs in the gear dialog first).
