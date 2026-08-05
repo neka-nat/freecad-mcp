@@ -2,6 +2,8 @@
 
 # FreeCAD MCP
 
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2Fneka-nat%2Ffreecad-mcp.svg)](https://mcptoplist.com/server/glama%2Fneka-nat%2Ffreecad-mcp)
+
 This repository is a FreeCAD MCP that allows you to control FreeCAD from Claude Desktop.
 
 ## Demo
