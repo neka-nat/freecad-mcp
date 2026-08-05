@@ -639,11 +639,15 @@ def main() -> int:
         run_checks(mod_dir)
     report_unwritable_clients()
 
-    head("Two restarts are needed")
-    print("  1. FreeCAD          -- it loads addons once at startup")
-    print("     then: MCP toolbar (top left) -> click the dot to start the server,")
-    print("     or open the gear and tick auto-start")
-    print("  2. Claude Desktop   -- it launches the MCP server at startup")
+    head("Installed. Nothing left to copy by hand.")
+    print(f"  The addon is in place at {mod_dir / ADDON_NAME}")
+    if clients:
+        print(f"  Client config written for: {', '.join(clients)}")
+    print("\n  Two restarts are all that remain:")
+    print("   1. FreeCAD          -- it loads addons once at startup")
+    print("      then: MCP toolbar (top left) -> click the dot to start the server,")
+    print("      or open the gear and tick auto-start")
+    print("   2. your MCP client  -- it launches the MCP server at startup")
     print(f"\n{DIM}Check anytime with:  python3 install.py --check{OFF}")
     return 0
 

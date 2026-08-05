@@ -100,38 +100,57 @@ writes to a temp file and `os.replace`s it into position.
 
 ## Install
 
+Two ways. **Pick one** — they do the same thing.
+
+### Easy install — the script
+
+Clone this repository, then:
+
 ```bash
-python3 install.py            # install the addon + wire up Claude Desktop
+python3 install.py            # does everything
 python3 install.py --check    # report what is installed, change nothing
 ```
+
+**That is the whole installation.** The script copies `addon/FreeCADMCP` into FreeCAD's `Mod`
+directory *for you* and writes the MCP client config. You do **not** copy anything by hand
+afterwards — skip the manual section entirely. Restart FreeCAD and your MCP client and you are
+done.
 
 It asks where the addon should go, offers the MCP clients it can find, backs up anything it
 replaces, and *merges* into each config without disturbing other servers. Then it reports the
 failure modes that are otherwise invisible: an installed addon older than the source, a client
 pointing at the published package while you edit a checkout, a lost settings file, and whether
-anything is listening on port 9875. `--symlink --dev` sets up for development, `--uninstall`
-reverses it, `-y` takes the defaults without asking.
+anything is listening on port 9875.
 
-> ### ⚠️ Only Claude is tested
+| Flag | |
+|---|---|
+| `--check` | report only, change nothing |
+| `--symlink --dev` | development: symlink the addon, point the client at this checkout |
+| `--client NAME` | configure a specific client (repeatable) |
+| `--dry-run` | show the plan without writing |
+| `-y` | take the defaults, ask nothing |
+| `--uninstall` | reverse it |
+
+> #### ⚠️ Only Claude is tested
 >
 > This fork was developed and verified against **Claude Desktop** and **Claude Code**. Those are
 > the two the installer writes with confidence.
 >
 > **Cursor, Gemini CLI and Codex CLI are offered as-is.** Their config locations come from each
 > project's own documentation and share the `mcpServers` shape (Codex uses TOML, so its own
-> `codex mcp add` is used instead of writing the file). None of them has been tested against
-> this server end to end — reports welcome.
+> `codex mcp add` is used instead of writing the file). None has been tested against this server
+> end to end — reports welcome.
 >
 > **ChatGPT desktop** adds connectors through the app's settings, so there is no file to write.
 > **Grok** is not an MCP client: the "grok mcp" projects are MCP *servers* wrapping the Grok
 > CLI, which is the opposite direction — there is nothing to configure.
 
-<details>
-<summary>Or do it by hand</summary>
+### Manual install
 
-### 1. The FreeCAD addon
+Only if you would rather not run the script. These are the same two steps it performs — if you
+used the script, you are already done and should skip this.
 
-Copy `addon/FreeCADMCP` into FreeCAD's `Mod` directory:
+**1. The FreeCAD addon.** Copy `addon/FreeCADMCP` into FreeCAD's `Mod` directory:
 
 | OS | Path |
 |---|---|
@@ -144,18 +163,20 @@ Copy `addon/FreeCADMCP` into FreeCAD's `Mod` directory:
 cp -r addon/FreeCADMCP ~/Library/Application\ Support/FreeCAD/v1-1/Mod/
 ```
 
+The `v1-0` / `v1-1` split matters: FreeCAD 1.1 silently ignores an addon left in the 1.0
+directory, and the only symptom is that the toolbar never appears.
+
 Restart FreeCAD. The **MCP** toolbar appears at the top left; click **MCP On/Off** to start the
 server, or enable auto-start from the gear.
 
-### 2. The MCP server
-
-Released build:
+**2. The MCP server.** Add it to your client's config — for Claude Desktop that is
+`~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {"mcpServers": {"freecad": {"command": "uvx", "args": ["freecad-mcp"]}}}
 ```
 
-This checkout:
+Or, to run this checkout instead of the published package:
 
 ```json
 {"mcpServers": {"freecad": {"command": "uv",
@@ -164,10 +185,10 @@ This checkout:
 
 Restart the MCP client afterwards — it launches the server at startup.
 
-</details>
+### Options
 
-Options: `--only-text-feedback` suppresses all screenshots; `--host <ip>` connects to FreeCAD on
-another machine (enable **Remote Connections** and set the allowed IPs in the gear dialog first).
+`--only-text-feedback` suppresses all screenshots; `--host <ip>` connects to FreeCAD on another
+machine (enable **Remote Connections** and set the allowed IPs in the gear dialog first).
 
 ---
 
