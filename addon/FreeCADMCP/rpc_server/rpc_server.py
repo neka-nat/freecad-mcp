@@ -20,6 +20,7 @@ from rpc_server.commands import (
 from rpc_server.fem_executor import run_fem_analysis as _run_fem_analysis
 from rpc_server import file_io
 from rpc_server import sketch_builder
+from rpc_server import techdraw_builder
 from rpc_server.gui_dispatch import (
     cleanup_waker,
     dispatch_to_gui,
@@ -305,6 +306,20 @@ class FreeCADRPC:
             "allow_document_edit",
             lambda: sketch_builder.create_sketch_gui(
                 doc_name, sketch_name, geometry, constraints, body_name, plane),
+        )
+
+    def create_drawing_page(self, doc_name, page_name, source_objects=None,
+                            views=None, template=None):
+        return self._file_op(
+            "allow_document_edit",
+            lambda: techdraw_builder.create_drawing_page_gui(
+                doc_name, page_name, source_objects, views, template),
+        )
+
+    def add_dimensions(self, doc_name, page_name, dimensions):
+        return self._file_op(
+            "allow_document_edit",
+            lambda: techdraw_builder.add_dimensions_gui(doc_name, page_name, dimensions),
         )
 
     def get_objects(self, doc_name):

@@ -96,6 +96,16 @@ class FreeCADConnection:
         return self.server.create_sketch(doc_name, sketch_name, geometry,
                                          constraints or [], body_name, plane)
 
+    def create_drawing_page(self, doc_name: str, page_name: str,
+                            source_objects: list | None = None,
+                            views: list | None = None,
+                            template: str | None = None) -> dict[str, Any]:
+        return self.server.create_drawing_page(doc_name, page_name,
+                                               source_objects or [], views or [], template)
+
+    def add_dimensions(self, doc_name: str, page_name: str, dimensions: list) -> dict[str, Any]:
+        return self.server.add_dimensions(doc_name, page_name, dimensions)
+
     def export_objects(self, doc_name: str, obj_names: list[str], path: str,
                        overwrite: bool = False) -> dict[str, Any]:
         return self.server.export_objects(doc_name, obj_names, path, overwrite)

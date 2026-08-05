@@ -14,8 +14,13 @@ that were missing for real parametric modelling, and rebuilds the FreeCAD-side u
 
 ![The L-bracket below, modelled entirely through MCP tool calls: a JSON sketch, a Pad, and three M8x1.25 threaded holes](screenshots/threaded-bracket.png)
 
-*Built with four tool calls and no hand-written Python: `create_sketch` → `create_object` (Pad) →
-`create_sketch` → `create_object` (threaded Hole). Final volume 15735.72 mm³.*
+*Built with no hand-written Python: `create_sketch` → `create_object` (Pad) → `create_sketch` →
+`create_object` (M8×1.25 threaded Hole). Final volume 15735.72 mm³.*
+
+![The same bracket as an A4 drawing: top and front views with 25, 40, 20, 60 and 10 dimensions and a 3x M8x1.25 thread callout](screenshots/drawing.png)
+
+*…and dimensioned the same way: `create_drawing_page` → `add_dimensions`, again with no
+hand-written Python.*
 
 ---
 
@@ -30,6 +35,7 @@ that were missing for real parametric modelling, and rebuilds the FreeCAD-side u
 | **C2** | Body membership is a *method*, not a property | 71 PartDesign types were unreachable: `body.Group` cannot be set over the wire, and a feature created outside its Body fails PartDesign's scope check. |
 | **C3** | `Part.LineSegment` cannot cross XML-RPC | Sketches — the basis of parametric CAD — could only be built with `execute_code`. |
 | **A1** | Screenshots gated on `view.saveImage` | TechDraw pages and spreadsheets were **invisible** to the model. |
+| **C4** | `page.addView()` is a method; `References2D` holds live objects | 45 TechDraw types were creatable and none usable — drawings needed `execute_code` throughout. |
 
 ### Tools added
 
@@ -38,6 +44,10 @@ that were missing for real parametric modelling, and rebuilds the FreeCAD-side u
   a Pad silently produces nothing.
 - **`create_object` gains `body_name`** — creates a feature *inside* a PartDesign Body, advancing
   its Tip. Sketch-free primitives (`AdditiveBox`, `SubtractiveCylinder`, …) need no sketch at all.
+- **`create_drawing_page` + `add_dimensions`** — TechDraw pages, views and dimensions from JSON.
+  Dimensions are placed by **coordinate**, not vertex index: `"between": [[-30,-20],[30,-20]]`
+  snaps to the nearest projected corner, because indices are an accident of projection order but
+  you know where you put the corner.
 - **File I/O** — `save_document`, `save_document_as`, `open_document`, `close_document`,
   `export_objects`, `import_file`. Format dispatch goes through FreeCAD's own registry, so all
   ~53 registered formats work (STEP, STL, BREP, OBJ, DXF, 3MF …) with no hand-written table.
@@ -199,6 +209,7 @@ machine (enable **Remote Connections** and set the allowed IPs in the gear dialo
 | `create_document` · `list_documents` · `open_document` · `save_document` · `save_document_as` · `close_document` | Document lifecycle |
 | `create_object` · `edit_object` · `delete_object` | Objects, with `body_name` for PartDesign |
 | **`create_sketch`** | Sketcher geometry + constraints from JSON |
+| **`create_drawing_page`** · **`add_dimensions`** | TechDraw pages, views and dimensions from JSON |
 | `export_objects` · `import_file` · `insert_part_from_library` | Files, ~53 formats |
 | `get_objects` · `get_object` · `get_view` · `get_parts_list` | Inspection; `get_view` captures 3D, TechDraw **and** spreadsheets |
 | `execute_code` · `execute_code_async` | The escape hatch, gated off by default |

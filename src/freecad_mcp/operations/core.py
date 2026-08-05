@@ -248,6 +248,27 @@ def create_sketch_operation(
     )
 
 
+def create_drawing_page_operation(
+    freecad: FreeCADConnection, doc_name: str, page_name: str,
+    source_objects: list | None = None, views: list | None = None,
+    template: str | None = None,
+) -> ToolResponse:
+    return _file_response(
+        "create drawing page",
+        lambda: freecad.create_drawing_page(doc_name, page_name, source_objects,
+                                            views, template),
+    )
+
+
+def add_dimensions_operation(
+    freecad: FreeCADConnection, doc_name: str, page_name: str, dimensions: list,
+) -> ToolResponse:
+    return _file_response(
+        "add dimensions",
+        lambda: freecad.add_dimensions(doc_name, page_name, dimensions),
+    )
+
+
 def export_objects_operation(
     freecad: FreeCADConnection,
     doc_name: str,

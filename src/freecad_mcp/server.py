@@ -17,6 +17,8 @@ from .operations import (
     close_document_operation,
     create_document_operation,
     create_object_operation,
+    add_dimensions_operation,
+    create_drawing_page_operation,
     create_sketch_operation,
     delete_object_operation,
     edit_object_operation,
@@ -747,6 +749,104 @@ def create_sketch(
     return create_sketch_operation(
         get_freecad_connection(), doc_name, sketch_name, geometry,
         constraints, body_name, plane,
+    )
+
+
+@mcp.tool(structured_output=False)
+def create_drawing_page(
+    ctx: Context,
+    doc_name: str,
+    page_name: str,
+    source_objects: list[str] | None = None,
+    views: list[dict[str, Any]] | None = None,
+    template: str | None = None,
+) -> list[TextContent]:
+    """Create a TechDraw drawing page with one or more views of a solid.
+
+    Use this instead of execute_code for drawings. Follow it with add_dimensions.
+
+    Args:
+        doc_name: Document holding the solid.
+        page_name: Name for the new page.
+        source_objects: Objects to draw. Omit to use every visible solid.
+        views: One entry per view:
+            {"name": "TopView", "direction": "Top", "scale": 2.0, "x": 110, "y": 150}
+            direction is Top, Bottom, Front, Rear, Left, Right or Isometric.
+            x/y position the view on the sheet in millimetres. Omit views entirely
+            for a single Front view.
+        template: Template file name or fragment, e.g. "A4_Landscape_TD" or
+            "A3_Landscape". Omit for an A4 landscape sheet.
+
+    Returns:
+        The page name, and for each view its **projected vertices and circles**
+        with their coordinates. Feed those straight into add_dimensions -- that is
+        why they are returned, so you do not have to guess what the projection
+        produced.
+
+        Coordinates are in the view's own frame, **centred on the part**: a
+        60x40 part spans -30..30 by -20..20, NOT 0..60 by 0..40.
+
+        A view may come back with `geometry_ready: false` and an empty vertex
+        list, plus a note. That does NOT mean the view is empty: TechDraw builds
+        projections on the Qt event loop, which cannot turn while this call is
+        running, so a complex view is often still projecting. Carry on and call
+        add_dimensions with the coordinates you already know from the model --
+        it runs later, waits for the geometry, and snaps to them.
+
+    Examples:
+        ```json
+        {
+            "doc_name": "Bracket", "page_name": "Drawing",
+            "source_objects": ["Body"],
+            "views": [
+                {"name": "TopView",   "direction": "Top",   "scale": 2, "x": 110, "y": 150},
+                {"name": "FrontView", "direction": "Front", "scale": 2, "x": 110, "y": 95}
+            ]
+        }
+        ```
+    """
+    return create_drawing_page_operation(
+        get_freecad_connection(), doc_name, page_name, source_objects, views, template
+    )
+
+
+@mcp.tool(structured_output=False)
+def add_dimensions(
+    ctx: Context,
+    doc_name: str,
+    page_name: str,
+    dimensions: list[dict[str, Any]],
+) -> list[TextContent]:
+    """Add dimensions to views on a TechDraw page.
+
+    Say WHERE to measure using coordinates from create_drawing_page's reply --
+    they are snapped to the nearest projected vertex or circle. Vertex indices are
+    an accident of projection order, so coordinates are the reliable way to ask.
+
+    Args:
+        doc_name: The document.
+        page_name: The page holding the views.
+        dimensions: One entry per dimension:
+
+            linear -- "between" takes two [x, y] points:
+              {"view": "TopView", "type": "DistanceX",
+               "between": [[-30,-20],[30,-20]], "x": 0, "y": -32}
+
+            diameter or radius -- "circle_at" takes the circle centre:
+              {"view": "TopView", "type": "Diameter",
+               "circle_at": [-18,-10], "x": -46, "y": 22, "text": "3x M8x1.25"}
+
+            type: DistanceX, DistanceY, Distance, Diameter, Radius, Angle.
+            x/y place the dimension text on the sheet, in millimetres relative to
+            its view. text replaces the measured value with literal text, for
+            callouts like a thread designation.
+            vertices: [a, b] and edge: N still work if you know the indices.
+
+    Returns:
+        One entry per dimension with its name, type and whether it computed.
+    """
+    return add_dimensions_operation(
+        get_freecad_connection(), doc_name, page_name, dimensions
     )
 
 
