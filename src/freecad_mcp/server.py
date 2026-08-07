@@ -14,20 +14,29 @@ from mcp.types import ImageContent, TextContent
 
 from .freecad_client import FreeCADConnection
 from .operations import (
+    close_document_operation,
     create_document_operation,
     create_object_operation,
+    add_dimensions_operation,
+    create_drawing_page_operation,
+    create_sketch_operation,
     delete_object_operation,
     edit_object_operation,
     execute_code_async_operation,
     execute_code_operation,
+    export_objects_operation,
     get_object_operation,
     get_objects_operation,
     get_parts_list_operation,
     get_view_operation,
+    import_file_operation,
     insert_part_from_library_operation,
     list_documents_operation,
+    open_document_operation,
     reload_document_operation,
     run_fem_analysis_operation,
+    save_document_as_operation,
+    save_document_operation,
 )
 from .prompt_text import ASSET_CREATION_STRATEGY
 from .server_state import ServerState
@@ -118,6 +127,7 @@ def create_object(
     obj_properties: dict[str, Any] = None,
     include_screenshot: bool = True,
     view_name: ViewName = "Isometric",
+    body_name: str | None = None,
 ) -> list[TextContent | ImageContent]:
     """Create a new object in FreeCAD.
     Object type is starts with "Part::" or "Draft::" or "PartDesign::" or "Fem::".
@@ -127,11 +137,18 @@ def create_object(
         obj_type: The type of the object to create (e.g. 'Part::Box', 'Part::Cylinder', 'Draft::Circle', 'PartDesign::Body', etc.).
         obj_name: The name of the object to create.
         obj_properties: The properties of the object to create.
+        body_name: The name of an existing PartDesign::Body to create this feature
+            inside. REQUIRED for every PartDesign feature except the Body itself.
+            A PartDesign feature created without it lands outside any Body, computes
+            to nothing, and the call fails. Body membership cannot be set afterwards
+            through obj_properties -- it is not a property.
         include_screenshot: Whether to return a screenshot of the model (default True).
             Set to False to save tokens when visual feedback is not needed,
             e.g. for intermediate steps in a longer sequence of changes.
         view_name: The view orientation of the returned screenshot (default "Isometric").
             Pick the view that best shows the change being made.
+            Applies to the 3D view only -- when the active window is a TechDraw page or
+            a spreadsheet it is ignored, since there is no 3D orientation to apply.
 
     Returns:
         A message indicating the success or failure of the object creation and a screenshot of the object.
@@ -176,6 +193,38 @@ def create_object(
             "obj_type": "Draft::Circle",
         }
         ```
+
+        PartDesign: create the Body first, then every feature WITH body_name.
+        Sketch-free primitives (Additive/Subtractive Box, Cylinder, Sphere, Cone,
+        Torus, Prism, Wedge) need no sketch and are the simplest way to build a
+        solid. Each feature is applied to the running result and advances the
+        Body's Tip, so order matters.
+        ```json
+        {"doc_name": "Doc", "obj_name": "Body", "obj_type": "PartDesign::Body"}
+        ```
+        ```json
+        {
+            "doc_name": "Doc",
+            "obj_name": "Base",
+            "obj_type": "PartDesign::AdditiveBox",
+            "body_name": "Body",
+            "obj_properties": {"Length": 20, "Width": 10, "Height": 5}
+        }
+        ```
+        ```json
+        {
+            "doc_name": "Doc",
+            "obj_name": "Hole",
+            "obj_type": "PartDesign::SubtractiveCylinder",
+            "body_name": "Body",
+            "obj_properties": {"Radius": 3, "Height": 20}
+        }
+        ```
+
+        For a sketch-based feature (Pad, Pocket, Revolution, ...) the sketch must
+        also live in the same Body, and its profile must be a CLOSED wire. Sketch
+        geometry cannot be sent through this tool -- use execute_code to add the
+        geometry and constraints, then create the Pad here with body_name set.
 
         If you want to create a FEM analysis, you can use the following data.
         ```json
@@ -250,6 +299,7 @@ def create_object(
         obj_properties,
         include_screenshot,
         view_name,
+        body_name,
     )
 
 
@@ -274,6 +324,8 @@ def edit_object(
             e.g. for intermediate steps in a longer sequence of changes.
         view_name: The view orientation of the returned screenshot (default "Isometric").
             Pick the view that best shows the change being made.
+            Applies to the 3D view only -- when the active window is a TechDraw page or
+            a spreadsheet it is ignored, since there is no 3D orientation to apply.
 
     Returns:
         A message indicating the success or failure of the object editing and a screenshot of the object.
@@ -307,6 +359,8 @@ def delete_object(
             e.g. for intermediate steps in a longer sequence of changes.
         view_name: The view orientation of the returned screenshot (default "Isometric").
             Pick the view that best shows the change being made.
+            Applies to the 3D view only -- when the active window is a TechDraw page or
+            a spreadsheet it is ignored, since there is no 3D orientation to apply.
 
     Returns:
         A message indicating the success or failure of the object deletion and a screenshot of the object.
@@ -377,6 +431,8 @@ def execute_code(
             printed output, or intermediate steps in a longer sequence of changes.
         view_name: The view orientation of the returned screenshot (default "Isometric").
             Pick the view that best shows the change being made.
+            Applies to the 3D view only -- when the active window is a TechDraw page or
+            a spreadsheet it is ignored, since there is no 3D orientation to apply.
 
     Returns:
         A message indicating the success or failure of the code execution, the output of the code execution, and a screenshot of the object.
@@ -398,10 +454,14 @@ def get_view(
     height: int | None = None,
     focus_object: str | None = None,
 ) -> list[ImageContent | TextContent]:
-    """Get a screenshot of the active view.
+    """Get a screenshot of whatever window is currently active in FreeCAD.
+
+    Captures the 3D view, a TechDraw drawing page, or a spreadsheet -- whichever
+    the user last opened. To see a drawing, open its page in FreeCAD first (the
+    page must be the active window), then call this.
 
     Args:
-        view_name: The name of the view to get the screenshot of.
+        view_name: The 3D view orientation to apply before capturing.
         The following views are available:
         - "Isometric"
         - "Front"
@@ -412,12 +472,21 @@ def get_view(
         - "Bottom"
         - "Dimetric"
         - "Trimetric"
+        Ignored when the active window is a TechDraw page or a spreadsheet, since
+        there is no 3D orientation to apply -- those are captured as they are.
         width: The width of the screenshot in pixels. If not specified, uses the viewport width.
         height: The height of the screenshot in pixels. If not specified, uses the viewport height.
         focus_object: The name of the object to focus on. If not specified, fits all objects in the view.
+            3D view only; ignored for drawings and spreadsheets.
 
     Returns:
-        A screenshot of the active view.
+        A screenshot of the active window.
+
+    Notes:
+        A TechDraw page is captured by rendering its contents, so the image does
+        not depend on how the page is zoomed or scrolled on screen, and calling
+        this never changes what the user is looking at. A spreadsheet is captured
+        as displayed, so it does reflect the current scroll position.
     """
     return get_view_operation(get_freecad_connection(), view_name, width, height, focus_object)
 
@@ -438,6 +507,8 @@ def insert_part_from_library(
             e.g. for intermediate steps in a longer sequence of changes.
         view_name: The view orientation of the returned screenshot (default "Isometric").
             Pick the view that best shows the change being made.
+            Applies to the 3D view only -- when the active window is a TechDraw page or
+            a spreadsheet it is ignored, since there is no 3D orientation to apply.
 
     Returns:
         A message indicating the success or failure of the part insertion and a screenshot of the object.
@@ -466,6 +537,8 @@ def get_objects(
         include_screenshot: Whether to return a screenshot of the document (default True).
             Set to False to save tokens when only the object data is needed.
         view_name: The view orientation of the returned screenshot (default "Isometric").
+            Applies to the 3D view only -- when the active window is a TechDraw page or
+            a spreadsheet it is ignored, since there is no 3D orientation to apply.
 
     Returns:
         A list of objects in the document and a screenshot of the document.
@@ -496,6 +569,8 @@ def get_object(
         include_screenshot: Whether to return a screenshot of the document (default True).
             Set to False to save tokens when only the object data is needed.
         view_name: The view orientation of the returned screenshot (default "Isometric").
+            Applies to the 3D view only -- when the active window is a TechDraw page or
+            a spreadsheet it is ignored, since there is no 3D orientation to apply.
 
     Returns:
         The object and a screenshot of the object.
@@ -593,6 +668,8 @@ def run_fem_analysis(
         include_screenshot: Whether to return a screenshot of the model (default True).
             Set to False to save tokens when only the numeric results are needed.
         view_name: The view orientation of the returned screenshot (default "Isometric").
+            Applies to the 3D view only -- when the active window is a TechDraw page or
+            a spreadsheet it is ignored, since there is no 3D orientation to apply.
     """
     return run_fem_analysis_operation(
         get_freecad_connection(),
@@ -603,6 +680,297 @@ def run_fem_analysis(
         include_screenshot,
         view_name,
     )
+
+
+@mcp.tool(structured_output=False)
+def create_sketch(
+    ctx: Context,
+    doc_name: str,
+    sketch_name: str,
+    geometry: list[dict[str, Any]],
+    constraints: list[dict[str, Any]] | None = None,
+    body_name: str | None = None,
+    plane: str = "XY",
+) -> list[TextContent]:
+    """Create a Sketcher sketch from geometry described as JSON.
+
+    Use this instead of execute_code for sketches. A sketch made here can then be
+    the Profile of a PartDesign Pad, Pocket, Revolution and so on.
+
+    Coordinates are 2D [x, y] -- the sketch has its own plane.
+
+    GEOMETRY (each entry may also set "construction": true)
+        {"type": "polyline", "points": [[0,0],[60,0],[60,20]], "closed": true}
+        {"type": "rectangle", "corner": [0,0], "width": 60, "height": 40}
+        {"type": "line", "start": [0,0], "end": [60,0]}
+        {"type": "circle", "center": [12,10], "radius": 4}
+        {"type": "arc", "center": [30,10], "radius": 6, "start_angle": 0, "end_angle": 180}
+        {"type": "ellipse", "center": [0,0], "major_radius": 8, "minor_radius": 4, "angle": 0}
+        {"type": "point", "at": [5,5]}
+
+    PREFER polyline and rectangle for profiles: they add the coincident
+    constraints between consecutive segments for you. An unclosed wire is the
+    usual reason a Pad computes to nothing, and stitching one by hand is where
+    that goes wrong.
+
+    CONSTRAINTS reference geometry by index in creation order. A polyline of N
+    points creates N segments (N-1 if open), each taking its own index -- the
+    reply's geometry_index maps every spec to the indices it produced. Use -1 to
+    mean the sketch origin. Point names are "start", "end" and "center".
+
+        {"type": "Horizontal", "first": 0}
+        {"type": "Coincident", "first": 0, "first_pos": "start",
+                               "second": -1, "second_pos": "start"}
+        {"type": "DistanceX", "first": 0, "first_pos": "start",
+                              "second": 0, "second_pos": "end", "value": 60}
+        {"type": "Radius", "first": 0, "value": 4}
+        {"type": "Parallel", "first": 0, "second": 2}
+
+    Available: Horizontal, Vertical, Block, Coincident, PointOnObject, Parallel,
+    Perpendicular, Equal, Tangent, Symmetric, Distance, DistanceX, DistanceY,
+    Angle (radians), Radius, Diameter, Weight. Names are case-sensitive.
+
+    Args:
+        doc_name: Document to create the sketch in.
+        sketch_name: Name for the new sketch.
+        geometry: The geometry specs, as above.
+        constraints: Optional constraint specs.
+        body_name: PartDesign::Body to create the sketch inside. Required if the
+            sketch will feed a PartDesign feature -- the feature and its profile
+            must live in the same Body.
+        plane: "XY" (default), "XZ" or "YZ".
+
+    Returns:
+        The created name, the geometry index map, the constraint and edge counts,
+        the remaining degrees of freedom, whether it is fully constrained, and how
+        many wires came out closed. Check closed_wires before padding: 0 means no
+        usable profile.
+    """
+    return create_sketch_operation(
+        get_freecad_connection(), doc_name, sketch_name, geometry,
+        constraints, body_name, plane,
+    )
+
+
+@mcp.tool(structured_output=False)
+def create_drawing_page(
+    ctx: Context,
+    doc_name: str,
+    page_name: str,
+    source_objects: list[str] | None = None,
+    views: list[dict[str, Any]] | None = None,
+    template: str | None = None,
+) -> list[TextContent]:
+    """Create a TechDraw drawing page with one or more views of a solid.
+
+    Use this instead of execute_code for drawings. Follow it with add_dimensions.
+
+    Args:
+        doc_name: Document holding the solid.
+        page_name: Name for the new page.
+        source_objects: Objects to draw. Omit to use every visible solid.
+        views: One entry per view:
+            {"name": "TopView", "direction": "Top", "scale": 2.0, "x": 110, "y": 150}
+            direction is Top, Bottom, Front, Rear, Left, Right or Isometric.
+            x/y position the view on the sheet in millimetres. Omit views entirely
+            for a single Front view.
+        template: Template file name or fragment, e.g. "A4_Landscape_TD" or
+            "A3_Landscape". Omit for an A4 landscape sheet.
+
+    Returns:
+        The page name, and for each view its **projected vertices and circles**
+        with their coordinates. Feed those straight into add_dimensions -- that is
+        why they are returned, so you do not have to guess what the projection
+        produced.
+
+        Coordinates are in the view's own frame, **centred on the part**: a
+        60x40 part spans -30..30 by -20..20, NOT 0..60 by 0..40.
+
+        A view may come back with `geometry_ready: false` and an empty vertex
+        list, plus a note. That does NOT mean the view is empty: TechDraw builds
+        projections on the Qt event loop, which cannot turn while this call is
+        running, so a complex view is often still projecting. Carry on and call
+        add_dimensions with the coordinates you already know from the model --
+        it runs later, waits for the geometry, and snaps to them.
+
+    Examples:
+        ```json
+        {
+            "doc_name": "Bracket", "page_name": "Drawing",
+            "source_objects": ["Body"],
+            "views": [
+                {"name": "TopView",   "direction": "Top",   "scale": 2, "x": 110, "y": 150},
+                {"name": "FrontView", "direction": "Front", "scale": 2, "x": 110, "y": 95}
+            ]
+        }
+        ```
+    """
+    return create_drawing_page_operation(
+        get_freecad_connection(), doc_name, page_name, source_objects, views, template
+    )
+
+
+@mcp.tool(structured_output=False)
+def add_dimensions(
+    ctx: Context,
+    doc_name: str,
+    page_name: str,
+    dimensions: list[dict[str, Any]],
+) -> list[TextContent]:
+    """Add dimensions to views on a TechDraw page.
+
+    Say WHERE to measure using coordinates from create_drawing_page's reply --
+    they are snapped to the nearest projected vertex or circle. Vertex indices are
+    an accident of projection order, so coordinates are the reliable way to ask.
+
+    Args:
+        doc_name: The document.
+        page_name: The page holding the views.
+        dimensions: One entry per dimension:
+
+            linear -- "between" takes two [x, y] points:
+              {"view": "TopView", "type": "DistanceX",
+               "between": [[-30,-20],[30,-20]], "x": 0, "y": -32}
+
+            diameter or radius -- "circle_at" takes the circle centre:
+              {"view": "TopView", "type": "Diameter",
+               "circle_at": [-18,-10], "x": -46, "y": 22, "text": "3x M8x1.25"}
+
+            type: DistanceX, DistanceY, Distance, Diameter, Radius, Angle.
+            x/y place the dimension text on the sheet, in millimetres relative to
+            its view. text replaces the measured value with literal text, for
+            callouts like a thread designation.
+            vertices: [a, b] and edge: N still work if you know the indices.
+
+    Returns:
+        One entry per dimension with its name, type and whether it computed.
+    """
+    return add_dimensions_operation(
+        get_freecad_connection(), doc_name, page_name, dimensions
+    )
+
+
+@mcp.tool(structured_output=False)
+def export_objects(
+    ctx: Context,
+    doc_name: str,
+    path: str,
+    obj_names: list[str] | None = None,
+    overwrite: bool = False,
+) -> list[TextContent]:
+    """Export objects to a file. The file extension selects the format.
+
+    Dispatches through FreeCAD's own handler registry, so every format FreeCAD
+    can write is available: STEP, IGES, BREP (CAD interchange); STL, OBJ, PLY,
+    3MF, AMF, OFF (mesh and 3D printing); DXF, SVG (2D); and others.
+
+    Args:
+        doc_name: Document holding the objects.
+        path: Destination file. Use an absolute path, or ~ for your home
+            directory; a bare filename is resolved against FreeCAD's working
+            directory, which is rarely what you want. The extension decides the
+            format -- '.step' writes STEP, '.stl' writes a mesh.
+        obj_names: Objects to export. Omit or pass null to export everything in
+            the document that has geometry.
+        overwrite: False (default) refuses to replace an existing file. Pass
+            True only when the user has asked to overwrite.
+
+    Returns:
+        The path written, the handler FreeCAD used, the objects exported and the
+        file size, or the reason it failed.
+
+    Examples:
+        ```json
+        {"doc_name": "Doc", "path": "~/parts/bracket.step"}
+        ```
+        ```json
+        {"doc_name": "Doc", "path": "~/print/bracket.stl", "obj_names": ["Body"]}
+        ```
+    """
+    return export_objects_operation(
+        get_freecad_connection(), doc_name, obj_names, path, overwrite
+    )
+
+
+@mcp.tool(structured_output=False)
+def save_document(ctx: Context, doc_name: str) -> list[TextContent]:
+    """Save a document to the file it was opened from or last saved to.
+
+    Fails if the document has never been saved and so has no path -- use
+    save_document_as for that.
+
+    Args:
+        doc_name: The document to save.
+    """
+    return save_document_operation(get_freecad_connection(), doc_name)
+
+
+@mcp.tool(structured_output=False)
+def save_document_as(
+    ctx: Context, doc_name: str, path: str, overwrite: bool = False
+) -> list[TextContent]:
+    """Save a document to a specific .FCStd path, which becomes its new path.
+
+    This writes FreeCAD's own format. To write STEP, STL or any other format,
+    use export_objects instead.
+
+    Args:
+        doc_name: The document to save.
+        path: Destination .FCStd file, absolute or starting with ~.
+        overwrite: False (default) refuses to replace an existing file.
+    """
+    return save_document_as_operation(get_freecad_connection(), doc_name, path, overwrite)
+
+
+@mcp.tool(structured_output=False)
+def open_document(ctx: Context, path: str) -> list[TextContent]:
+    """Open a file as a new document.
+
+    A .FCStd file is loaded natively. Any other format FreeCAD can read (STEP,
+    IGES, STL, OBJ, DXF, ...) is imported into a new document.
+
+    Args:
+        path: File to open, absolute or starting with ~.
+
+    Returns:
+        The name of the document created -- use that name in later calls, as it
+        may differ from the filename.
+    """
+    return open_document_operation(get_freecad_connection(), path)
+
+
+@mcp.tool(structured_output=False)
+def import_file(ctx: Context, path: str, doc_name: str) -> list[TextContent]:
+    """Import a file's contents into an existing document.
+
+    Use this to add geometry to a document you are already working in;
+    open_document creates a new one instead.
+
+    Args:
+        path: File to import, absolute or starting with ~.
+        doc_name: Existing document to import into.
+
+    Returns:
+        The names of the objects that were added, so they can be referenced
+        immediately.
+    """
+    return import_file_operation(get_freecad_connection(), path, doc_name)
+
+
+@mcp.tool(structured_output=False)
+def close_document(ctx: Context, doc_name: str, force: bool = False) -> list[TextContent]:
+    """Close a document, refusing to discard unsaved work.
+
+    Refuses when the document has unsaved changes, or has never been saved at
+    all. Call save_document (or save_document_as for a document with no path)
+    first, then close.
+
+    Args:
+        doc_name: The document to close.
+        force: True closes anyway and loses the unsaved work. Only use this when
+            the user has explicitly said the changes can be discarded.
+    """
+    return close_document_operation(get_freecad_connection(), doc_name, force)
 
 
 @mcp.prompt()

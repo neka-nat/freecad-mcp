@@ -91,6 +91,111 @@ def apply_view_orientation(view: Any, view_name: str) -> None:
             )
 
 
+def _qwidget_class():
+    from PySide import QtWidgets
+    return QtWidgets.QWidget
+
+
+def _render_scene_to_file(widget, save_path, width, height):
+    """Render the widget's QGraphicsScene to a PNG.
+
+    Returns True, an error string, or None when the widget has no usable scene
+    (so the caller can fall back to a plain widget grab -- a spreadsheet view is
+    a QTableView, not a QGraphicsView).
+    """
+    from PySide import QtCore, QtGui, QtWidgets
+
+    scene = None
+    for view in widget.findChildren(QtWidgets.QGraphicsView):
+        candidate = view.scene()
+        if candidate is not None and candidate.items():
+            scene = candidate
+            break
+    if scene is None:
+        return None
+
+    # itemsBoundingRect, not sceneRect: it tracks the drawn content, so a page
+    # with views placed outside the template border is still captured whole.
+    source = scene.itemsBoundingRect()
+    if source.isEmpty():
+        return None
+
+    target_w, target_h = _resolve_screenshot_size_for(
+        max(1, int(round(source.width()))), max(1, int(round(source.height()))),
+        width, height)
+
+    image = QtGui.QImage(target_w, target_h, QtGui.QImage.Format_ARGB32)
+    image.fill(QtGui.QColor("white"))
+    painter = QtGui.QPainter(image)
+    try:
+        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        painter.setRenderHint(QtGui.QPainter.TextAntialiasing, True)
+        scene.render(painter, QtCore.QRectF(image.rect()), source,
+                     QtCore.Qt.KeepAspectRatio)
+    finally:
+        painter.end()
+
+    if not image.save(save_path, "PNG"):
+        return f"could not write PNG to {save_path}"
+    return True
+
+
+def grab_active_view(save_path: str, width: int | None = None, height: int | None = None):
+    """Rasterise the active MDI sub-window, whatever kind of view it holds.
+
+    The 3D view exposes ``saveImage``; a TechDraw page (``MDIViewPagePy``) and a
+    spreadsheet do not, which made drawings invisible to a remote caller.
+    ``QWidget.grab()`` renders any Qt widget offscreen, so one path covers every
+    current and future view type. It captures what is on screen, so unlike
+    ``saveImage`` it cannot re-orient or resize the scene -- for a drawing page
+    or a sheet there is nothing to orient anyway.
+
+    Returns ``True`` or an error string, matching the GUI-handler contract.
+    """
+    from PySide import QtCore, QtWidgets
+
+    main_window = FreeCADGui.getMainWindow()
+    if main_window is None:
+        return "no FreeCAD main window"
+
+    mdi_area = main_window.findChild(QtWidgets.QMdiArea)
+    sub_window = mdi_area.activeSubWindow() if mdi_area is not None else None
+    widget = sub_window.widget() if sub_window is not None else None
+    if widget is None:
+        return "no active MDI sub-window to capture"
+
+    # Prefer rendering a QGraphicsScene when there is one. A TechDraw page's
+    # MDI widget is a QMainWindow wrapping a QGraphicsView, and grabbing that
+    # outer window yields a blank frame -- measured, an all-white PNG. Rendering
+    # the scene draws the actual items instead, which also makes the capture
+    # independent of scroll position, zoom and whether the window is occluded.
+    rendered = _render_scene_to_file(widget, save_path, width, height)
+    if rendered is not None:
+        return rendered
+
+    pixmap = widget.grab()
+    if pixmap.isNull() or pixmap.width() == 0 or pixmap.height() == 0:
+        return "widget grab produced an empty image"
+
+    target_w, target_h = _resolve_screenshot_size_for(pixmap.width(), pixmap.height(),
+                                                      width, height)
+    if (target_w, target_h) != (pixmap.width(), pixmap.height()):
+        pixmap = pixmap.scaled(target_w, target_h,
+                               QtCore.Qt.KeepAspectRatio,
+                               QtCore.Qt.SmoothTransformation)
+    if not pixmap.save(save_path, "PNG"):
+        return f"could not write PNG to {save_path}"
+    return True
+
+
+def _resolve_screenshot_size_for(view_width, view_height, width, height):
+    """Same sizing policy as the 3D path, but for an already-rendered pixmap."""
+    if width is None and height is None:
+        return _scale_to_max_edge(view_width, view_height, MAX_AUTO_SCREENSHOT_EDGE)
+    return (view_width if width is None else max(1, int(width)),
+            view_height if height is None else max(1, int(height)))
+
+
 def save_active_screenshot(
     save_path: str,
     view_name: str = "Isometric",
@@ -100,13 +205,17 @@ def save_active_screenshot(
 ):
     """Save a PNG of the active view to ``save_path``.
 
+    Uses the 3D view's own ``saveImage`` when available -- it can re-orient and
+    render offscreen at an arbitrary size -- and falls back to a widget grab for
+    view types that lack it (TechDraw pages, spreadsheets).
+
     Returns ``True`` on success, or an error string on failure (preserves the
     legacy GUI-handler return contract).
     """
     try:
-        view = FreeCADGui.ActiveDocument.ActiveView
-        if not hasattr(view, "saveImage"):
-            return "Current view does not support screenshots"
+        view = getattr(FreeCADGui.ActiveDocument, "ActiveView", None)
+        if view is None or not hasattr(view, "saveImage"):
+            return grab_active_view(save_path, width, height)
 
         apply_view_orientation(view, view_name)
 

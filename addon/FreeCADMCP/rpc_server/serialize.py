@@ -37,16 +37,43 @@ def serialize_value(value):
         return str(value)
 
 
+def safe_attr(obj, name):
+    """``getattr`` that also tolerates FreeCAD properties which raise on read.
+
+    ``getattr(obj, name, None)`` only swallows AttributeError. Reading ``Shape``
+    on an object whose recompute failed raises RuntimeError instead, which the
+    three-argument form does not catch.
+    """
+    try:
+        return getattr(obj, name, None)
+    except Exception:
+        return None
+
+
 def serialize_shape(shape):
+    """Summarise a shape, tolerating shapes that failed to compute.
+
+    A feature whose recompute failed still exposes a ``Shape``, but reading its
+    geometry raises ``RuntimeError: shape is invalid``. Letting that escape turns
+    a single broken object into an XML-RPC Fault that fails the whole
+    ``get_objects`` call for the document -- and ``get_objects`` is what the
+    asset-creation prompt tells the model to run before every task. Report the
+    breakage on that one object instead of blinding the caller to all of them.
+    """
     if shape is None:
         return None
-    return {
-        "Volume": shape.Volume,
-        "Area": shape.Area,
-        "VertexCount": len(shape.Vertexes),
-        "EdgeCount": len(shape.Edges),
-        "FaceCount": len(shape.Faces),
-    }
+    try:
+        if shape.isNull():
+            return {"Valid": False, "Error": "shape is null (feature failed to compute)"}
+        return {
+            "Volume": shape.Volume,
+            "Area": shape.Area,
+            "VertexCount": len(shape.Vertexes),
+            "EdgeCount": len(shape.Edges),
+            "FaceCount": len(shape.Faces),
+        }
+    except Exception as e:
+        return {"Valid": False, "Error": f"{type(e).__name__}: {e}"}
 
 
 def serialize_view_object(view):
@@ -84,8 +111,8 @@ def serialize_object(obj):
             "Label": obj.Label,
             "TypeId": obj.TypeId,
             "Properties": {},
-            "Placement": serialize_value(getattr(obj, "Placement", None)),
-            "Shape": serialize_shape(getattr(obj, "Shape", None)),
+            "Placement": serialize_value(safe_attr(obj, "Placement")),
+            "Shape": serialize_shape(safe_attr(obj, "Shape")),
             "ViewObject": {},
         }
 

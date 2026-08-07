@@ -90,6 +90,41 @@ class FreeCADConnection:
     def get_object(self, doc_name: str, obj_name: str) -> dict[str, Any]:
         return self.server.get_object(doc_name, obj_name)
 
+    def create_sketch(self, doc_name: str, sketch_name: str, geometry: list,
+                      constraints: list | None = None, body_name: str | None = None,
+                      plane: str = "XY") -> dict[str, Any]:
+        return self.server.create_sketch(doc_name, sketch_name, geometry,
+                                         constraints or [], body_name, plane)
+
+    def create_drawing_page(self, doc_name: str, page_name: str,
+                            source_objects: list | None = None,
+                            views: list | None = None,
+                            template: str | None = None) -> dict[str, Any]:
+        return self.server.create_drawing_page(doc_name, page_name,
+                                               source_objects or [], views or [], template)
+
+    def add_dimensions(self, doc_name: str, page_name: str, dimensions: list) -> dict[str, Any]:
+        return self.server.add_dimensions(doc_name, page_name, dimensions)
+
+    def export_objects(self, doc_name: str, obj_names: list[str], path: str,
+                       overwrite: bool = False) -> dict[str, Any]:
+        return self.server.export_objects(doc_name, obj_names, path, overwrite)
+
+    def save_document(self, doc_name: str) -> dict[str, Any]:
+        return self.server.save_document(doc_name)
+
+    def save_document_as(self, doc_name: str, path: str, overwrite: bool = False) -> dict[str, Any]:
+        return self.server.save_document_as(doc_name, path, overwrite)
+
+    def open_document(self, path: str) -> dict[str, Any]:
+        return self.server.open_document(path)
+
+    def import_file(self, path: str, doc_name: str) -> dict[str, Any]:
+        return self.server.import_file(path, doc_name)
+
+    def close_document(self, doc_name: str, force: bool = False) -> dict[str, Any]:
+        return self.server.close_document(doc_name, force)
+
     def get_parts_list(self) -> list[str]:
         return self.server.get_parts_list()
 

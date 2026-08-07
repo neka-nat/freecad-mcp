@@ -16,9 +16,12 @@ class FreeCADMCPAddonWorkbench(Workbench):
     def Initialize(self):
         from rpc_server import rpc_server
 
+        # Toggle_RPC_Server is first so the status dot sits at the left of the
+        # toolbar: red = stopped, green = running, amber = shutting down.
         commands = [
-            "Start_RPC_Server",
-            "Stop_RPC_Server",
+            "Toggle_RPC_Server",
+            "MCP_Settings",
+            "MCP_Document_Location",
             "Toggle_Auto_Start",
             "Toggle_Remote_Connections",
             "Configure_Allowed_IPs",
@@ -42,7 +45,15 @@ class FreeCADMCPAddonWorkbench(Workbench):
 Gui.addWorkbench(FreeCADMCPAddonWorkbench())
 
 
-def _auto_start_mcp():
+def _mcp_startup():
+    """Runs at FreeCAD launch, whether or not the MCP workbench is ever opened.
+
+    Importing rpc_server is load-bearing, not incidental: at import it registers
+    the commands, schedules the toggle-state sync and installs the always-visible
+    MCP toolbar. Workbench.Initialize() only runs when the user actually selects
+    the workbench, which would be far too late for a status indicator that is
+    supposed to be visible from any workbench.
+    """
     try:
         from rpc_server import rpc_server
 
@@ -53,9 +64,9 @@ def _auto_start_mcp():
         msg = rpc_server.start_rpc_server()
         FreeCAD.Console.PrintMessage(f"[MCP] Auto-start: {msg}\n")
     except Exception as e:
-        FreeCAD.Console.PrintWarning(f"[MCP] Auto-start failed: {e}\n")
+        FreeCAD.Console.PrintWarning(f"[MCP] Startup failed: {e}\n")
 
 
 from PySide import QtCore
 
-QtCore.QTimer.singleShot(0, _auto_start_mcp)
+QtCore.QTimer.singleShot(0, _mcp_startup)

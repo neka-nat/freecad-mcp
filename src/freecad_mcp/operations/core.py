@@ -31,6 +31,7 @@ def create_object_operation(
     obj_properties: dict[str, Any] | None = None,
     include_screenshot: bool = True,
     view_name: str = "Isometric",
+    body_name: str | None = None,
 ) -> ToolResponse:
     try:
         obj_data = {
@@ -38,6 +39,7 @@ def create_object_operation(
             "Type": obj_type,
             "Properties": obj_properties or {},
             "Analysis": analysis_name,
+            "Body": body_name,
         }
         res = freecad.create_object(doc_name, obj_data)
         if res["success"]:
@@ -150,7 +152,13 @@ def get_view_operation(
         screenshot = freecad.get_active_screenshot(view_name, width, height, focus_object)
         if screenshot is not None:
             return [ImageContent(type="image", data=screenshot, mimeType="image/png")]
-        return text_response("Cannot get screenshot in the current view type (such as TechDraw or Spreadsheet)")
+        # TechDraw pages and spreadsheets ARE capturable now (view_manager falls
+        # back to a scene render, then a widget grab). Reaching here means there
+        # was no active window at all, or the capture itself failed.
+        return text_response(
+            "Could not capture the active view. Is a document window open and active in FreeCAD? "
+            "Check FreeCAD's Report View for the underlying error."
+        )
     except Exception as e:
         logger.error(f"Failed to get view: {str(e)}")
         return text_response(f"Failed to get view: {str(e)}")
@@ -210,6 +218,96 @@ def get_object_operation(
     except Exception as e:
         logger.error(f"Failed to get object: {str(e)}")
         return text_response(f"Failed to get object: {str(e)}")
+
+
+def _file_response(action: str, call) -> ToolResponse:
+    """Shared shape for the file tools: report the path and what happened."""
+    try:
+        res = call()
+    except Exception as e:
+        logger.error(f"Failed to {action}: {str(e)}")
+        return text_response(f"Failed to {action}: {str(e)}")
+    if res.get("success"):
+        return json_response(res)
+    return text_response(f"Failed to {action}: {res.get('error')}")
+
+
+def create_sketch_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    sketch_name: str,
+    geometry: list,
+    constraints: list | None = None,
+    body_name: str | None = None,
+    plane: str = "XY",
+) -> ToolResponse:
+    return _file_response(
+        "create sketch",
+        lambda: freecad.create_sketch(doc_name, sketch_name, geometry,
+                                      constraints, body_name, plane),
+    )
+
+
+def create_drawing_page_operation(
+    freecad: FreeCADConnection, doc_name: str, page_name: str,
+    source_objects: list | None = None, views: list | None = None,
+    template: str | None = None,
+) -> ToolResponse:
+    return _file_response(
+        "create drawing page",
+        lambda: freecad.create_drawing_page(doc_name, page_name, source_objects,
+                                            views, template),
+    )
+
+
+def add_dimensions_operation(
+    freecad: FreeCADConnection, doc_name: str, page_name: str, dimensions: list,
+) -> ToolResponse:
+    return _file_response(
+        "add dimensions",
+        lambda: freecad.add_dimensions(doc_name, page_name, dimensions),
+    )
+
+
+def export_objects_operation(
+    freecad: FreeCADConnection,
+    doc_name: str,
+    obj_names: list[str] | None,
+    path: str,
+    overwrite: bool = False,
+) -> ToolResponse:
+    return _file_response(
+        "export objects",
+        lambda: freecad.export_objects(doc_name, obj_names or [], path, overwrite),
+    )
+
+
+def save_document_operation(freecad: FreeCADConnection, doc_name: str) -> ToolResponse:
+    return _file_response("save document", lambda: freecad.save_document(doc_name))
+
+
+def save_document_as_operation(
+    freecad: FreeCADConnection, doc_name: str, path: str, overwrite: bool = False
+) -> ToolResponse:
+    return _file_response(
+        "save document as", lambda: freecad.save_document_as(doc_name, path, overwrite)
+    )
+
+
+def open_document_operation(freecad: FreeCADConnection, path: str) -> ToolResponse:
+    return _file_response("open document", lambda: freecad.open_document(path))
+
+
+def import_file_operation(
+    freecad: FreeCADConnection, path: str, doc_name: str
+) -> ToolResponse:
+    return _file_response("import file", lambda: freecad.import_file(path, doc_name))
+
+
+def close_document_operation(
+    freecad: FreeCADConnection, doc_name: str, force: bool = False
+) -> ToolResponse:
+    return _file_response("close document", lambda: freecad.close_document(doc_name, force))
 
 
 def get_parts_list_operation(freecad: FreeCADConnection) -> ToolResponse:

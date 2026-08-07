@@ -11,8 +11,16 @@ from typing import Any
 
 from PySide import QtCore
 
-from rpc_server.commands import register_commands, schedule_toggle_sync
+from rpc_server.commands import (
+    register_commands,
+    refresh_server_action,
+    schedule_global_toolbar,
+    schedule_toggle_sync,
+)
 from rpc_server.fem_executor import run_fem_analysis as _run_fem_analysis
+from rpc_server import file_io
+from rpc_server import sketch_builder
+from rpc_server import techdraw_builder
 from rpc_server.gui_dispatch import (
     cleanup_waker,
     dispatch_to_gui,
@@ -21,16 +29,48 @@ from rpc_server.gui_dispatch import (
     request_shutdown,
 )
 from rpc_server.ip_filter import FilteredXMLRPCServer, validate_allowed_ips
-from rpc_server.object_factory import create_object_gui
+from rpc_server.object_factory import create_object_gui, validity_error
 from rpc_server.parts_library import get_parts_list, insert_part_from_library
 from rpc_server.property_mapper import Object, set_object_property
 from rpc_server.serialize import serialize_object
-from rpc_server.settings import load_settings, save_settings
+from rpc_server.settings import (
+    CAPABILITIES,
+    capability_enabled,
+    load_settings,
+    save_settings,
+)
 from rpc_server.view_manager import save_active_screenshot
 
 rpc_server_thread = None
 rpc_server_instance = None
 _stop_thread = None  # drains shutdown off the GUI thread; see stop_rpc_server
+
+
+_CAPABILITY_LABELS = {key: label for key, label, _ in CAPABILITIES}
+
+
+def _denied(capability_key):
+    """Error dict when the capability is switched off, else None.
+
+    Enforced here, on the RPC boundary, rather than in the MCP server: the
+    addon is the only side that cannot be bypassed. Anything that can reach
+    port 9875 -- a different MCP client, a script, another machine in remote
+    mode -- goes through these methods.
+    """
+    if capability_enabled(capability_key):
+        return None
+    label = _CAPABILITY_LABELS.get(capability_key, capability_key)
+    FreeCAD.Console.PrintWarning(
+        f"MCP RPC: refused a call needing '{label}' (disabled in MCP settings)\n"
+    )
+    return {
+        "success": False,
+        "error": (
+            f"Refused: '{label}' is disabled in the FreeCAD MCP settings. "
+            "To allow it, open FreeCAD and click the gear on the MCP toolbar. "
+            "This is a deliberate security default, not a malfunction."
+        ),
+    }
 
 
 def _ok(res) -> bool:
@@ -54,6 +94,10 @@ class FreeCADRPC:
         return True
 
     def create_document(self, name="New_Document"):
+        denied = _denied("allow_document_edit")
+        if denied:
+            return denied
+
         # The GUI handler reports the document's ACTUAL name — FreeCAD
         # sanitises requested names ("My Doc" -> "My_Doc") and de-duplicates
         # ("Doc" -> "Doc001"); reporting the requested name breaks every
@@ -64,10 +108,15 @@ class FreeCADRPC:
         return _err(res)
 
     def create_object(self, doc_name, obj_data: dict[str, Any]):
+        denied = _denied("allow_document_edit")
+        if denied:
+            return denied
+
         obj = Object(
             name=obj_data.get("Name", "New_Object"),
             type=obj_data["Type"],
             analysis=obj_data.get("Analysis", None),
+            body=obj_data.get("Body", None),
             properties=obj_data.get("Properties", {}),
         )
         # create_object_gui reports the created object's actual Name (see
@@ -78,6 +127,10 @@ class FreeCADRPC:
         return _err(res)
 
     def edit_object(self, doc_name: str, obj_name: str, properties: dict[str, Any]) -> dict[str, Any]:
+        denied = _denied("allow_document_edit")
+        if denied:
+            return denied
+
         obj = Object(
             name=obj_name,
             properties=properties.get("Properties", {}),
@@ -88,6 +141,10 @@ class FreeCADRPC:
         return _err(res)
 
     def delete_object(self, doc_name: str, obj_name: str):
+        denied = _denied("allow_document_edit")
+        if denied:
+            return denied
+
         res = dispatch_to_gui(lambda: self._delete_object_gui(doc_name, obj_name))
         if _ok(res):
             return {"success": True, "object_name": obj_name}
@@ -100,6 +157,9 @@ class FreeCADRPC:
         running headlessly). Returns success once the new document is
         loaded from disk.
         """
+        denied = _denied("allow_file_import")
+        if denied:
+            return denied
         res = dispatch_to_gui(lambda: self._reload_document_gui(doc_name))
         if _ok(res):
             return {"success": True, "document_name": doc_name}
@@ -107,6 +167,9 @@ class FreeCADRPC:
 
     def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600) -> dict[str, Any]:
         """Run the CalculiX solver on an existing Fem::FemAnalysis and return summary results."""
+        denied = _denied("allow_external_processes")
+        if denied:
+            return denied
         try:
             timeout_s = int(timeout)
         except (TypeError, ValueError):
@@ -126,6 +189,9 @@ class FreeCADRPC:
         exceed the MCP timeout. The caller should poll a document object for
         completion status (e.g. check SessionState.Label via get_object).
         """
+        denied = _denied("allow_code_execution")
+        if denied:
+            return denied
         def _set_status(msg):
             dispatch_to_gui(lambda: FreeCADGui.getMainWindow().statusBar().showMessage(msg))
 
@@ -160,6 +226,9 @@ class FreeCADRPC:
         Use execute_code_async for heavy OCCT boolean ops (fuse/cut)
         that would block the GUI thread too long.
         """
+        denied = _denied("allow_code_execution")
+        if denied:
+            return denied
         output_buffer = io.StringIO()
 
         def task():
@@ -182,6 +251,77 @@ class FreeCADRPC:
         )
         return _err(res)
 
+    def _file_op(self, capability, handler):
+        """Run a file_io handler on the GUI thread, mapping ValueError to an error dict.
+
+        file_io raises ValueError for every user-facing refusal (missing file,
+        would-overwrite, unknown extension). dispatch_to_gui turns a raised
+        exception into an error string, so the message survives unchanged.
+        """
+        denied = _denied(capability)
+        if denied:
+            return denied
+        res = dispatch_to_gui(handler)
+        if isinstance(res, dict):
+            return res
+        return _err(res)
+
+    def export_objects(self, doc_name, obj_names, path, overwrite=False):
+        return self._file_op(
+            "allow_file_export",
+            lambda: file_io.export_objects_gui(doc_name, obj_names, path, overwrite),
+        )
+
+    def save_document(self, doc_name):
+        return self._file_op(
+            "allow_file_export", lambda: file_io.save_document_gui(doc_name)
+        )
+
+    def save_document_as(self, doc_name, path, overwrite=False):
+        return self._file_op(
+            "allow_file_export",
+            lambda: file_io.save_document_as_gui(doc_name, path, overwrite),
+        )
+
+    def open_document(self, path):
+        return self._file_op(
+            "allow_file_import", lambda: file_io.open_document_gui(path)
+        )
+
+    def import_file(self, path, doc_name):
+        return self._file_op(
+            "allow_file_import", lambda: file_io.import_file_gui(path, doc_name)
+        )
+
+    def close_document(self, doc_name, force=False):
+        # Gated on document editing, not file access: closing touches no file,
+        # but it can discard work.
+        return self._file_op(
+            "allow_document_edit", lambda: file_io.close_document_gui(doc_name, force)
+        )
+
+    def create_sketch(self, doc_name, sketch_name, geometry, constraints=None,
+                      body_name=None, plane="XY"):
+        return self._file_op(
+            "allow_document_edit",
+            lambda: sketch_builder.create_sketch_gui(
+                doc_name, sketch_name, geometry, constraints, body_name, plane),
+        )
+
+    def create_drawing_page(self, doc_name, page_name, source_objects=None,
+                            views=None, template=None):
+        return self._file_op(
+            "allow_document_edit",
+            lambda: techdraw_builder.create_drawing_page_gui(
+                doc_name, page_name, source_objects, views, template),
+        )
+
+    def add_dimensions(self, doc_name, page_name, dimensions):
+        return self._file_op(
+            "allow_document_edit",
+            lambda: techdraw_builder.add_dimensions_gui(doc_name, page_name, dimensions),
+        )
+
     def get_objects(self, doc_name):
         # FreeCAD.getDocument raises (not returns None) for an unknown name.
         try:
@@ -202,6 +342,10 @@ class FreeCADRPC:
         return None
 
     def insert_part_from_library(self, relative_path):
+        denied = _denied("allow_file_import")
+        if denied:
+            return denied
+
         res = dispatch_to_gui(lambda: self._insert_part_from_library(relative_path))
         if _ok(res):
             return {"success": True, "message": "Part inserted from library."}
@@ -233,12 +377,11 @@ class FreeCADRPC:
                 active_view = FreeCADGui.ActiveDocument.ActiveView
             except Exception:
                 return False
-            if active_view is None or not hasattr(active_view, "saveImage"):
-                view_type = type(active_view).__name__ if active_view is not None else "None"
-                FreeCAD.Console.PrintWarning(
-                    f"MCP RPC: view type '{view_type}' does not support screenshots\n"
-                )
+            if active_view is None:
                 return False
+            # No saveImage check here: view_manager falls back to a Qt widget
+            # grab for view types that lack it (TechDraw pages, spreadsheets),
+            # so those are captured rather than refused.
             return save_active_screenshot(tmp_path, view_name, width, height, focus_object)
 
         try:
@@ -278,6 +421,12 @@ class FreeCADRPC:
         try:
             set_object_property(doc, obj_ins, obj.properties)
             doc.recompute()
+            # An edit can break a previously healthy object (e.g. a Length that
+            # makes a feature self-intersect). Same check as the create path.
+            problem = validity_error(obj_ins)
+            if problem:
+                FreeCAD.Console.PrintError(problem + "\n")
+                return problem
             FreeCAD.Console.PrintMessage(f"Object '{obj.name}' updated via RPC.\n")
             return True
         except Exception as e:
@@ -430,3 +579,4 @@ def stop_rpc_server():
 
 register_commands()
 schedule_toggle_sync()
+schedule_global_toolbar()
