@@ -23,6 +23,26 @@ class _TimeoutTransport(xmlrpc.client.Transport):
 
 
 
+
+def _normalize_envelope(res, fallback_error: str) -> dict:
+    """Coerce an RPC reply into a dict carrying a ``success`` key.
+
+    XML-RPC returns whatever the installed addon produces. The addon is copied
+    into FreeCAD's ``Mod/`` directory by hand while the server is installed via
+    pip, so the two halves can be out of step. Normalising here means a reply
+    that is not the expected dict is reported as a failure the caller can read,
+    rather than reaching ``res["success"]`` and raising a TypeError that points
+    nowhere near the cause.
+    """
+    if isinstance(res, dict):
+        if "success" in res:
+            return res
+        return {"success": True, **res}
+    if isinstance(res, str) and res:
+        return {"success": True, "image": res}
+    return {"success": False, "error": fallback_error}
+
+
 class FreeCADConnection:
     def __init__(self, host: str = "localhost", port: int = 9875, timeout: float = 150):
         self._uri = f"http://{host}:{port}"
@@ -83,6 +103,29 @@ class FreeCADConnection:
         except Exception as e:
             logger.error(f"Error getting screenshot: {e}")
             return None
+
+    def get_page_screenshot(
+        self,
+        page_name: str,
+        width: int | None = None,
+        crop: list[float] | None = None,
+        doc_name: str | None = None,
+        save_to: str | None = None,
+        include_image: bool = True,
+    ) -> dict:
+        try:
+            res = self.server.get_page_screenshot(
+                page_name, width, crop, doc_name, save_to, include_image
+            )
+        except Exception as e:
+            # Covers transport failures and the arity error raised when a
+            # stale addon is still installed and does not accept the newer
+            # arguments.
+            logger.error(f"Error getting page screenshot: {e}")
+            return {"success": False, "error": f"RPC call failed: {e}"}
+        return _normalize_envelope(
+            res, "page render failed (no reason reported)"
+        )
 
     def get_objects(self, doc_name: str) -> list[dict[str, Any]]:
         return self.server.get_objects(doc_name)

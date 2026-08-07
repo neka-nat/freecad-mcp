@@ -20,6 +20,20 @@ _VIEW_DISPATCH = {
     "Trimetric": "viewTrimetric",
 }
 
+# TechDraw page rendering.  The scene is vector, so ``width`` is a *render
+# resolution*, not a resample ceiling: a larger value buys genuinely sharper
+# linework, unlike scaling a raster.  1000 px is ample for judging layout
+# (~940 tokens); go larger only to read fine detail.
+DEFAULT_PAGE_WIDTH = 1000
+
+# Token cost scales with width * height, so bounding width alone is not enough
+# once a crop makes the aspect ratio arbitrary.  An A4 landscape at width=2400
+# is 2400x1697 = 4.07M px, so a 4M ceiling would reject a legitimate detail
+# render; 6M (~8k tokens) clears it with margin while still catching a typo'd
+# width=16000 (~181M px).  The guard exists to catch mistakes, not to overrule
+# deliberate choices.  Exceeding it is an error, never a silent clamp.
+MAX_PAGE_PIXELS = 6_000_000
+
 
 def _get_view_size(view: Any) -> tuple[int, int]:
     try:
@@ -152,3 +166,137 @@ def save_active_screenshot(
         return True
     except Exception as e:
         return str(e)
+
+
+def save_page_screenshot(
+    save_path: str,
+    page_name: str,
+    width: int | None = None,
+    crop: tuple[float, float, float, float] | None = None,
+    doc_name: str | None = None,
+):
+    """Save a PNG of a TechDraw page to ``save_path``.
+
+    TechDraw pages are QGraphicsScenes in their own MDI subwindow, not 3D
+    views, so ``view.saveImage`` does not apply to them. Rendering the scene
+    directly also lets the resolution be chosen independently of window size.
+
+    Args:
+        save_path: Destination PNG path.
+        page_name: Internal Name of the DrawPage object.
+        width: Render width in px. Defaults to ``DEFAULT_PAGE_WIDTH``. Larger
+            values buy real detail -- this is a vector render, not a resample.
+        crop: ``(left, top, right, bottom)`` as fractions 0..1 of the page's
+            bounding rect, origin top-left. Renders only that region, at the
+            full ``width`` -- a true vector zoom. ``None`` renders the page.
+        doc_name: Document to look the page up in. Defaults to the active
+            document. Page names are not unique across documents, so pass this
+            whenever more than one document is open.
+
+    Returns:
+        ``True`` on success, or an error string.
+    """
+    try:
+        from PySide import QtCore, QtGui, QtWidgets
+    except Exception:
+        from PySide2 import QtCore, QtGui, QtWidgets
+
+    if doc_name is None:
+        doc = FreeCAD.ActiveDocument
+        if doc is None:
+            return "No active document"
+    else:
+        try:
+            doc = FreeCAD.getDocument(doc_name)          # raises, not None
+        except Exception:
+            return (
+                f"No such document '{doc_name}'; open documents: "
+                f"{sorted(FreeCAD.listDocuments())}"
+            )
+
+    page = doc.getObject(page_name)
+    if page is None:
+        return f"No object '{page_name}' in document '{doc.Name}'"
+    if not page.isDerivedFrom("TechDraw::DrawPage"):
+        return f"'{page_name}' in '{doc.Name}' is not a TechDraw page"
+
+    if crop is not None:
+        try:
+            c_l, c_t, c_r, c_b = (float(v) for v in crop)
+        except Exception:
+            return "crop must be four numbers (left, top, right, bottom)"
+        if not (0.0 <= c_l < c_r <= 1.0 and 0.0 <= c_t < c_b <= 1.0):
+            return (
+                f"crop {crop} out of range; need 0 <= left < right <= 1 "
+                "and 0 <= top < bottom <= 1 (fractions of the page)"
+            )
+
+    try:
+        page.ViewObject.doubleClicked()      # ensure the page has a window
+    except Exception:
+        pass
+    _flush_gui_events()
+
+    mw = FreeCADGui.getMainWindow()
+    mdi = mw.findChild(QtWidgets.QMdiArea)
+    target = None
+    for sub in (mdi.subWindowList() if mdi else []):
+        title = sub.windowTitle()
+        if page_name in title or (page.Label and page.Label in title):
+            target = sub
+    if target is None:
+        return f"No open window for page '{page_name}'"
+
+    widget = target.widget()
+    scene = None
+    for w in [widget] + widget.findChildren(QtWidgets.QGraphicsView):
+        if isinstance(w, QtWidgets.QGraphicsView) and w.scene() is not None:
+            scene = w.scene()
+            break
+
+    if scene is not None:
+        rect = scene.itemsBoundingRect()
+        if rect.isEmpty():
+            rect = scene.sceneRect()
+
+        if crop is not None:
+            rect = QtCore.QRectF(
+                rect.x() + c_l * rect.width(),
+                rect.y() + c_t * rect.height(),
+                (c_r - c_l) * rect.width(),
+                (c_b - c_t) * rect.height(),
+            )
+            if rect.isEmpty():
+                return "crop selects an empty region"
+
+        w_px = DEFAULT_PAGE_WIDTH if width is None else max(1, int(width))
+        h_px = max(1, int(w_px * rect.height() / rect.width())) if rect.width() else w_px
+
+        if w_px * h_px > MAX_PAGE_PIXELS:
+            return (
+                f"{w_px}x{h_px} = {w_px * h_px / 1e6:.1f}M pixels exceeds the "
+                f"{MAX_PAGE_PIXELS / 1e6:.0f}M budget; reduce width or tighten crop"
+            )
+
+        img = QtGui.QImage(w_px, h_px, QtGui.QImage.Format_RGB32)
+        img.fill(QtGui.QColor(255, 255, 255))
+        painter = QtGui.QPainter(img)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        painter.setRenderHint(QtGui.QPainter.TextAntialiasing, True)
+        scene.render(painter, QtCore.QRectF(img.rect()), rect)
+        painter.end()
+        img.save(save_path, "PNG")
+        return True
+
+    if crop is not None:
+        return "crop needs the scene renderer; no QGraphicsScene reachable for this page"
+    pm = widget.grab()                        # fallback
+    if width:
+        pm = pm.scaledToWidth(int(width), QtCore.Qt.SmoothTransformation)
+    if pm.width() * pm.height() > MAX_PAGE_PIXELS:
+        return (
+            f"{pm.width()}x{pm.height()} exceeds the "
+            f"{MAX_PAGE_PIXELS / 1e6:.0f}M pixel budget"
+        )
+    pm.save(save_path, "PNG")
+    return True

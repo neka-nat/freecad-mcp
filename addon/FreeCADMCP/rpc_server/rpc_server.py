@@ -5,6 +5,7 @@ import contextlib
 import base64
 import io
 import os
+import struct
 import tempfile
 import threading
 from typing import Any
@@ -26,7 +27,7 @@ from rpc_server.parts_library import get_parts_list, insert_part_from_library
 from rpc_server.property_mapper import Object, set_object_property
 from rpc_server.serialize import serialize_object
 from rpc_server.settings import load_settings, save_settings
-from rpc_server.view_manager import save_active_screenshot
+from rpc_server.view_manager import save_active_screenshot, save_page_screenshot
 
 rpc_server_thread = None
 rpc_server_instance = None
@@ -252,6 +253,84 @@ class FreeCADRPC:
             return None
         finally:
             if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    def get_page_screenshot(
+        self,
+        page_name: str,
+        width: int | None = None,
+        crop: list | None = None,
+        doc_name: str | None = None,
+        save_to: str | None = None,
+        include_image: bool = True,
+    ) -> dict:
+        """Render a TechDraw page.
+
+        Returns ``{"success": bool}`` plus, on success, ``image`` (base64 or
+        None), ``path``, ``width``, ``height`` and ``bytes``; on failure an
+        ``error`` string. Keys sit at the top level to match the convention
+        the other RPC methods already use. A struct rather than a bare string because
+        save_page_screenshot's failures are diagnostic -- which document was
+        searched, which limit was exceeded -- and the caller cannot act on
+        them if they only reach the FreeCAD console.
+
+        Without ``save_to`` the render goes to a temp file that is deleted
+        once encoded, so the only surviving copy is the one in the reply.
+        ``save_to`` keeps it, making renders durable artifacts that can be
+        reopened or compared across design iterations. ``include_image=False``
+        writes the file and reports its path and size without encoding it.
+        """
+        if save_to:
+            out_path = os.path.abspath(os.path.expanduser(save_to))
+            if os.path.splitext(out_path)[1].lower() != ".png":
+                return {"success": False,
+                        "error": f"save_to must end in .png: {out_path}"}
+            parent = os.path.dirname(out_path)
+            if parent and not os.path.isdir(parent):
+                return {
+                    "success": False,
+                    "error": f"directory does not exist: {parent}",
+                }
+            tmp_path = None
+        else:
+            if not include_image:
+                return {
+                    "success": False,
+                    "error": "include_image=False needs save_to, or the render "
+                             "would be discarded immediately",
+                }
+            fd, tmp_path = tempfile.mkstemp(suffix=".png")
+            os.close(fd)
+            out_path = tmp_path
+
+        def task():
+            return save_page_screenshot(
+                out_path, page_name, width, tuple(crop) if crop else None, doc_name
+            )
+
+        try:
+            res = dispatch_to_gui(task)
+            if not _ok(res):
+                reason = res if isinstance(res, str) else f"page render failed: {res!r}"
+                FreeCAD.Console.PrintWarning(
+                    f"MCP RPC: page screenshot failed: {reason}\n"
+                )
+                return {"success": False, "error": reason}
+
+            with open(out_path, "rb") as f:
+                raw = f.read()
+            # PNG IHDR: bytes 16:24 are width and height, big-endian.
+            w_px, h_px = struct.unpack(">II", raw[16:24])
+            return {
+                "success": True,
+                "image": base64.b64encode(raw).decode("utf-8") if include_image else None,
+                "path": out_path if save_to else None,
+                "width": w_px,
+                "height": h_px,
+                "bytes": len(raw),
+            }
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
                 os.remove(tmp_path)
 
     def _create_document_gui(self, name):
