@@ -14,8 +14,20 @@ from .core import (
     reload_document_operation,
     run_fem_analysis_operation,
 )
+from .macros import (
+    create_macro_operation,
+    edit_macro_operation,
+    get_macro_operation,
+    list_macros_operation,
+    run_macro_operation,
+)
 
 __all__ = [
+    "create_macro_operation",
+    "edit_macro_operation",
+    "get_macro_operation",
+    "list_macros_operation",
+    "run_macro_operation",
     "create_document_operation",
     "create_object_operation",
     "delete_object_operation",

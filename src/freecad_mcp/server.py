@@ -15,7 +15,12 @@ from mcp.types import ImageContent, TextContent
 from .freecad_client import FreeCADConnection
 from .operations import (
     create_document_operation,
+    create_macro_operation,
     create_object_operation,
+    edit_macro_operation,
+    get_macro_operation,
+    list_macros_operation,
+    run_macro_operation,
     delete_object_operation,
     edit_object_operation,
     execute_code_async_operation,
@@ -603,6 +608,105 @@ def run_fem_analysis(
         include_screenshot,
         view_name,
     )
+
+
+@mcp.tool()
+def list_macros(ctx: Context) -> list[TextContent]:
+    """List the macros in FreeCAD's user macro directory.
+
+    Returns the directory path plus each macro's name, size and docstring
+    summary line. Use this to discover what exists before creating or editing.
+    """
+    return list_macros_operation(get_freecad_connection())
+
+
+@mcp.tool()
+def get_macro(ctx: Context, name: str) -> list[TextContent]:
+    """Read the full source of a macro.
+
+    Args:
+        name: Macro name, with or without the '.FCMacro' suffix.
+    """
+    return get_macro_operation(get_freecad_connection(), name)
+
+
+@mcp.tool()
+def create_macro(
+    ctx: Context, name: str, code: str, overwrite: bool = False
+) -> list[TextContent]:
+    """Write a new macro into FreeCAD's user macro directory.
+
+    A macro is a plain Python file that FreeCAD lists under Macro -> Macros...
+    and can run independently of this MCP. Note the macro directory is
+    whatever the user configured, which may be a cloud-synced folder.
+
+    A GUI macro conventionally builds a QDialog for input, then hands a plain
+    dict to a separate geometry function. Keeping those two apart is worth
+    doing: it lets the same file serve both a human at the dialog and any
+    caller that already knows the values.
+
+    Args:
+        name: Macro name; '.FCMacro' is appended if absent.
+        code: Complete Python source of the macro.
+        overwrite: Replace an existing macro of the same name (default False).
+                   To change part of a macro, prefer edit_macro.
+
+    Examples:
+        ```json
+        {
+            "name": "my_bracket",
+            "code": "import FreeCAD as App\\n# ...\\n"
+        }
+        ```
+    """
+    return create_macro_operation(get_freecad_connection(), name, code, overwrite)
+
+
+@mcp.tool()
+def edit_macro(
+    ctx: Context,
+    name: str,
+    old_string: str,
+    new_string: str,
+    replace_all: bool = False,
+) -> list[TextContent]:
+    """Replace an exact substring inside an existing macro.
+
+    Preferred over rewriting a macro with create_macro(overwrite=True):
+    macros can be very large, and a targeted replacement neither costs a full
+    round-trip nor risks dropping parts of the file.
+
+    Fails if old_string is absent, or if it appears more than once and
+    replace_all is False -- include surrounding lines to disambiguate.
+
+    Args:
+        name: Macro name, with or without the '.FCMacro' suffix.
+        old_string: Exact text to find, including indentation.
+        new_string: Replacement text.
+        replace_all: Replace every occurrence instead of requiring a unique match.
+    """
+    return edit_macro_operation(
+        get_freecad_connection(), name, old_string, new_string, replace_all
+    )
+
+
+@mcp.tool()
+def run_macro(ctx: Context, name: str) -> list[TextContent]:
+    """Start a macro in FreeCAD, without waiting for it to finish.
+
+    The macro runs detached, so this returns as soon as it has been started
+    and CANNOT report what the macro did. If the macro opens a dialog, it is
+    left waiting for the user. Call get_objects afterwards to see what was
+    created.
+
+    Do not try to run a macro via execute_code (a modal dialog would block
+    the server until dismissed) or execute_code_async (Qt widgets cannot be
+    created off the GUI thread).
+
+    Args:
+        name: Macro name, with or without the '.FCMacro' suffix.
+    """
+    return run_macro_operation(get_freecad_connection(), name)
 
 
 @mcp.prompt()
