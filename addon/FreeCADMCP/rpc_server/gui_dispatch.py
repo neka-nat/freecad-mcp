@@ -16,8 +16,11 @@ Robustness and performance guarantees:
    only as a fallback.
 3. Mouse-button guard: ``process_gui_tasks`` skips the current tick while
    mouse buttons are held so MCP tasks cannot interrupt 3D navigation drags.
-4. Clean shutdown: the ``_SHUTDOWN`` sentinel sets a flag that suppresses the
-   ``finally`` reschedule, so ``stop_rpc_server`` actually stops the loop.
+4. Clean shutdown: ``request_shutdown`` sets a module flag (and posts the
+   ``_SHUTDOWN`` sentinel to break an in-progress drain). Heartbeat ticks
+   carry a generation id from ``start_heartbeat``; a tick whose id is stale
+   or that observes the shutdown flag exits without rescheduling, so
+   stop/start cycles can never stack multiple live heartbeat chains.
 5. Exception isolation: exceptions inside a task are caught, logged, and
    returned as error strings; they never kill the dispatch loop.
 """
@@ -37,6 +40,8 @@ _rpc_request_queue: "queue.Queue[Any]" = queue.Queue()
 _SHUTDOWN = object()
 _processing = False  # re-entrancy guard: True while process_gui_tasks is draining
 _processing_since: float = 0.0  # wall-clock time when _processing became True
+_chain_id = 0  # heartbeat generation; bumped by start_heartbeat to kill stale chains
+_shutdown_requested = False  # set by request_shutdown; suppresses heartbeat rescheduling
 
 
 class _WakeSignal(QtCore.QObject):
@@ -56,7 +61,7 @@ class _WakeSignal(QtCore.QObject):
         self._sig.emit()
 
     def _on_wake(self) -> None:
-        process_gui_tasks(reschedule=False)
+        process_gui_tasks()
 
 
 _waker: "_WakeSignal | None" = None
@@ -92,22 +97,20 @@ def _flush_gui_events(delay_ms: int = 20) -> None:
         app.processEvents(flags, delay_ms)
 
 
-def process_gui_tasks(reschedule: bool = True) -> None:
-    """Drain queued GUI-thread callables and optionally reschedule.
+def process_gui_tasks() -> None:
+    """Drain queued GUI-thread callables.
 
     Skips the current tick when any mouse button is held (e.g., 3D navigation
     drag) or when already executing a task (re-entrancy guard). The guard
     prevents ``doc.recompute()`` or ``processEvents()`` inside a task from
     triggering a nested ``process_gui_tasks`` call that corrupts FreeCAD state.
 
-    ``reschedule=False`` is used by the immediate-wake path so it does not
-    start a second heartbeat chain alongside the existing 500 ms one.
+    Rescheduling is owned by ``_heartbeat_tick``; this function only drains.
     """
     global _processing, _processing_since
     if _processing:
         return  # re-entrant call from processEvents inside a task; skip
 
-    shutdown = False
     try:
         if _rpc_request_queue.empty():
             return  # nothing queued; skip cursor/status-bar churn on idle heartbeat ticks
@@ -134,8 +137,13 @@ def process_gui_tasks(reschedule: bool = True) -> None:
             while not _rpc_request_queue.empty():
                 task = _rpc_request_queue.get()
                 if task is _SHUTDOWN:
-                    shutdown = True
-                    return
+                    if _shutdown_requested:
+                        return  # server stopping; abandon the rest of this drain
+                    # Stale sentinel: the server was stopped and started again
+                    # before any drain consumed it (start_heartbeat cleared the
+                    # flag). Re-setting the flag here would kill the new
+                    # heartbeat chain — just skip it.
+                    continue
                 try:
                     task()
                 except Exception as e:
@@ -150,12 +158,37 @@ def process_gui_tasks(reschedule: bool = True) -> None:
                 status_bar.clearMessage()
     finally:
         _processing = False
-        if not shutdown and reschedule:
-            QtCore.QTimer.singleShot(500, process_gui_tasks)
+
+
+def _heartbeat_tick(chain_id: int) -> None:
+    """One 500 ms fallback tick. Only the chain matching the current
+    generation id reschedules itself; stale chains (from a previous
+    start/stop cycle) and post-shutdown ticks die here.
+    """
+    if chain_id != _chain_id or _shutdown_requested:
+        return
+    process_gui_tasks()
+    if chain_id == _chain_id and not _shutdown_requested:
+        QtCore.QTimer.singleShot(500, lambda: _heartbeat_tick(chain_id))
+
+
+def start_heartbeat() -> None:
+    """Start the 500 ms fallback heartbeat chain. Call from the GUI thread
+    on server start. Bumping the generation id invalidates any pending tick
+    from a previous chain, so repeated stop/start cycles keep exactly one
+    live chain.
+    """
+    global _chain_id, _shutdown_requested
+    _shutdown_requested = False
+    _chain_id += 1
+    chain_id = _chain_id
+    QtCore.QTimer.singleShot(500, lambda: _heartbeat_tick(chain_id))
 
 
 def request_shutdown() -> None:
-    """Post the sentinel so the next dispatch tick exits without rescheduling."""
+    """Stop the heartbeat and post the sentinel to break an in-progress drain."""
+    global _shutdown_requested
+    _shutdown_requested = True
     _rpc_request_queue.put(_SHUTDOWN)
 
 
