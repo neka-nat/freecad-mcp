@@ -5,6 +5,7 @@ import contextlib
 import base64
 import io
 import os
+import sys
 import tempfile
 import threading
 from typing import Any
@@ -31,6 +32,62 @@ from rpc_server.view_manager import save_active_screenshot
 rpc_server_thread = None
 rpc_server_instance = None
 _stop_thread = None  # drains shutdown off the GUI thread; see stop_rpc_server
+
+
+class _ThreadStdoutRouter(io.TextIOBase):
+    """Routes stdout writes to a per-thread target, else the wrapped stream.
+
+    ``contextlib.redirect_stdout`` swaps ``sys.stdout`` PROCESS-wide: while
+    ``execute_code`` captured its output on the GUI thread, anything another
+    thread printed (an ``execute_code_async`` worker, other addons) landed in
+    the RPC caller's buffer — and the caller's own output could escape it.
+    The router is installed once; ``capture()`` redirects the current thread
+    only.
+    """
+
+    def __init__(self, wrapped):
+        self._wrapped = wrapped
+        self._local = threading.local()
+
+    def _target(self):
+        target = getattr(self._local, "target", None)
+        if target is not None:
+            return target
+        return self._wrapped  # may be None under pythonw / GUI-only stdout
+
+    def write(self, s):
+        target = self._target()
+        if target is None:
+            return len(s)
+        return target.write(s)
+
+    def flush(self):
+        target = self._target()
+        if target is not None:
+            try:
+                target.flush()
+            except Exception:
+                pass
+
+    @contextlib.contextmanager
+    def capture(self, buffer):
+        self._local.target = buffer
+        try:
+            yield
+        finally:
+            self._local.target = None
+
+
+_stdout_router: "_ThreadStdoutRouter | None" = None
+
+
+def _capture_stdout(buffer):
+    """Capture ``sys.stdout`` for the CURRENT thread only (see router)."""
+    global _stdout_router
+    if _stdout_router is None or sys.stdout is not _stdout_router:
+        _stdout_router = _ThreadStdoutRouter(sys.stdout)
+        sys.stdout = _stdout_router
+    return _stdout_router.capture(buffer)
 
 
 def _ok(res) -> bool:
@@ -133,10 +190,10 @@ class FreeCADRPC:
             dispatch_to_gui(lambda: FreeCADGui.getMainWindow().statusBar().clearMessage())
 
         def worker() -> None:
-            # NOTE: we do NOT redirect sys.stdout here. contextlib.redirect_stdout
-            # swaps stdout process-wide, not per-thread, so it would race with the
-            # GUI thread and other concurrent work. Background code should report
-            # via FreeCAD.Console (which is thread-safe) instead.
+            # NOTE: no stdout capture here. execute_code's per-thread router
+            # keeps this thread's prints out of RPC callers' buffers; report
+            # results via FreeCAD.Console (thread-safe) so they reach the
+            # Report View.
             try:
                 exec(code, globals())
                 FreeCAD.Console.PrintMessage("Async code execution completed.\n")
@@ -163,7 +220,9 @@ class FreeCADRPC:
         output_buffer = io.StringIO()
 
         def task():
-            with contextlib.redirect_stdout(output_buffer):
+            # Per-thread capture, not redirect_stdout: the latter swaps
+            # stdout for the whole process and races concurrent threads.
+            with _capture_stdout(output_buffer):
                 exec(code, globals())
             return True
 
