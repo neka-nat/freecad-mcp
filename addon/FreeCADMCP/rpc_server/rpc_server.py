@@ -16,14 +16,15 @@ from rpc_server.fem_executor import run_fem_analysis as _run_fem_analysis
 from rpc_server.gui_dispatch import (
     cleanup_waker,
     dispatch_to_gui,
+    get_dispatch_status,
     init_waker,
     process_gui_tasks,
     request_shutdown,
 )
 from rpc_server.ip_filter import FilteredXMLRPCServer, validate_allowed_ips
-from rpc_server.object_factory import create_object_gui
+from rpc_server.object_factory import create_object_gui, edit_object_gui
 from rpc_server.parts_library import get_parts_list, insert_part_from_library
-from rpc_server.property_mapper import Object, set_object_property
+from rpc_server.property_mapper import Object
 from rpc_server.serialize import serialize_object
 from rpc_server.settings import load_settings, save_settings
 from rpc_server.view_manager import save_active_screenshot
@@ -53,12 +54,23 @@ class FreeCADRPC:
     def ping(self):
         return True
 
+    def get_rpc_status(self) -> dict[str, Any]:
+        """Report server and GUI-dispatch health without using the GUI thread."""
+        return {
+            "success": True,
+            "rpc_server": "running",
+            "gui_dispatch": get_dispatch_status(),
+        }
+
     def create_document(self, name="New_Document"):
         # The GUI handler reports the document's ACTUAL name — FreeCAD
         # sanitises requested names ("My Doc" -> "My_Doc") and de-duplicates
         # ("Doc" -> "Doc001"); reporting the requested name breaks every
         # follow-up call that uses it.
-        res = dispatch_to_gui(lambda: self._create_document_gui(name))
+        res = dispatch_to_gui(
+            lambda: self._create_document_gui(name),
+            operation_name="create_document",
+        )
         if isinstance(res, dict) and res.get("success"):
             return res
         return _err(res)
@@ -72,7 +84,10 @@ class FreeCADRPC:
         )
         # create_object_gui reports the created object's actual Name (see
         # its docstring) — same sanitise/de-duplicate concern as documents.
-        res = dispatch_to_gui(lambda: self._create_object_gui(doc_name, obj))
+        res = dispatch_to_gui(
+            lambda: self._create_object_gui(doc_name, obj),
+            operation_name="create_object",
+        )
         if isinstance(res, dict) and res.get("success"):
             return res
         return _err(res)
@@ -82,13 +97,19 @@ class FreeCADRPC:
             name=obj_name,
             properties=properties.get("Properties", {}),
         )
-        res = dispatch_to_gui(lambda: self._edit_object_gui(doc_name, obj))
+        res = dispatch_to_gui(
+            lambda: self._edit_object_gui(doc_name, obj),
+            operation_name="edit_object",
+        )
         if _ok(res):
             return {"success": True, "object_name": obj.name}
         return _err(res)
 
     def delete_object(self, doc_name: str, obj_name: str):
-        res = dispatch_to_gui(lambda: self._delete_object_gui(doc_name, obj_name))
+        res = dispatch_to_gui(
+            lambda: self._delete_object_gui(doc_name, obj_name),
+            operation_name="delete_object",
+        )
         if _ok(res):
             return {"success": True, "object_name": obj_name}
         return _err(res)
@@ -100,7 +121,10 @@ class FreeCADRPC:
         running headlessly). Returns success once the new document is
         loaded from disk.
         """
-        res = dispatch_to_gui(lambda: self._reload_document_gui(doc_name))
+        res = dispatch_to_gui(
+            lambda: self._reload_document_gui(doc_name),
+            operation_name="reload_document",
+        )
         if _ok(res):
             return {"success": True, "document_name": doc_name}
         return _err(res)
@@ -114,6 +138,7 @@ class FreeCADRPC:
         res = dispatch_to_gui(
             lambda: self._run_fem_analysis_gui(doc_name, analysis_name),
             timeout=timeout_s,
+            operation_name="run_fem_analysis",
         )
         if isinstance(res, dict):
             return res
@@ -127,10 +152,16 @@ class FreeCADRPC:
         completion status (e.g. check SessionState.Label via get_object).
         """
         def _set_status(msg):
-            dispatch_to_gui(lambda: FreeCADGui.getMainWindow().statusBar().showMessage(msg))
+            dispatch_to_gui(
+                lambda: FreeCADGui.getMainWindow().statusBar().showMessage(msg),
+                operation_name="show_async_status",
+            )
 
         def _clear_status():
-            dispatch_to_gui(lambda: FreeCADGui.getMainWindow().statusBar().clearMessage())
+            dispatch_to_gui(
+                lambda: FreeCADGui.getMainWindow().statusBar().clearMessage(),
+                operation_name="clear_async_status",
+            )
 
         def worker() -> None:
             # NOTE: we do NOT redirect sys.stdout here. contextlib.redirect_stdout
@@ -167,7 +198,11 @@ class FreeCADRPC:
                 exec(code, globals())
             return True
 
-        res = dispatch_to_gui(task, timeout=self.EXECUTE_CODE_TIMEOUT)
+        res = dispatch_to_gui(
+            task,
+            timeout=self.EXECUTE_CODE_TIMEOUT,
+            operation_name="execute_code",
+        )
         if _ok(res):
             FreeCAD.Console.PrintMessage("Python code executed successfully.\n")
             return {
@@ -202,7 +237,10 @@ class FreeCADRPC:
         return None
 
     def insert_part_from_library(self, relative_path):
-        res = dispatch_to_gui(lambda: self._insert_part_from_library(relative_path))
+        res = dispatch_to_gui(
+            lambda: self._insert_part_from_library(relative_path),
+            operation_name="insert_part_from_library",
+        )
         if _ok(res):
             return {"success": True, "message": "Part inserted from library."}
         return _err(res)
@@ -242,7 +280,7 @@ class FreeCADRPC:
             return save_active_screenshot(tmp_path, view_name, width, height, focus_object)
 
         try:
-            res = dispatch_to_gui(task)
+            res = dispatch_to_gui(task, operation_name="get_active_screenshot")
             if _ok(res):
                 with open(tmp_path, "rb") as f:
                     return base64.b64encode(f.read()).decode("utf-8")
@@ -264,24 +302,7 @@ class FreeCADRPC:
         return create_object_gui(doc_name, obj)
 
     def _edit_object_gui(self, doc_name: str, obj: Object):
-        try:
-            doc = FreeCAD.getDocument(doc_name)
-        except Exception:
-            FreeCAD.Console.PrintError(f"Document '{doc_name}' not found.\n")
-            return f"Document '{doc_name}' not found.\n"
-
-        obj_ins = doc.getObject(obj.name)
-        if not obj_ins:
-            FreeCAD.Console.PrintError(f"Object '{obj.name}' not found in document '{doc_name}'.\n")
-            return f"Object '{obj.name}' not found in document '{doc_name}'.\n"
-
-        try:
-            set_object_property(doc, obj_ins, obj.properties)
-            doc.recompute()
-            FreeCAD.Console.PrintMessage(f"Object '{obj.name}' updated via RPC.\n")
-            return True
-        except Exception as e:
-            return str(e)
+        return edit_object_gui(doc_name, obj)
 
     def _run_fem_analysis_gui(self, doc_name: str, analysis_name: str):
         return _run_fem_analysis(doc_name, analysis_name)

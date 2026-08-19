@@ -23,6 +23,7 @@ from .operations import (
     get_object_operation,
     get_objects_operation,
     get_parts_list_operation,
+    get_rpc_status_operation,
     get_view_operation,
     insert_part_from_library_operation,
     list_documents_operation,
@@ -554,6 +555,17 @@ def list_documents(ctx: Context) -> list[TextContent]:
         A list of document names.
     """
     return list_documents_operation(get_freecad_connection())
+
+
+@mcp.tool(structured_output=False)
+def get_rpc_status(ctx: Context) -> list[TextContent]:
+    """Get RPC and FreeCAD GUI-dispatch health.
+
+    This tool does not use FreeCAD's GUI thread, so it remains available after
+    a GUI operation times out. A ``stuck`` state identifies the operation that
+    is still running and indicates that FreeCAD may need to be restarted.
+    """
+    return get_rpc_status_operation(get_freecad_connection())
 
 
 @mcp.tool(structured_output=False)

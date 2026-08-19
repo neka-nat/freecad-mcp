@@ -10,6 +10,7 @@ import FreeCAD
 import ObjectsFem
 
 from rpc_server.property_mapper import Object, set_object_property
+from rpc_server.object_validation import object_validity_error
 
 
 def _create_fem_mesh(doc: FreeCAD.Document, obj: Object):
@@ -113,6 +114,46 @@ def create_object_gui(doc_name: str, obj: Object):
             created = _create_generic_object(doc, obj)
 
         doc.recompute()
+        problem = object_validity_error(created)
+        if problem:
+            FreeCAD.Console.PrintError(problem + "\n")
+            return {
+                "success": False,
+                "object_name": created.Name,
+                "error": problem,
+            }
         return {"success": True, "object_name": created.Name}
+    except Exception as e:
+        return str(e)
+
+
+def edit_object_gui(doc_name: str, obj: Object):
+    """Apply properties to an existing object and verify the recomputed state."""
+    try:
+        doc = FreeCAD.getDocument(doc_name)
+    except Exception:
+        FreeCAD.Console.PrintError(f"Document '{doc_name}' not found.\n")
+        return f"Document '{doc_name}' not found.\n"
+
+    obj_ins = doc.getObject(obj.name)
+    if obj_ins is None:
+        FreeCAD.Console.PrintError(
+            f"Object '{obj.name}' not found in document '{doc_name}'.\n"
+        )
+        return f"Object '{obj.name}' not found in document '{doc_name}'.\n"
+
+    try:
+        set_object_property(doc, obj_ins, obj.properties)
+        doc.recompute()
+        problem = object_validity_error(obj_ins)
+        if problem:
+            FreeCAD.Console.PrintError(problem + "\n")
+            return {
+                "success": False,
+                "object_name": obj_ins.Name,
+                "error": problem,
+            }
+        FreeCAD.Console.PrintMessage(f"Object '{obj_ins.Name}' updated via RPC.\n")
+        return True
     except Exception as e:
         return str(e)

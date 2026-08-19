@@ -20,8 +20,12 @@ Robustness and performance guarantees:
    ``finally`` reschedule, so ``stop_rpc_server`` actually stops the loop.
 5. Exception isolation: exceptions inside a task are caught, logged, and
    returned as error strings; they never kill the dispatch loop.
+6. Stuck-task fail-fast: once a task that already started times out, later GUI
+   calls fail immediately until that task returns. Status remains available
+   through a GUI-independent RPC method.
 """
 
+import itertools
 import queue
 import threading
 import time
@@ -32,11 +36,15 @@ import FreeCAD
 import FreeCADGui
 from PySide import QtCore, QtWidgets
 
+from rpc_server.dispatch_health import DispatchHealth, stuck_failure
+
 
 _rpc_request_queue: "queue.Queue[Any]" = queue.Queue()
 _SHUTDOWN = object()
 _processing = False  # re-entrancy guard: True while process_gui_tasks is draining
 _processing_since: float = 0.0  # wall-clock time when _processing became True
+_task_ids = itertools.count(1)
+_dispatch_health = DispatchHealth()
 
 
 class _WakeSignal(QtCore.QObject):
@@ -159,36 +167,62 @@ def request_shutdown() -> None:
     _rpc_request_queue.put(_SHUTDOWN)
 
 
-def dispatch_to_gui(task: Callable[[], Any], timeout: float = 60) -> Any:
+def get_dispatch_status() -> dict[str, Any]:
+    """Return GUI dispatch health without touching FreeCAD's GUI thread."""
+    return _dispatch_health.snapshot()
+
+
+def dispatch_to_gui(
+    task: Callable[[], Any],
+    timeout: float = 60,
+    operation_name: str | None = None,
+) -> Any:
     """Run ``task`` on the GUI thread and return its result.
 
     Uses a per-call response queue so a timeout in one call never corrupts
     the response for a subsequent call. Wakes the GUI thread immediately via
     a Qt signal instead of waiting for the next 500 ms heartbeat.
 
-    On timeout the queued task is cancelled: if it has not started yet it
-    will never run, so a caller retrying after a timeout cannot trigger a
-    double execution. A task already running on the GUI thread cannot be
-    interrupted; only its result is discarded.
+    On timeout the queued task is cancelled if it has not started yet. A task
+    already running on the GUI thread cannot be interrupted; it is marked as
+    stuck and subsequent GUI calls fail immediately until it returns.
 
     Returns the task's return value on success, an error string if the task
     raises, or ``{"success": False, "error": ...}`` on timeout.
     """
+    rejection = _dispatch_health.rejection()
+    if rejection is not None:
+        return rejection
+
+    task_id = next(_task_ids)
+    operation = operation_name or getattr(task, "__name__", "GUI operation")
+    if operation == "<lambda>":
+        operation = "GUI operation"
+
     response_queue: "queue.Queue[Any]" = queue.Queue(maxsize=1)
-    cancelled = threading.Event()
+    state_lock = threading.Lock()
+    started = False
+    cancelled = False
 
     def _wrapped() -> None:
-        if cancelled.is_set():
-            return  # caller timed out and went away; don't run a stale task
+        nonlocal started
+        with state_lock:
+            if cancelled:
+                return  # caller timed out and went away; don't run a stale task
+            started = True
+            _dispatch_health.start(task_id, operation)
         try:
-            res = task()
-        except Exception as e:
-            FreeCAD.Console.PrintError(
-                f"MCP RPC: GUI task raised {type(e).__name__}: {e}\n"
-                f"{traceback.format_exc()}"
-            )
-            res = f"{type(e).__name__}: {e}"
-        response_queue.put(res)
+            try:
+                res = task()
+            except Exception as e:
+                FreeCAD.Console.PrintError(
+                    f"MCP RPC: GUI task raised {type(e).__name__}: {e}\n"
+                    f"{traceback.format_exc()}"
+                )
+                res = f"{type(e).__name__}: {e}"
+        finally:
+            _dispatch_health.finish(task_id)
+        response_queue.put_nowait(res)
 
     _rpc_request_queue.put(_wrapped)
     if _waker is not None:
@@ -197,7 +231,16 @@ def dispatch_to_gui(task: Callable[[], Any], timeout: float = 60) -> Any:
     try:
         return response_queue.get(timeout=timeout)
     except queue.Empty:
-        cancelled.set()  # a not-yet-started task must not run after we give up
+        with state_lock:
+            cancelled = True  # a queued task must not start after we give up
+            stuck = (
+                _dispatch_health.mark_timed_out(task_id, timeout)
+                if started
+                else None
+            )
+        if stuck is not None:
+            return stuck_failure(stuck, just_timed_out=True)
+
         # Diagnose why: if _processing is still True, the GUI thread is occupied
         # by a long-running task that was queued before this one.
         if _processing:

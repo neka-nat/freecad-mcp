@@ -227,6 +227,15 @@ def list_documents_operation(freecad: FreeCADConnection) -> ToolResponse:
     return json_response(freecad.list_documents())
 
 
+def get_rpc_status_operation(freecad: FreeCADConnection) -> ToolResponse:
+    """Get bridge health through the GUI-independent RPC status method."""
+    try:
+        return json_response(freecad.get_rpc_status())
+    except Exception as e:
+        logger.error(f"Failed to get RPC status: {str(e)}")
+        return text_response(f"Failed to get RPC status: {str(e)}")
+
+
 def run_fem_analysis_operation(
     freecad: FreeCADConnection,
     only_text_feedback: bool,
@@ -279,4 +288,3 @@ def reload_document_operation(
     except Exception as e:
         logger.error(f"Failed to reload document: {str(e)}")
         return text_response(f"Failed to reload document: {str(e)}")
-
