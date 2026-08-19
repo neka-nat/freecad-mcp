@@ -1,7 +1,9 @@
+import base64
 import logging
+import struct
 from typing import Any
 
-from mcp.types import ImageContent
+from mcp.types import ImageContent, TextContent
 
 from ..freecad_client import FreeCADConnection
 from ..responses import ToolResponse, add_screenshot_if_available, json_response, text_response
@@ -154,6 +156,82 @@ def get_view_operation(
     except Exception as e:
         logger.error(f"Failed to get view: {str(e)}")
         return text_response(f"Failed to get view: {str(e)}")
+
+
+def _png_dimensions(b64: str) -> tuple[int, int] | None:
+    """Read (width, height) from a base64 PNG's IHDR without any image library."""
+    try:
+        raw = base64.b64decode(b64)
+        if raw[:8] != b"\x89PNG\r\n\x1a\n":
+            return None
+        return struct.unpack(">II", raw[16:24])
+    except Exception:
+        return None
+
+
+def get_page_operation(
+    freecad: FreeCADConnection,
+    page_name: str,
+    width: int | None = None,
+    crop: list[float] | None = None,
+    doc_name: str | None = None,
+    save_to: str | None = None,
+    include_image: bool = True,
+) -> ToolResponse:
+    try:
+        res = freecad.get_page_screenshot(
+            page_name, width, crop, doc_name, save_to, include_image
+        )
+        if not res.get("success"):
+            return text_response(
+                res.get("error") or f"Could not render page '{page_name}'"
+            )
+        if res.get("image") is None and res.get("path") is None:
+            # Success with no payload is self-contradictory: the addon only
+            # reports success after reading the PNG back, and refuses
+            # include_image=False without save_to. Reaching here means the
+            # reply came from an addon older than this client, whose keys this
+            # code cannot find. Say so, rather than reporting a render that
+            # produced nothing the caller can reach.
+            return text_response(
+                f"Page '{page_name}': the addon reported success but returned "
+                f"neither an image nor a path. The installed addon is most "
+                f"likely older than the server -- reinstall it from "
+                f"addon/FreeCADMCP and restart FreeCAD."
+            )
+
+        shot = res.get("image")
+        w, h = res.get("width"), res.get("height")
+        if (w is None or h is None) and shot:
+            dims = _png_dimensions(shot)
+            if dims:
+                w, h = dims
+
+        note = f"Page '{page_name}'"
+        if w and h:
+            note += f" rendered at {w}x{h}"
+            if include_image:
+                note += f" (~{w * h // 750} tokens)"
+        if crop:
+            note += f", crop={tuple(crop)}"
+        if res.get("path"):
+            note += f", saved to {res['path']}"
+            if res.get("bytes"):
+                note += f" ({res['bytes'] / 1024:.0f} KB)"
+        if not include_image:
+            note += "; image not returned"
+
+        if shot:
+            return [
+                ImageContent(type="image", data=shot, mimeType="image/png"),
+                TextContent(type="text", text=note + "."),
+            ]
+        if not include_image:
+            return text_response(note + ".")
+        return text_response(f"Could not render page '{page_name}'")
+    except Exception as e:
+        logger.error(f"Failed to get page: {str(e)}")
+        return text_response(f"Failed to get page: {str(e)}")
 
 
 def insert_part_from_library_operation(

@@ -192,6 +192,7 @@ The `--host` value is validated on startup — it must be a valid IPv4/IPv6 addr
 * `execute_code`: Execute arbitrary Python code in FreeCAD.
 * `insert_part_from_library`: Insert a part from the [parts library](https://github.com/FreeCAD/FreeCAD-library).
 * `get_view`: Get a screenshot of the active view.
+* `get_page`: Render a TechDraw drawing page as an image.
 * `get_objects`: Get all objects in a document.
 * `get_object`: Get an object in a document.
 * `get_parts_list`: Get the list of parts in the [parts library](https://github.com/FreeCAD/FreeCAD-library).

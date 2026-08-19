@@ -22,6 +22,7 @@ from .operations import (
     execute_code_operation,
     get_object_operation,
     get_objects_operation,
+    get_page_operation,
     get_parts_list_operation,
     get_view_operation,
     insert_part_from_library_operation,
@@ -420,6 +421,51 @@ def get_view(
         A screenshot of the active view.
     """
     return get_view_operation(get_freecad_connection(), view_name, width, height, focus_object)
+
+
+@mcp.tool(structured_output=False)
+def get_page(
+    ctx: Context,
+    page_name: str,
+    width: int | None = None,
+    crop: list[float] | None = None,
+    doc_name: str | None = None,
+    save_to: str | None = None,
+    include_image: bool = True,
+) -> list[ImageContent | TextContent]:
+    """Get a rendered image of a TechDraw drawing page.
+
+    The page is a vector scene, so `width` is a *render resolution*, not a
+    resample ceiling: raising it buys genuinely sharper linework and legible
+    dimension text, unlike enlarging a raster. 1000 px is ample for judging
+    layout -- whether dimensions collide, whether views are balanced. Go
+    bigger, or crop, to read fine detail.
+
+    Args:
+        page_name: Internal Name of the DrawPage object, e.g. "Page_Base".
+        width: Render width in pixels. Defaults to 1000. Width x height is
+            capped at 6M pixels; exceeding it is an error, not a silent
+            downscale.
+        crop: [left, top, right, bottom] as fractions 0..1 of the page,
+            origin top-left. Renders just that region at the full `width` --
+            a true vector zoom, not an enlarged crop.
+        doc_name: Document containing the page. Defaults to the active
+            document. Page names are not unique across documents, so pass
+            this whenever more than one document is open.
+        save_to: Path ending in .png to keep the render at. Without it the
+            render is written to a temp file and deleted once encoded, so
+            nothing survives the call. The parent directory must exist.
+        include_image: Set False to write the file and report its path and
+            size without returning the image itself. Requires save_to.
+
+    Returns:
+        A PNG image of the drawing page, plus a line giving the delivered
+        dimensions, approximate token cost, and save path if any.
+    """
+    return get_page_operation(
+        get_freecad_connection(), page_name, width, crop, doc_name,
+        save_to, include_image,
+    )
 
 
 @mcp.tool(structured_output=False)
