@@ -120,11 +120,30 @@ def create_object(
     view_name: ViewName = "Isometric",
 ) -> list[TextContent | ImageContent]:
     """Create a new object in FreeCAD.
-    Object type is starts with "Part::" or "Draft::" or "PartDesign::" or "Fem::".
+
+    ``obj_type`` must name a type registered in FreeCAD's C++ type system, such
+    as "Part::", "PartDesign::" or "Fem::" types. A number of FreeCAD features
+    are implemented in Python rather than C++ and so are not registered types;
+    of those, these are supported here through dedicated factories, and each
+    requires the properties listed beside it:
+
+        Part::Tube        InnerRadius, OuterRadius, Height
+        Draft::Circle     Radius
+        Draft::Rectangle  Length, Height
+        Draft::Polygon    FacesNumber, Radius
+        Draft::Wire       Points (list of {x, y, z}), optional Closed
+
+    Any other Python-implemented type (Draft::Point, Draft::Ellipse, ...) must
+    be built with ``execute_code`` instead.
+
+    Note that the Draft factories name objects themselves, so for those the
+    returned object_name will differ from the requested obj_name, which is
+    applied to the object's Label instead. Always use the returned name in
+    later get_object/edit_object calls.
 
     Args:
         doc_name: The name of the document to create the object in.
-        obj_type: The type of the object to create (e.g. 'Part::Box', 'Part::Cylinder', 'Draft::Circle', 'PartDesign::Body', etc.).
+        obj_type: The type of the object to create (e.g. 'Part::Box', 'Part::Cylinder', 'Part::Cut', 'PartDesign::Body', etc.).
         obj_name: The name of the object to create.
         obj_properties: The properties of the object to create.
         include_screenshot: Whether to return a screenshot of the model (default True).
@@ -168,12 +187,32 @@ def create_object(
         }
         ```
 
-        If you want to create a circle with a radius of 10, you can use the following data.
+        If you want to cut one solid out of another, create both solids first,
+        then reference them by name as 'Base' and 'Tool'.
         ```json
         {
-            "doc_name": "MyCircle",
-            "obj_name": "Circle",
-            "obj_type": "Draft::Circle",
+            "doc_name": "MyPart",
+            "obj_name": "Cut",
+            "obj_type": "Part::Cut",
+            "obj_properties": {
+                "Base": "Box",
+                "Tool": "Cylinder"
+            }
+        }
+        ```
+
+        If you want to create a pipe with an outer diameter of 250, a 10 wall
+        and a length of 500, you can use the following data.
+        ```json
+        {
+            "doc_name": "MyPipe",
+            "obj_name": "Pipe",
+            "obj_type": "Part::Tube",
+            "obj_properties": {
+                "OuterRadius": 125,
+                "InnerRadius": 115,
+                "Height": 500
+            }
         }
         ```
 
