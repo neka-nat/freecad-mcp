@@ -1,4 +1,5 @@
 import logging
+import urllib.parse
 import xmlrpc.client
 from typing import Any
 
@@ -24,8 +25,17 @@ class _TimeoutTransport(xmlrpc.client.Transport):
 
 
 class FreeCADConnection:
-    def __init__(self, host: str = "localhost", port: int = 9875, timeout: float = 150):
-        self._uri = f"http://{host}:{port}"
+    def __init__(
+        self,
+        host: str = "localhost",
+        port: int = 9875,
+        timeout: float = 150,
+        token: str | None = None,
+    ):
+        # A configured token travels as the password field of HTTP Basic auth
+        # (username empty), which xmlrpc.client extracts from the URI itself.
+        auth = f":{urllib.parse.quote(token, safe='')}@" if token else ""
+        self._uri = f"http://{auth}{host}:{port}"
         self._timeout = timeout
         self.server = self._make_proxy(timeout)
 
@@ -100,6 +110,7 @@ class FreeCADConnection:
         # The solver blocks the RPC response for up to `timeout` seconds, so the
         # socket must outlast it. The default 150 s transport timeout would abort
         # any solve longer than that even though the addon is still working.
-        # Use a dedicated proxy whose socket timeout exceeds the solver timeout.
-        proxy = self._make_proxy(max(self._timeout, timeout + 30))
-        return proxy.run_fem_analysis(doc_name, analysis_name, timeout)
+        # Use a dedicated proxy whose socket timeout exceeds the solver timeout;
+        # close it when done so the one-off HTTP connection is not left cached.
+        with self._make_proxy(max(self._timeout, timeout + 30)) as proxy:
+            return proxy.run_fem_analysis(doc_name, analysis_name, timeout)
