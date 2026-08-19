@@ -144,7 +144,14 @@ def save_active_screenshot(
         else:
             view.fitAll()
         resolved_width, resolved_height = _resolve_screenshot_size(view, width, height)
-        view.saveImage(save_path, resolved_width, resolved_height, "Current")
+        # On Wayland the offscreen GL contexts used by the default saveImage()
+        # method render solid black; "Framebuffer" reads back the on-screen GL
+        # context and captures correctly (and also works on X11/Windows/macOS).
+        # FreeCAD < 1.0 lacks the method argument — fall back to the legacy call.
+        try:
+            view.saveImage(save_path, resolved_width, resolved_height, "Current", "Framebuffer")
+        except TypeError:
+            view.saveImage(save_path, resolved_width, resolved_height, "Current")
 
         if focused_selection:
             FreeCADGui.Selection.clearSelection()
