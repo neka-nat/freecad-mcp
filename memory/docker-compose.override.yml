@@ -1,0 +1,5 @@
+services:
+  axio-postgres:
+    volumes:
+      - ./memory/schema.sql:/docker-entrypoint-initdb.d/010_freecad_mcp_schema.sql:ro
+

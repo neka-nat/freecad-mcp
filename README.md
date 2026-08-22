@@ -2,7 +2,7 @@
 
 # FreeCAD MCP
 
-This repository is a FreeCAD MCP that allows you to control FreeCAD from Claude Desktop.
+This repository is a FreeCAD MCP that allows you to control FreeCAD from Claude Desktop, Codex, or any MCP-compatible agent that can call the same FreeCAD tools.
 
 ## Demo
 
