@@ -1,0 +1,81 @@
+.TH FREECAD\-MCP 1 "August 2026" "freecad-mcp" "User Commands"
+.SH NAME
+freecad-mcp \- Model Context Protocol server for FreeCAD integration
+.SH SYNOPSIS
+.B freecad-mcp
+[\fB\-\-only\-text\-feedback\fR] [\fB\-\-host\fR \fIADDRESS\fR]
+.SH DESCRIPTION
+.B freecad-mcp
+is a Model Context Protocol (MCP) server that enables LLM-based coding agents to
+interact with FreeCAD for 3D modelling and related tasks. It connects to the
+FreeCAD MCP addon running inside a FreeCAD instance via an RPC server, exposing
+tools for document management, object creation and editing, code execution, parts
+library access, view screenshots, and finite element analysis.
+.PP
+The server communicates with clients over stdio using the JSON-RPC based MCP
+protocol, making it compatible with any MCP-compatible client such as Claude Desktop.
+.SH OPTIONS
+.TP
+.B \-\-only\-text\-feedback
+Disable screenshot feedback from all tools. When set, tools that normally return
+both text and image content will return only text. This reduces token usage when
+visual feedback is not needed. Individual tools may also accept an
+.B include_screenshot
+parameter for per-call control; however, this flag always takes precedence and
+suppresses all images globally.
+.TP
+.B \-\-host \fIADDRESS\fR
+The hostname or IP address of the FreeCAD RPC server to connect to. Defaults to
+.IR localhost .
+The value must be a valid IPv4/IPv6 address or hostname. Use this option when
+FreeCAD is running on a remote machine.
+.SH EXAMPLES
+Connect to a FreeCAD instance running on a remote host via IPv6, suppressing image feedback:
+.PP
+.nf
+\fBfreecad-mcp \-\-host fd00::42 \-\-only\-text\-feedback\fR
+.fi
+.SH CONFIGURATION
+The MCP server is typically invoked by an MCP client. A minimal Claude Desktop
+configuration in
+.IR claude_desktop_config.json :
+.PP
+.nf
+{
+  "mcpServers": {
+    "freecad": {
+      "command": "freecad-mcp"
+    }
+  }
+}
+.fi
+.SH PREREQUISITES
+Before running
+.B freecad-mcp,
+the FreeCAD MCP addon must be installed and the RPC server started within FreeCAD.
+The addon provides a workbench with a
+.B Start RPC Server
+command in the
+.B FreeCAD MCP
+toolbar. Auto-start can be enabled from the
+.B FreeCAD MCP
+menu so the RPC server starts automatically on each FreeCAD launch.
+.PP
+The RPC server listens on port 9875 by default.
+.SH MCP TOOLS
+The available tools can be queried from the server using JSON-RPC over stdio. The MCP protocol requires an initialization handshake first:
+.PP
+.nf
+\fBprintf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}\\n{"jsonrpc":"2.0","method":"notifications/initialized"}\\n{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | \\\e
+    freecad-mcp 2>/dev/null | jq -r 'select(.result.tools) | .result.tools[].name'\fR
+.fi
+.SH ENVIRONMENT
+This tool does not read any environment variables directly. Configuration is passed
+via command-line arguments by the MCP client.
+.SH SEE ALSO
+.BR mcp (1),
+.BR freecad (1)
+.SH REPORTING BUGS
+Report bugs at https://github.com/neka-nat/freecad-mcp/issues
+.SH AUTHOR
+FreeCAD MCP was written by neka-nat.  This man page was written by Petter Reinholdtsen.
