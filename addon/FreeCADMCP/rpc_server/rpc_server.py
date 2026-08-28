@@ -424,10 +424,11 @@ def stop_rpc_server():
     cleanup_waker()
 
     def _shutdown_and_close():
-        # shutdown() blocks until serve_forever drains the in-flight request,
-        # and that request may itself be waiting on dispatch_to_gui — running
-        # this on the GUI thread (menu command) froze the UI for up to the
-        # dispatch timeout. server_close() must always follow: without it the
+        # shutdown() only stops the accept loop; in-flight requests run in
+        # their own daemon threads and are not waited for, so this returns
+        # promptly even while a GUI task is stuck. It still runs off the GUI
+        # thread: a menu command must never risk blocking the UI here.
+        # server_close() must always follow: without it the
         # listening socket stays bound and Stop -> Start fails with
         # EADDRINUSE (the restart the README asks for after changing Remote
         # Connections or Allowed IPs).

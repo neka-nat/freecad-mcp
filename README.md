@@ -204,7 +204,9 @@ Tools that return a screenshot (`create_object`, `edit_object`, `delete_object`,
 
 If a GUI-thread operation exceeds its timeout after it has started, the bridge
 returns `GUI_DISPATCH_STUCK` and rejects later GUI operations immediately. Use
-`get_rpc_status` to identify the operation that is still running. FreeCAD GUI
+`get_rpc_status` to identify the operation that is still running; the RPC server
+handles each request in its own thread, so that status call is answered even while
+the stuck operation is still holding the GUI thread. FreeCAD GUI
 work cannot be force-cancelled safely; if the status does not return to
 `healthy` after the operation finishes, restart FreeCAD.
 
