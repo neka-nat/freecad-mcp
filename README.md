@@ -38,6 +38,7 @@ FreeCAD Addon directory is
   * Ubuntu: `~/.FreeCAD/Mod/` or `~/snap/freecad/common/Mod/` (if you install FreeCAD from snap)
   * Debian: `~/.local/share/FreeCAD/Mod`
   * Arch / CachyOS (FreeCAD 1.1 from `extra/freecad`): `~/.local/share/FreeCAD/v1-1/Mod/`
+  * Flatpak: `~/.var/app/org.freecad.FreeCAD/data/FreeCAD/v1-1/Mod/`
 
 Please put `addon/FreeCADMCP` directory to the addon directory.
 
@@ -46,13 +47,19 @@ git clone https://github.com/neka-nat/freecad-mcp.git
 cd freecad-mcp
 
 # For Linux (Ubuntu/Debian)
+mkdir -p ~/.FreeCAD/Mod/
 cp -r addon/FreeCADMCP ~/.FreeCAD/Mod/
 
 # For Linux (Arch/CachyOS, FreeCAD 1.1 from extra/freecad)
 mkdir -p ~/.local/share/FreeCAD/v1-1/Mod/
 cp -r addon/FreeCADMCP ~/.local/share/FreeCAD/v1-1/Mod/
 
+# For Linux (Flatpak)
+mkdir -p ~/.var/app/org.freecad.FreeCAD/data/FreeCAD/v1-1/Mod/
+cp -r addon/FreeCADMCP ~/.var/app/org.freecad.FreeCAD/data/FreeCAD/v1-1/Mod/
+
 # For macOS (FreeCAD 1.1)
+mkdir -p ~/Library/Application\ Support/FreeCAD/v1-1/Mod/
 cp -r addon/FreeCADMCP ~/Library/Application\ Support/FreeCAD/v1-1/Mod/
 ```
 
@@ -112,6 +119,8 @@ If you want to save token, you can set `only_text_feedback` to `true` and use on
   }
 }
 ```
+
+Screenshots can also be controlled per tool call instead of globally: every tool that returns a screenshot accepts an optional `include_screenshot` parameter (pass `false` to get text-only feedback, e.g. for analytical scripts or intermediate steps) and an optional `view_name` parameter to orient the screenshot ("Isometric" by default, or "Front", "Top", "Right", etc.). The `--only-text-feedback` flag always wins: when it is set, no screenshots are returned regardless of `include_screenshot`.
 
 
 For developer.
@@ -186,7 +195,32 @@ The `--host` value is validated on startup — it must be a valid IPv4/IPv6 addr
 * `get_objects`: Get all objects in a document.
 * `get_object`: Get an object in a document.
 * `get_parts_list`: Get the list of parts in the [parts library](https://github.com/FreeCAD/FreeCAD-library).
+* `get_rpc_status`: Report RPC and GUI-dispatch health without using the FreeCAD GUI thread.
 * `run_fem_analysis`: Run the CalculiX solver on an existing `Fem::FemAnalysis` and return summary results (max von Mises stress, max displacement, node count, working directory). Auto-creates a `SolverCcxTools` if the analysis has none. See [`examples/cantilever_fem.py`](examples/cantilever_fem.py) for an end-to-end usage example.
+
+Tools that return a screenshot (`create_object`, `edit_object`, `delete_object`, `execute_code`, `insert_part_from_library`, `get_objects`, `get_object`, `run_fem_analysis`) accept optional `include_screenshot` (default `true`) and `view_name` (default `"Isometric"`) parameters to suppress or reorient the returned image per call.
+
+### GUI dispatch timeouts
+
+If a GUI-thread operation exceeds its timeout after it has started, the bridge
+returns `GUI_DISPATCH_STUCK` and rejects later GUI operations immediately. Use
+`get_rpc_status` from a separate RPC client to identify the operation that is
+still running. The RPC server handles connections concurrently, so diagnostics
+do not wait for another request to finish. Document queries (`get_object`,
+`get_objects`, and `list_documents`) run on the GUI thread alongside modelling
+operations and report an RPC fault if dispatch times out or is stuck. FreeCAD GUI
+work cannot be force-cancelled safely; if the status does not return to
+`healthy` after the operation finishes, restart FreeCAD.
+
+`execute_code` and `execute_code_async` share a persistent script namespace with
+`FreeCAD`/`App` and `FreeCADGui`/`Gui` aliases. Script variables survive between
+calls without overwriting the RPC server's own functions. This prevents accidental
+name collisions; code execution still has FreeCAD's full privileges.
+
+After an `execute_code` exception on a FreeCAD development build, inspect any
+new `FeaturePython` object before mutating or deleting it. In particular, do
+not continue with an object whose required `Proxy` was never installed, as
+touching that broken object can wedge FreeCAD's GUI thread.
 
 ## Contributors
 

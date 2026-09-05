@@ -1,8 +1,7 @@
 """Qt Command classes for the MCP Addon workbench menu.
 
 Defines the five toolbar/menu entries (Start, Stop, Toggle Auto-Start,
-Toggle Remote, Configure Allowed IPs), plus the post-startup sync that
-reflects saved settings on the checkable items.
+Toggle Remote, Configure Allowed IPs).
 
 ``register_commands()`` and ``schedule_toggle_sync()`` are invoked from
 ``rpc_server.py`` at import time to preserve current side-effect behavior.
@@ -10,7 +9,7 @@ reflects saved settings on the checkable items.
 
 import FreeCAD
 import FreeCADGui
-from PySide import QtCore, QtWidgets
+from PySide import QtWidgets
 
 from rpc_server.ip_filter import validate_allowed_ips
 from rpc_server.settings import load_settings, save_settings
@@ -44,10 +43,11 @@ class StopRPCServerCommand:
 
 class ToggleRemoteConnectionsCommand:
     def GetResources(self):
+        settings = load_settings()
         return {
             "MenuText": "Remote Connections",
             "ToolTip": "Enable or disable remote connections for the RPC server.",
-            "Checkable": True,
+            "Checkable": bool(settings.get("remote_enabled", False)),
         }
 
     def Activated(self, checked=0):
@@ -125,10 +125,11 @@ class ConfigureAllowedIPsCommand:
 
 class ToggleAutoStartCommand:
     def GetResources(self):
+        settings = load_settings()
         return {
             "MenuText": "Auto-Start Server",
             "ToolTip": "Automatically start the RPC server when FreeCAD launches.",
-            "Checkable": True,
+            "Checkable": bool(settings.get("auto_start_rpc", False)),
         }
 
     def Activated(self, checked=0):
@@ -157,37 +158,11 @@ def register_commands() -> None:
     FreeCADGui.addCommand("Configure_Allowed_IPs", ConfigureAllowedIPsCommand())
 
 
-# Map command objectName -> settings key. Matching on objectName rather than
-# the localized menu text keeps this working under translation.
-_TOGGLE_COMMANDS = {
-    "Toggle_Remote_Connections": "remote_enabled",
-    "Toggle_Auto_Start": "auto_start_rpc",
-}
-_SYNC_MAX_RETRIES = 10  # ~20 s at 2 s/retry before giving up
-
-
-def _sync_toggle_states(retries_left: int = _SYNC_MAX_RETRIES) -> None:
-    """Sync checkable menu items with saved settings on startup.
-
-    The menu actions are created asynchronously, so retry a bounded number of
-    times until they exist rather than polling forever.
-    """
-    try:
-        settings = load_settings()
-        main_window = FreeCADGui.getMainWindow()
-        found = 0
-        for action in main_window.findChildren(QtWidgets.QAction):
-            key = _TOGGLE_COMMANDS.get(action.objectName())
-            if key is not None:
-                action.setChecked(bool(settings.get(key, False)))
-                found += 1
-        if found == len(_TOGGLE_COMMANDS):
-            return
-    except Exception:
-        pass
-    if retries_left > 0:
-        QtCore.QTimer.singleShot(2000, lambda: _sync_toggle_states(retries_left - 1))
-
-
 def schedule_toggle_sync() -> None:
-    QtCore.QTimer.singleShot(2000, _sync_toggle_states)
+    """Compatibility no-op; toggle state is initialized by ``GetResources``.
+
+    FreeCAD treats the presence of the ``Checkable`` resource as making an
+    action checkable and uses its boolean value as the action's initial checked
+    state. Loading the saved setting in ``GetResources`` therefore avoids any
+    delayed QAction lookup or workbench activation at startup.
+    """
