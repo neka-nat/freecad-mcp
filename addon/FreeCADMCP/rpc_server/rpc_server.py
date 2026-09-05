@@ -7,7 +7,9 @@ import io
 import os
 import tempfile
 import threading
+from collections.abc import Callable
 from typing import Any
+from xmlrpc.client import Fault
 
 from PySide import QtCore
 
@@ -43,6 +45,17 @@ rpc_server_thread = None
 rpc_server_instance = None
 _stop_thread = None  # drains shutdown off the GUI thread; see stop_rpc_server
 
+# Persistent namespace for execute_code / execute_code_async. A dedicated dict
+# (instead of this module's globals()) keeps user code from shadowing server
+# internals like dispatch_to_gui while preserving the documented pattern of
+# sharing module-level variables between successive calls.
+_EXEC_NAMESPACE: dict[str, Any] = {
+    "FreeCAD": FreeCAD,
+    "App": FreeCAD,
+    "FreeCADGui": FreeCADGui,
+    "Gui": FreeCADGui,
+}
+
 
 def _ok(res) -> bool:
     """True when a GUI-thread handler returned success."""
@@ -54,6 +67,18 @@ def _err(res) -> dict:
     if isinstance(res, dict):
         return res
     return {"success": False, "error": str(res)}
+
+
+def _query_on_gui(task: Callable[[], Any], operation: str) -> Any:
+    """Preserve query results while reporting dispatch failures as RPC faults."""
+    # A tuple distinguishes valid results (including None and empty lists)
+    # from the dispatcher's error strings and failure dictionaries.
+    res = dispatch_to_gui(lambda: (task(),), operation_name=operation)
+    if isinstance(res, tuple):
+        return res[0]
+    error = _err(res)
+    code = error.get("code", "GUI_DISPATCH_FAILED")
+    raise Fault(1, f"{code}: {error['error']}")
 
 
 class FreeCADRPC:
@@ -225,7 +250,7 @@ class FreeCADRPC:
             # GUI thread and other concurrent work. Background code should report
             # via FreeCAD.Console (which is thread-safe) instead.
             try:
-                exec(code, globals())
+                exec(code, _EXEC_NAMESPACE)
                 FreeCAD.Console.PrintMessage("Async code execution completed.\n")
             except Exception as e:
                 import traceback as _tb
@@ -251,7 +276,7 @@ class FreeCADRPC:
 
         def task():
             with contextlib.redirect_stdout(output_buffer):
-                exec(code, globals())
+                exec(code, _EXEC_NAMESPACE)
             return True
 
         res = dispatch_to_gui(
@@ -273,7 +298,10 @@ class FreeCADRPC:
         )
         return _err(res)
 
-    def get_objects(self, doc_name):
+    def get_objects(self, doc_name: str) -> list[dict[str, Any]]:
+        return _query_on_gui(lambda: self._get_objects_gui(doc_name), "get_objects")
+
+    def _get_objects_gui(self, doc_name: str) -> list[dict[str, Any]]:
         # FreeCAD.getDocument raises (not returns None) for an unknown name.
         try:
             doc = FreeCAD.getDocument(doc_name)
@@ -281,7 +309,12 @@ class FreeCADRPC:
             return []
         return [serialize_object(obj) for obj in doc.Objects]
 
-    def get_object(self, doc_name, obj_name):
+    def get_object(self, doc_name: str, obj_name: str) -> dict[str, Any] | None:
+        return _query_on_gui(
+            lambda: self._get_object_gui(doc_name, obj_name), "get_object"
+        )
+
+    def _get_object_gui(self, doc_name: str, obj_name: str) -> dict[str, Any] | None:
         # FreeCAD.getDocument raises (not returns None) for an unknown name.
         try:
             doc = FreeCAD.getDocument(doc_name)
@@ -301,8 +334,10 @@ class FreeCADRPC:
             return {"success": True, "message": "Part inserted from library."}
         return _err(res)
 
-    def list_documents(self):
-        return list(FreeCAD.listDocuments().keys())
+    def list_documents(self) -> list[str]:
+        return _query_on_gui(
+            lambda: list(FreeCAD.listDocuments().keys()), "list_documents"
+        )
 
     def get_parts_list(self):
         return get_parts_list()
@@ -571,13 +606,11 @@ def stop_rpc_server():
     cleanup_waker()
 
     def _shutdown_and_close():
-        # shutdown() blocks until serve_forever drains the in-flight request,
-        # and that request may itself be waiting on dispatch_to_gui — running
-        # this on the GUI thread (menu command) froze the UI for up to the
-        # dispatch timeout. server_close() must always follow: without it the
-        # listening socket stays bound and Stop -> Start fails with
-        # EADDRINUSE (the restart the README asks for after changing Remote
-        # Connections or Allowed IPs).
+        # shutdown() only stops the accept loop; in-flight requests run in
+        # their own daemon threads and are not waited for. Kept off the GUI
+        # thread so a menu command cannot block the UI. server_close() must
+        # always follow, or the listening socket stays bound and Stop -> Start
+        # fails with EADDRINUSE.
         try:
             server.shutdown()
             if thread is not None:

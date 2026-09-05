@@ -2,13 +2,26 @@
 
 import ipaddress
 import re
+from socketserver import ThreadingMixIn
 from xmlrpc.server import SimpleXMLRPCServer
 
 import FreeCAD
 
 
-class FilteredXMLRPCServer(SimpleXMLRPCServer):
-    """XML-RPC server that filters connections by allowed IP addresses/subnets."""
+class FilteredXMLRPCServer(ThreadingMixIn, SimpleXMLRPCServer):
+    """XML-RPC server that filters connections by allowed IP addresses/subnets.
+
+    Threaded so get_rpc_status stays answerable while a wedged GUI task blocks
+    another request. Document queries and synchronous modelling handlers
+    serialise onto the GUI thread through dispatch_to_gui. The opt-in
+    execute_code_async worker retains its existing background execution.
+
+    daemon_threads must stay true — ThreadingMixIn.server_close() joins
+    non-daemon request threads, which would make Stop wait out the stuck
+    operation.
+    """
+
+    daemon_threads = True
 
     def __init__(self, addr, allowed_ips_str="127.0.0.1", **kwargs):
         self._allowed_networks = _parse_allowed_ips(allowed_ips_str)

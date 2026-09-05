@@ -231,9 +231,18 @@ Tools that return a screenshot (`create_object`, `edit_object`, `delete_object`,
 
 If a GUI-thread operation exceeds its timeout after it has started, the bridge
 returns `GUI_DISPATCH_STUCK` and rejects later GUI operations immediately. Use
-`get_rpc_status` to identify the operation that is still running. FreeCAD GUI
+`get_rpc_status` from a separate RPC client to identify the operation that is
+still running. The RPC server handles connections concurrently, so diagnostics
+do not wait for another request to finish. Document queries (`get_object`,
+`get_objects`, and `list_documents`) run on the GUI thread alongside modelling
+operations and report an RPC fault if dispatch times out or is stuck. FreeCAD GUI
 work cannot be force-cancelled safely; if the status does not return to
 `healthy` after the operation finishes, restart FreeCAD.
+
+`execute_code` and `execute_code_async` share a persistent script namespace with
+`FreeCAD`/`App` and `FreeCADGui`/`Gui` aliases. Script variables survive between
+calls without overwriting the RPC server's own functions. This prevents accidental
+name collisions; code execution still has FreeCAD's full privileges.
 
 After an `execute_code` exception on a FreeCAD development build, inspect any
 new `FeaturePython` object before mutating or deleting it. In particular, do
