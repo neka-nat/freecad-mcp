@@ -16,10 +16,13 @@ from .freecad_client import FreeCADConnection
 from .operations import (
     create_document_operation,
     create_object_operation,
+    create_spatial_comment_operation,
     delete_object_operation,
+    delete_spatial_comment_operation,
     edit_object_operation,
     execute_code_async_operation,
     execute_code_operation,
+    get_current_selection_anchor_operation,
     get_object_operation,
     get_objects_operation,
     get_parts_list_operation,
@@ -27,6 +30,8 @@ from .operations import (
     get_view_operation,
     insert_part_from_library_operation,
     list_documents_operation,
+    list_spatial_comments_operation,
+    propose_spatial_comment_resolution_operation,
     reload_document_operation,
     run_fem_analysis_operation,
 )
@@ -615,6 +620,102 @@ def run_fem_analysis(
         include_screenshot,
         view_name,
     )
+
+
+@mcp.tool(structured_output=False)
+def create_spatial_comment(
+    ctx: Context,
+    doc_name: str,
+    text: str,
+    anchor: dict[str, Any] | None = None,
+    kind: Literal["edit_request", "approval"] = "edit_request",
+    author: str = "user",
+    thread_id: str | None = None,
+    capture_thumbnail: bool = False,
+    include_screenshot: bool = True,
+    view_name: ViewName = "Isometric",
+) -> list[TextContent | ImageContent]:
+    """Create spatial feedback in FreeCAD.
+
+    If anchor is omitted, the current FreeCAD selection is used. Anchors may target
+    a point, object, or subelement such as Face1/Edge2/Vertex3.
+
+    Args:
+        doc_name: Name of the FreeCAD document.
+        text: Comment text.
+        anchor: Optional explicit anchor; defaults to the current FreeCAD selection.
+        kind: Comment kind, either "edit_request" or "approval".
+        author: Comment author label.
+        thread_id: Optional thread id for grouping related comments.
+        capture_thumbnail: Store the current screenshot in the comment sidecar.
+        include_screenshot: Whether to return a screenshot of the model.
+        view_name: The view orientation of the returned/stored screenshot.
+    """
+    return create_spatial_comment_operation(
+        get_freecad_connection(),
+        state.only_text_feedback,
+        doc_name,
+        text,
+        anchor,
+        kind,
+        author,
+        thread_id,
+        capture_thumbnail,
+        include_screenshot,
+        view_name,
+    )
+
+
+@mcp.tool(structured_output=False)
+def list_spatial_comments(
+    ctx: Context,
+    doc_name: str,
+    status: Literal["open", "resolution_proposed", "resolved"] | None = None,
+    object_name: str | None = None,
+    include_resolved: bool = False,
+    thread_id: str | None = None,
+) -> list[TextContent]:
+    """List spatial feedback comments for a FreeCAD document."""
+    return list_spatial_comments_operation(
+        get_freecad_connection(),
+        doc_name,
+        status,
+        object_name,
+        include_resolved,
+        thread_id,
+    )
+
+
+@mcp.tool(structured_output=False)
+def propose_spatial_comment_resolution(
+    ctx: Context,
+    doc_name: str,
+    comment_id: str,
+    resolution_note: str,
+) -> list[TextContent]:
+    """Mark a comment as resolution_proposed. A user must confirm final resolution in FreeCAD."""
+    return propose_spatial_comment_resolution_operation(
+        get_freecad_connection(),
+        doc_name,
+        comment_id,
+        resolution_note,
+    )
+
+
+@mcp.tool(structured_output=False)
+def delete_spatial_comment(
+    ctx: Context, doc_name: str, comment_id: str
+) -> list[TextContent]:
+    """Delete a spatial feedback comment."""
+    return delete_spatial_comment_operation(
+        get_freecad_connection(), doc_name, comment_id
+    )
+
+
+@mcp.tool(structured_output=False)
+def get_current_selection_anchor(ctx: Context, doc_name: str) -> list[TextContent]:
+    """Return the current FreeCAD selection as a reusable spatial comment anchor."""
+    return get_current_selection_anchor_operation(get_freecad_connection(), doc_name)
 
 
 @mcp.prompt()

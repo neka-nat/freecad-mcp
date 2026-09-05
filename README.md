@@ -83,6 +83,28 @@ The setting is saved to `freecad_mcp_settings.json` and persists across sessions
 
 You can disable it at any time by unchecking **Auto-Start Server** in the same menu.
 
+### Spatial feedback comments
+
+Use the FreeCAD MCP toolbar command **Add Spatial Comment** to select a point,
+object, face, edge, or vertex and write feedback for the LLM. Comments are stored
+in a sidecar JSON file next to the `.FCStd` file when possible. For unsaved
+documents, sidecars are stored under FreeCAD user data in `freecad_mcp_comments/`.
+
+New MCP tools:
+
+* `create_spatial_comment`
+* `list_spatial_comments`
+* `propose_spatial_comment_resolution`
+* `delete_spatial_comment`
+* `get_current_selection_anchor`
+
+FreeCAD UI commands:
+
+* **Add Spatial Comment**
+* **Edit Spatial Comment**
+* **Sync Spatial Comments**
+* **Confirm Comment Resolution**
+
 ## Setting up Claude Desktop
 
 Pre-installation of the [uvx](https://docs.astral.sh/uv/guides/tools/) is required.
@@ -196,9 +218,14 @@ The `--host` value is validated on startup — it must be a valid IPv4/IPv6 addr
 * `get_object`: Get an object in a document.
 * `get_parts_list`: Get the list of parts in the [parts library](https://github.com/FreeCAD/FreeCAD-library).
 * `get_rpc_status`: Report RPC and GUI-dispatch health without using the FreeCAD GUI thread.
+* `create_spatial_comment`: Create spatial feedback attached to a point, object, or subelement.
+* `list_spatial_comments`: List unresolved or filtered spatial comments for a document.
+* `propose_spatial_comment_resolution`: Mark a comment as ready for user confirmation after applying feedback.
+* `delete_spatial_comment`: Delete a spatial feedback comment.
+* `get_current_selection_anchor`: Return the current FreeCAD selection as a reusable spatial comment anchor.
 * `run_fem_analysis`: Run the CalculiX solver on an existing `Fem::FemAnalysis` and return summary results (max von Mises stress, max displacement, node count, working directory). Auto-creates a `SolverCcxTools` if the analysis has none. See [`examples/cantilever_fem.py`](examples/cantilever_fem.py) for an end-to-end usage example.
 
-Tools that return a screenshot (`create_object`, `edit_object`, `delete_object`, `execute_code`, `insert_part_from_library`, `get_objects`, `get_object`, `run_fem_analysis`) accept optional `include_screenshot` (default `true`) and `view_name` (default `"Isometric"`) parameters to suppress or reorient the returned image per call.
+Tools that return a screenshot (`create_object`, `edit_object`, `delete_object`, `execute_code`, `insert_part_from_library`, `get_objects`, `get_object`, `create_spatial_comment`, `run_fem_analysis`) accept optional `include_screenshot` (default `true`) and `view_name` (default `"Isometric"`) parameters to suppress or reorient the returned image per call.
 
 ### GUI dispatch timeouts
 
