@@ -9,10 +9,32 @@ Toggle Remote, Configure Allowed IPs).
 
 import FreeCAD
 import FreeCADGui
-from PySide import QtWidgets
+from PySide import QtCore, QtWidgets
 
 from rpc_server.ip_filter import validate_allowed_ips
 from rpc_server.settings import load_settings, save_settings
+
+
+# FIX-6: module-level cache so toggle state survives workbench switches
+_cached_settings = None
+
+
+def _get_cached_settings():
+    """Return settings from cache, loading from disk the first time.
+
+    Never raises; returns defaults on any error.
+    """
+    global _cached_settings
+    if _cached_settings is None:
+        try:
+            _cached_settings = load_settings()
+        except Exception:
+            _cached_settings = {
+                "remote_enabled": False,
+                "allowed_ips": "127.0.0.1",
+                "auto_start_rpc": False,
+            }
+    return _cached_settings
 
 
 class StartRPCServerCommand:
@@ -43,18 +65,29 @@ class StopRPCServerCommand:
 
 class ToggleRemoteConnectionsCommand:
     def GetResources(self):
-        settings = load_settings()
-        return {
-            "MenuText": "Remote Connections",
-            "ToolTip": "Enable or disable remote connections for the RPC server.",
-            "Checkable": bool(settings.get("remote_enabled", False)),
-        }
+        # FIX-1: always include Checkable; wrap in try/except, never raise
+        try:
+            settings = _get_cached_settings()
+            return {
+                "MenuText": "Remote Connections",
+                "ToolTip": "Enable or disable remote connections for the RPC server.",
+                "Checkable": bool(settings.get("remote_enabled", False)),
+            }
+        except Exception:
+            return {
+                "MenuText": "Remote Connections",
+                "ToolTip": "Enable or disable remote connections for the RPC server.",
+                "Checkable": False,
+            }
 
     def Activated(self, checked=0):
+        # FIX-6: update module-level cache after saving
+        global _cached_settings
         from . import rpc_server
         settings = load_settings()
         settings["remote_enabled"] = bool(checked)
         save_settings(settings)
+        _cached_settings = settings
 
         if settings["remote_enabled"]:
             allowed_ips = settings.get("allowed_ips", "127.0.0.1")
@@ -125,17 +158,28 @@ class ConfigureAllowedIPsCommand:
 
 class ToggleAutoStartCommand:
     def GetResources(self):
-        settings = load_settings()
-        return {
-            "MenuText": "Auto-Start Server",
-            "ToolTip": "Automatically start the RPC server when FreeCAD launches.",
-            "Checkable": bool(settings.get("auto_start_rpc", False)),
-        }
+        # FIX-1: always include Checkable; wrap in try/except, never raise
+        try:
+            settings = _get_cached_settings()
+            return {
+                "MenuText": "Auto-Start Server",
+                "ToolTip": "Automatically start the RPC server when FreeCAD launches.",
+                "Checkable": bool(settings.get("auto_start_rpc", False)),
+            }
+        except Exception:
+            return {
+                "MenuText": "Auto-Start Server",
+                "ToolTip": "Automatically start the RPC server when FreeCAD launches.",
+                "Checkable": False,
+            }
 
     def Activated(self, checked=0):
+        # FIX-6: update module-level cache after saving
+        global _cached_settings
         settings = load_settings()
         settings["auto_start_rpc"] = bool(checked)
         save_settings(settings)
+        _cached_settings = settings
 
         if settings["auto_start_rpc"]:
             FreeCAD.Console.PrintMessage(
@@ -158,11 +202,35 @@ def register_commands() -> None:
     FreeCADGui.addCommand("Configure_Allowed_IPs", ConfigureAllowedIPsCommand())
 
 
-def schedule_toggle_sync() -> None:
-    """Compatibility no-op; toggle state is initialized by ``GetResources``.
+def _apply_toggle_states():
+    """Apply saved checked states to the two checkable QActions.
 
-    FreeCAD treats the presence of the ``Checkable`` resource as making an
-    action checkable and uses its boolean value as the action's initial checked
-    state. Loading the saved setting in ``GetResources`` therefore avoids any
-    delayed QAction lookup or workbench activation at startup.
+    Called 2 s after startup once the GUI is fully initialised.
     """
+    try:
+        settings = _get_cached_settings()
+        mw = FreeCADGui.getMainWindow()
+        actions = mw.findChildren(QtWidgets.QAction)
+        for action in actions:
+            name = action.objectName()
+            if name == "Toggle_Remote_Connections":
+                action.setChecked(bool(settings.get("remote_enabled", False)))
+            elif name == "Toggle_Auto_Start":
+                action.setChecked(bool(settings.get("auto_start_rpc", False)))
+    except Exception as e:
+        FreeCAD.Console.PrintWarning(f"MCP: failed to sync toggle states: {e}\n")
+
+
+def schedule_toggle_sync() -> None:
+    """Schedule a deferred sync of the two checkable toggle action states.
+
+    Uses ``QtCore.QTimer.singleShot(2000, ...)`` so the call fires after
+    FreeCAD's GUI is fully initialised and ``findChildren(QAction)`` can
+    locate both named actions.  Fires unconditionally — no workbench guard
+    is needed because QTimer delivers the callback regardless of which
+    workbench is active at the time.
+    """
+    try:
+        QtCore.QTimer.singleShot(2000, _apply_toggle_states)
+    except Exception as e:
+        FreeCAD.Console.PrintWarning(f"MCP: could not schedule toggle sync: {e}\n")
