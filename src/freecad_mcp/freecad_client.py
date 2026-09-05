@@ -46,6 +46,9 @@ class FreeCADConnection:
     def ping(self) -> bool:
         return self.server.ping()
 
+    def get_rpc_status(self) -> dict[str, Any]:
+        return self.server.get_rpc_status()
+
     def create_document(self, name: str) -> dict[str, Any]:
         return self.server.create_document(name)
 

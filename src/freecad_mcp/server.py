@@ -2,7 +2,14 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, Literal
 
-from mcp.server.fastmcp import Context, FastMCP
+try:
+    # mcp 1.x
+    from mcp.server.fastmcp import Context, FastMCP
+except ImportError:
+    # mcp 2.x moved mcp.server.fastmcp to mcp.server.mcpserver and renamed
+    # FastMCP to MCPServer; the API surface used here is unchanged.
+    from mcp.server.mcpserver import Context
+    from mcp.server.mcpserver import MCPServer as FastMCP
 from mcp.types import ImageContent, TextContent
 
 from .freecad_client import FreeCADConnection
@@ -16,6 +23,7 @@ from .operations import (
     get_object_operation,
     get_objects_operation,
     get_parts_list_operation,
+    get_rpc_status_operation,
     get_view_operation,
     insert_part_from_library_operation,
     list_documents_operation,
@@ -31,6 +39,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("FreeCADMCPserver")
 logger.setLevel(logging.INFO)
+
+ViewName = Literal[
+    "Isometric", "Front", "Top", "Right", "Back", "Left", "Bottom", "Dimetric", "Trimetric"
+]
 
 state = ServerState()
 
@@ -76,7 +88,7 @@ def get_freecad_connection() -> FreeCADConnection:
     return state.freecad_connection
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def create_document(ctx: Context, name: str) -> list[TextContent]:
     """Create a new document in FreeCAD.
 
@@ -97,7 +109,7 @@ def create_document(ctx: Context, name: str) -> list[TextContent]:
     return create_document_operation(get_freecad_connection(), name)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def create_object(
     ctx: Context,
     doc_name: str,
@@ -105,6 +117,8 @@ def create_object(
     obj_name: str,
     analysis_name: str | None = None,
     obj_properties: dict[str, Any] = None,
+    include_screenshot: bool = True,
+    view_name: ViewName = "Isometric",
 ) -> list[TextContent | ImageContent]:
     """Create a new object in FreeCAD.
     Object type is starts with "Part::" or "Draft::" or "PartDesign::" or "Fem::".
@@ -114,6 +128,11 @@ def create_object(
         obj_type: The type of the object to create (e.g. 'Part::Box', 'Part::Cylinder', 'Draft::Circle', 'PartDesign::Body', etc.).
         obj_name: The name of the object to create.
         obj_properties: The properties of the object to create.
+        include_screenshot: Whether to return a screenshot of the model (default True).
+            Set to False to save tokens when visual feedback is not needed,
+            e.g. for intermediate steps in a longer sequence of changes.
+        view_name: The view orientation of the returned screenshot (default "Isometric").
+            Pick the view that best shows the change being made.
 
     Returns:
         A message indicating the success or failure of the object creation and a screenshot of the object.
@@ -230,12 +249,19 @@ def create_object(
         obj_name,
         analysis_name,
         obj_properties,
+        include_screenshot,
+        view_name,
     )
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def edit_object(
-    ctx: Context, doc_name: str, obj_name: str, obj_properties: dict[str, Any]
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    obj_properties: dict[str, Any],
+    include_screenshot: bool = True,
+    view_name: ViewName = "Isometric",
 ) -> list[TextContent | ImageContent]:
     """Edit an object in FreeCAD.
     This tool is used when the `create_object` tool cannot handle the object creation.
@@ -244,6 +270,11 @@ def edit_object(
         doc_name: The name of the document to edit the object in.
         obj_name: The name of the object to edit.
         obj_properties: The properties of the object to edit.
+        include_screenshot: Whether to return a screenshot of the model (default True).
+            Set to False to save tokens when visual feedback is not needed,
+            e.g. for intermediate steps in a longer sequence of changes.
+        view_name: The view orientation of the returned screenshot (default "Isometric").
+            Pick the view that best shows the change being made.
 
     Returns:
         A message indicating the success or failure of the object editing and a screenshot of the object.
@@ -254,16 +285,29 @@ def edit_object(
         doc_name,
         obj_name,
         obj_properties,
+        include_screenshot,
+        view_name,
     )
 
 
-@mcp.tool()
-def delete_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextContent | ImageContent]:
+@mcp.tool(structured_output=False)
+def delete_object(
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    include_screenshot: bool = True,
+    view_name: ViewName = "Isometric",
+) -> list[TextContent | ImageContent]:
     """Delete an object in FreeCAD.
 
     Args:
         doc_name: The name of the document to delete the object from.
         obj_name: The name of the object to delete.
+        include_screenshot: Whether to return a screenshot of the model (default True).
+            Set to False to save tokens when visual feedback is not needed,
+            e.g. for intermediate steps in a longer sequence of changes.
+        view_name: The view orientation of the returned screenshot (default "Isometric").
+            Pick the view that best shows the change being made.
 
     Returns:
         A message indicating the success or failure of the object deletion and a screenshot of the object.
@@ -273,10 +317,12 @@ def delete_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextConten
         state.only_text_feedback,
         doc_name,
         obj_name,
+        include_screenshot,
+        view_name,
     )
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def execute_code_async(ctx: Context, code: str) -> list[TextContent]:
     """Execute Python code in FreeCAD without waiting for completion.
 
@@ -315,23 +361,40 @@ def execute_code_async(ctx: Context, code: str) -> list[TextContent]:
     return execute_code_async_operation(get_freecad_connection(), code)
 
 
-@mcp.tool()
-def execute_code(ctx: Context, code: str) -> list[TextContent | ImageContent]:
+@mcp.tool(structured_output=False)
+def execute_code(
+    ctx: Context,
+    code: str,
+    include_screenshot: bool = True,
+    view_name: ViewName = "Isometric",
+) -> list[TextContent | ImageContent]:
     """Execute arbitrary Python code in FreeCAD.
 
     Args:
         code: The Python code to execute.
+        include_screenshot: Whether to return a screenshot of the model (default True).
+            Set to False to save tokens when the code does not change the model's
+            appearance, e.g. analytical or computational scripts whose result is
+            printed output, or intermediate steps in a longer sequence of changes.
+        view_name: The view orientation of the returned screenshot (default "Isometric").
+            Pick the view that best shows the change being made.
 
     Returns:
         A message indicating the success or failure of the code execution, the output of the code execution, and a screenshot of the object.
     """
-    return execute_code_operation(get_freecad_connection(), state.only_text_feedback, code)
+    return execute_code_operation(
+        get_freecad_connection(),
+        state.only_text_feedback,
+        code,
+        include_screenshot,
+        view_name,
+    )
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def get_view(
     ctx: Context,
-    view_name: Literal["Isometric", "Front", "Top", "Right", "Back", "Left", "Bottom", "Dimetric", "Trimetric"],
+    view_name: ViewName,
     width: int | None = None,
     height: int | None = None,
     focus_object: str | None = None,
@@ -360,12 +423,22 @@ def get_view(
     return get_view_operation(get_freecad_connection(), view_name, width, height, focus_object)
 
 
-@mcp.tool()
-def insert_part_from_library(ctx: Context, relative_path: str) -> list[TextContent | ImageContent]:
+@mcp.tool(structured_output=False)
+def insert_part_from_library(
+    ctx: Context,
+    relative_path: str,
+    include_screenshot: bool = True,
+    view_name: ViewName = "Isometric",
+) -> list[TextContent | ImageContent]:
     """Insert a part from the parts library addon.
 
     Args:
         relative_path: The relative path of the part to insert.
+        include_screenshot: Whether to return a screenshot of the model (default True).
+            Set to False to save tokens when visual feedback is not needed,
+            e.g. for intermediate steps in a longer sequence of changes.
+        view_name: The view orientation of the returned screenshot (default "Isometric").
+            Pick the view that best shows the change being made.
 
     Returns:
         A message indicating the success or failure of the part insertion and a screenshot of the object.
@@ -374,31 +447,56 @@ def insert_part_from_library(ctx: Context, relative_path: str) -> list[TextConte
         get_freecad_connection(),
         state.only_text_feedback,
         relative_path,
+        include_screenshot,
+        view_name,
     )
 
 
-@mcp.tool()
-def get_objects(ctx: Context, doc_name: str) -> list[TextContent | ImageContent]:
+@mcp.tool(structured_output=False)
+def get_objects(
+    ctx: Context,
+    doc_name: str,
+    include_screenshot: bool = True,
+    view_name: ViewName = "Isometric",
+) -> list[TextContent | ImageContent]:
     """Get all objects in a document.
     You can use this tool to get the objects in a document to see what you can check or edit.
 
     Args:
         doc_name: The name of the document to get the objects from.
+        include_screenshot: Whether to return a screenshot of the document (default True).
+            Set to False to save tokens when only the object data is needed.
+        view_name: The view orientation of the returned screenshot (default "Isometric").
 
     Returns:
         A list of objects in the document and a screenshot of the document.
     """
-    return get_objects_operation(get_freecad_connection(), state.only_text_feedback, doc_name)
+    return get_objects_operation(
+        get_freecad_connection(),
+        state.only_text_feedback,
+        doc_name,
+        include_screenshot,
+        view_name,
+    )
 
 
-@mcp.tool()
-def get_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextContent | ImageContent]:
+@mcp.tool(structured_output=False)
+def get_object(
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    include_screenshot: bool = True,
+    view_name: ViewName = "Isometric",
+) -> list[TextContent | ImageContent]:
     """Get an object from a document.
     You can use this tool to get the properties of an object to see what you can check or edit.
 
     Args:
         doc_name: The name of the document to get the object from.
         obj_name: The name of the object to get.
+        include_screenshot: Whether to return a screenshot of the document (default True).
+            Set to False to save tokens when only the object data is needed.
+        view_name: The view orientation of the returned screenshot (default "Isometric").
 
     Returns:
         The object and a screenshot of the object.
@@ -408,17 +506,19 @@ def get_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextContent |
         state.only_text_feedback,
         doc_name,
         obj_name,
+        include_screenshot,
+        view_name,
     )
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def get_parts_list(ctx: Context) -> list[TextContent]:
     """Get the list of parts in the parts library addon.
     """
     return get_parts_list_operation(get_freecad_connection())
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def reload_document(ctx: Context, doc_name: str) -> list[TextContent]:
     """Close and re-open a document to pick up external file changes.
 
@@ -447,7 +547,7 @@ def reload_document(ctx: Context, doc_name: str) -> list[TextContent]:
     return reload_document_operation(get_freecad_connection(), doc_name)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 def list_documents(ctx: Context) -> list[TextContent]:
     """Get the list of open documents in FreeCAD.
 
@@ -457,12 +557,25 @@ def list_documents(ctx: Context) -> list[TextContent]:
     return list_documents_operation(get_freecad_connection())
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
+def get_rpc_status(ctx: Context) -> list[TextContent]:
+    """Get RPC and FreeCAD GUI-dispatch health.
+
+    This tool does not use FreeCAD's GUI thread, so it remains available after
+    a GUI operation times out. A ``stuck`` state identifies the operation that
+    is still running and indicates that FreeCAD may need to be restarted.
+    """
+    return get_rpc_status_operation(get_freecad_connection())
+
+
+@mcp.tool(structured_output=False)
 def run_fem_analysis(
     ctx: Context,
     doc_name: str,
     analysis_name: str,
     timeout: int = 600,
+    include_screenshot: bool = True,
+    view_name: ViewName = "Isometric",
 ) -> list[TextContent | ImageContent]:
     """Run the CalculiX solver on an existing Fem::FemAnalysis container and return summary results.
 
@@ -489,6 +602,9 @@ def run_fem_analysis(
         doc_name: Name of the FreeCAD document.
         analysis_name: Name of the Fem::AnalysisPython object.
         timeout: Seconds to wait for the solver (default 600).
+        include_screenshot: Whether to return a screenshot of the model (default True).
+            Set to False to save tokens when only the numeric results are needed.
+        view_name: The view orientation of the returned screenshot (default "Isometric").
     """
     return run_fem_analysis_operation(
         get_freecad_connection(),
@@ -496,6 +612,8 @@ def run_fem_analysis(
         doc_name,
         analysis_name,
         timeout,
+        include_screenshot,
+        view_name,
     )
 
 

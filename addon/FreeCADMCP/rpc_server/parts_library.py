@@ -6,7 +6,13 @@ import FreeCADGui
 
 def insert_part_from_library(relative_path):
     parts_lib_path = os.path.join(FreeCAD.getUserAppDataDir(), "Mod", "parts_library")
-    part_path = os.path.join(parts_lib_path, relative_path)
+    parts_lib_real = os.path.realpath(parts_lib_path)
+    part_path = os.path.realpath(os.path.join(parts_lib_path, relative_path))
+
+    # os.path.join drops parts_lib_path for an absolute relative_path, and
+    # neither join nor realpath rejects a ".." that walks outside it.
+    if os.path.commonpath([part_path, parts_lib_real]) != parts_lib_real:
+        raise ValueError(f"relative_path escapes the parts library: {relative_path}")
 
     if not os.path.exists(part_path):
         raise FileNotFoundError(f"Not found: {part_path}")

@@ -31,12 +31,30 @@ def _get_view_size(view: Any) -> tuple[int, int]:
         return 1024, 768
 
 
+# Longest edge used when the caller does not ask for a specific size. The
+# screenshot's cost to an LLM client scales with its pixel count, and hosts
+# commonly downscale anything larger than ~1.5k px before the model ever sees
+# it, so rendering at the full window size just inflates the payload. An
+# explicit width/height is always honoured as given.
+MAX_AUTO_SCREENSHOT_EDGE = 1024
+
+
+def _scale_to_max_edge(width: int, height: int, max_edge: int) -> tuple[int, int]:
+    longest = max(width, height)
+    if longest <= max_edge:
+        return width, height
+    scale = max_edge / longest
+    return max(1, int(width * scale)), max(1, int(height * scale))
+
+
 def _resolve_screenshot_size(
     view: Any,
     width: int | None,
     height: int | None,
 ) -> tuple[int, int]:
     view_width, view_height = _get_view_size(view)
+    if width is None and height is None:
+        return _scale_to_max_edge(view_width, view_height, MAX_AUTO_SCREENSHOT_EDGE)
     resolved_width = view_width if width is None else max(1, int(width))
     resolved_height = view_height if height is None else max(1, int(height))
     return resolved_width, resolved_height
@@ -126,7 +144,14 @@ def save_active_screenshot(
         else:
             view.fitAll()
         resolved_width, resolved_height = _resolve_screenshot_size(view, width, height)
-        view.saveImage(save_path, resolved_width, resolved_height, "Current")
+        # On Wayland the offscreen GL contexts used by the default saveImage()
+        # method render solid black; "Framebuffer" reads back the on-screen GL
+        # context and captures correctly (and also works on X11/Windows/macOS).
+        # FreeCAD < 1.0 lacks the method argument — fall back to the legacy call.
+        try:
+            view.saveImage(save_path, resolved_width, resolved_height, "Current", "Framebuffer")
+        except TypeError:
+            view.saveImage(save_path, resolved_width, resolved_height, "Current")
 
         if focused_selection:
             FreeCADGui.Selection.clearSelection()

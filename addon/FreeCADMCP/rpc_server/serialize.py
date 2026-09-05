@@ -40,13 +40,16 @@ def serialize_value(value):
 def serialize_shape(shape):
     if shape is None:
         return None
-    return {
-        "Volume": shape.Volume,
-        "Area": shape.Area,
-        "VertexCount": len(shape.Vertexes),
-        "EdgeCount": len(shape.Edges),
-        "FaceCount": len(shape.Faces),
-    }
+    try:
+        return {
+            "Volume": shape.Volume,
+            "Area": shape.Area,
+            "VertexCount": len(shape.Vertexes),
+            "EdgeCount": len(shape.Edges),
+            "FaceCount": len(shape.Faces),
+        }
+    except Exception as e:
+        return {"error": f"invalid shape: {str(e)}"}
 
 
 def serialize_view_object(view):
