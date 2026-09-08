@@ -108,6 +108,71 @@ def test_async_scripts_share_variables_without_replacing_dispatch(
     assert result["message"].endswith("42\n")
 
 
+def test_async_commit_runs_document_writes_on_the_gui_thread(
+    rpc_module: types.ModuleType,
+) -> None:
+    """Document writes must land on the GUI thread, not the worker thread."""
+    rpc = rpc_module.FreeCADRPC()
+    done = threading.Event()
+    rpc_module.FreeCAD.async_done = done
+    rpc_module.FreeCAD.test_threads = {}
+    assert rpc.execute_code_async(
+        "import threading\n"
+        "FreeCAD.test_threads['worker'] = threading.current_thread().name\n"
+        "def apply():\n"
+        "    FreeCAD.test_threads['commit'] = threading.current_thread().name\n"
+        "    return 'applied'\n"
+        "FreeCAD.test_threads['result'] = commit(apply)\n"
+        "FreeCAD.async_done.set()"
+    )["success"] is True
+    assert done.wait(2)
+    threads = rpc_module.FreeCAD.test_threads
+    assert threads["result"] == "applied"
+    # The worker runs off-thread; commit hands the write to the dispatch thread.
+    assert threads["commit"] != threads["worker"]
+
+
+def test_async_commit_reports_dispatch_failure_to_the_script(
+    rpc_module: types.ModuleType,
+) -> None:
+    """A wedged GUI thread surfaces as a RuntimeError instead of a silent write."""
+    rpc = rpc_module.FreeCADRPC()
+    health = rpc_module.test_dispatch._dispatch_health
+    health.start(200, "execute_code")
+    health.mark_timed_out(200, 90)
+    done = threading.Event()
+    rpc_module.FreeCAD.async_done = done
+    rpc_module.FreeCAD.test_error = None
+    assert rpc.execute_code_async(
+        "try:\n"
+        "    commit(lambda: 'never runs')\n"
+        "except RuntimeError as exc:\n"
+        "    FreeCAD.test_error = str(exc)\n"
+        "FreeCAD.async_done.set()"
+    )["success"] is True
+    assert done.wait(2)
+    error = rpc_module.FreeCAD.test_error
+    assert error is not None and "commit() failed" in error
+    assert "'execute_code' timed out" in error
+
+
+def test_async_commit_helper_does_not_leak_into_later_scripts(
+    rpc_module: types.ModuleType,
+) -> None:
+    """``commit`` is per-call, so it must not persist in the shared namespace."""
+    rpc = rpc_module.FreeCADRPC()
+    done = threading.Event()
+    rpc_module.FreeCAD.async_done = done
+    assert rpc.execute_code_async(
+        "async_only = 7\nFreeCAD.async_done.set()"
+    )["success"] is True
+    assert done.wait(2)
+    # Variables still persist between calls...
+    assert rpc.execute_code("print(async_only)")["message"].endswith("7\n")
+    # ...but the injected helper is gone, so sync scripts cannot misuse it.
+    assert rpc.execute_code("print('commit' in globals())")["message"].endswith("False\n")
+
+
 @pytest.mark.parametrize(
     ("method", "args", "expected"),
     [
