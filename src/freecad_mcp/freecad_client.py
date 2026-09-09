@@ -68,8 +68,16 @@ class FreeCADConnection:
     def insert_part_from_library(self, relative_path: str) -> dict[str, Any]:
         return self.server.insert_part_from_library(relative_path)
 
-    def execute_code(self, code: str) -> dict[str, Any]:
-        return self.server.execute_code(code)
+    def execute_code(self, code: str, timeout: float | None = None) -> dict[str, Any]:
+        # Without an explicit timeout, call with a single argument so a newer
+        # client keeps working against an addon that predates the timeout
+        # parameter.
+        if timeout is None:
+            return self.server.execute_code(code)
+        # The GUI thread blocks the RPC response for up to `timeout` seconds, so
+        # the socket must outlast it, exactly as run_fem_analysis does.
+        proxy = self._make_proxy(max(self._timeout, timeout + 30))
+        return proxy.execute_code(code, timeout)
 
     def execute_code_async(self, code: str) -> dict[str, Any]:
         return self.server.execute_code_async(code)

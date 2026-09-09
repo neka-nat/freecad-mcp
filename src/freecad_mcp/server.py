@@ -367,6 +367,7 @@ def execute_code(
     code: str,
     include_screenshot: bool = True,
     view_name: ViewName = "Isometric",
+    timeout: float | None = None,
 ) -> list[TextContent | ImageContent]:
     """Execute arbitrary Python code in FreeCAD.
 
@@ -378,6 +379,13 @@ def execute_code(
             printed output, or intermediate steps in a longer sequence of changes.
         view_name: The view orientation of the returned screenshot (default "Isometric").
             Pick the view that best shows the change being made.
+        timeout: Seconds to wait for the GUI thread, overriding the 90 s default
+            for this call only (capped at 1800). Raise it for slow work that must
+            run on the GUI thread, such as importing or exporting a large STEP
+            assembly. Without it the call reports a timeout while the task keeps
+            running, and the result is lost even though the work finishes. Prefer
+            execute_code_async for heavy pure-geometry work that touches neither
+            the document nor the GUI.
 
     Returns:
         A message indicating the success or failure of the code execution, the output of the code execution, and a screenshot of the object.
@@ -388,6 +396,7 @@ def execute_code(
         code,
         include_screenshot,
         view_name,
+        timeout,
     )
 
 

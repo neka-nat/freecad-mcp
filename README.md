@@ -202,6 +202,14 @@ Tools that return a screenshot (`create_object`, `edit_object`, `delete_object`,
 
 ### GUI dispatch timeouts
 
+`execute_code` waits 90 seconds for the GUI thread by default. A GUI task cannot
+be cancelled once it has started, so a slower call reports a timeout while the
+task keeps running, and its result is discarded even though the work completes.
+Pass `timeout` (seconds, capped at 1800) for work that genuinely has to run on
+the GUI thread and takes longer, such as importing or exporting a large STEP
+assembly; the client widens its socket timeout to match. For heavy pure-geometry
+work that touches neither the document nor the GUI, prefer `execute_code_async`.
+
 If a GUI-thread operation exceeds its timeout after it has started, the bridge
 returns `GUI_DISPATCH_STUCK` and rejects later GUI operations immediately. Use
 `get_rpc_status` from a separate RPC client to identify the operation that is

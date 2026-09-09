@@ -103,9 +103,10 @@ def execute_code_operation(
     code: str,
     include_screenshot: bool = True,
     view_name: str = "Isometric",
+    timeout: float | None = None,
 ) -> ToolResponse:
     try:
-        res = freecad.execute_code(code)
+        res = freecad.execute_code(code, timeout)
         if res["success"]:
             response = text_response(f"Code executed successfully: {res['message']}")
             # Only attempt screenshot when code completed and screenshots are wanted.
