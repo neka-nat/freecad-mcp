@@ -23,6 +23,12 @@ Robustness and performance guarantees:
 6. Stuck-task fail-fast: once a task that already started times out, later GUI
    calls fail immediately until that task returns. Status remains available
    through a GUI-independent RPC method.
+7. Timeout counts from task start: the GUI thread runs queued tasks one at a
+   time, so a call that arrives while another task is running waits in the
+   FIFO first. That wait is budgeted separately (``queue_timeout``) and does
+   not consume the task's own ``timeout``. Two concurrent ``execute_code``
+   calls therefore each get their full run budget instead of the second one
+   being reported stuck because the first was slow.
 """
 
 import itertools
@@ -172,10 +178,14 @@ def get_dispatch_status() -> dict[str, Any]:
     return _dispatch_health.snapshot()
 
 
+_QUEUE_POLL_SECONDS = 0.05
+
+
 def dispatch_to_gui(
     task: Callable[[], Any],
     timeout: float = 60,
     operation_name: str | None = None,
+    queue_timeout: float | None = None,
 ) -> Any:
     """Run ``task`` on the GUI thread and return its result.
 
@@ -183,9 +193,17 @@ def dispatch_to_gui(
     the response for a subsequent call. Wakes the GUI thread immediately via
     a Qt signal instead of waiting for the next 500 ms heartbeat.
 
-    On timeout the queued task is cancelled if it has not started yet. A task
-    already running on the GUI thread cannot be interrupted; it is marked as
-    stuck and subsequent GUI calls fail immediately until it returns.
+    ``timeout`` is the run budget and starts counting when the task actually
+    begins on the GUI thread. Time spent queued behind earlier tasks is
+    budgeted separately by ``queue_timeout`` (defaults to ``timeout``); if the
+    task has not started by then it is cancelled without marking dispatch
+    stuck. A call that is already queued when an earlier task becomes stuck
+    keeps waiting for its turn; only calls arriving after that point are
+    rejected immediately.
+
+    A task already running on the GUI thread cannot be interrupted; if it
+    exceeds ``timeout`` it is marked as stuck and subsequent GUI calls fail
+    immediately until it returns.
 
     Returns the task's return value on success, an error string if the task
     raises, or ``{"success": False, "error": ...}`` on timeout.
@@ -194,6 +212,9 @@ def dispatch_to_gui(
     if rejection is not None:
         return rejection
 
+    if queue_timeout is None:
+        queue_timeout = timeout
+
     task_id = next(_task_ids)
     operation = operation_name or getattr(task, "__name__", "GUI operation")
     if operation == "<lambda>":
@@ -201,6 +222,7 @@ def dispatch_to_gui(
 
     response_queue: "queue.Queue[Any]" = queue.Queue(maxsize=1)
     state_lock = threading.Lock()
+    started_event = threading.Event()
     started = False
     cancelled = False
 
@@ -211,6 +233,7 @@ def dispatch_to_gui(
                 return  # caller timed out and went away; don't run a stale task
             started = True
             _dispatch_health.start(task_id, operation)
+            started_event.set()
         try:
             try:
                 res = task()
@@ -228,21 +251,18 @@ def dispatch_to_gui(
     if _waker is not None:
         _waker.wake()  # immediate wake via Qt signal (thread-safe)
 
-    try:
-        return response_queue.get(timeout=timeout)
-    except queue.Empty:
+    # Phase 1: wait for the task to start. Earlier queued tasks run first on
+    # the GUI thread; that wait must not eat into this task's run budget.
+    queued_at = time.monotonic()
+    queue_deadline = queued_at + queue_timeout
+    while not started_event.wait(_QUEUE_POLL_SECONDS):
+        if time.monotonic() < queue_deadline:
+            continue
         with state_lock:
+            if started:
+                break  # started just now; fall through to the run-budget wait
             cancelled = True  # a queued task must not start after we give up
-            stuck = (
-                _dispatch_health.mark_timed_out(task_id, timeout)
-                if started
-                else None
-            )
-        if stuck is not None:
-            return stuck_failure(stuck, just_timed_out=True)
-
-        # Diagnose why: if _processing is still True, the GUI thread is occupied
-        # by a long-running task that was queued before this one.
+        queued_for = time.monotonic() - queued_at
         if _processing:
             busy_for = time.monotonic() - _processing_since
             hint = (
@@ -251,4 +271,23 @@ def dispatch_to_gui(
             )
         else:
             hint = ""
-        return {"success": False, "error": f"GUI dispatch timed out after {timeout}s{hint}"}
+        return {
+            "success": False,
+            "error": (
+                f"GUI dispatch gave up after {queued_for:.1f}s waiting for "
+                f"'{operation}' to start (queue_timeout={queue_timeout:g}s){hint}"
+            ),
+        }
+
+    # Phase 2: the task is running; ``timeout`` counts from here.
+    try:
+        return response_queue.get(timeout=timeout)
+    except queue.Empty:
+        stuck = _dispatch_health.mark_timed_out(task_id, timeout)
+        if stuck is not None:
+            return stuck_failure(stuck, just_timed_out=True)
+        # The task finished between the timeout and mark_timed_out; take the result.
+        try:
+            return response_queue.get_nowait()
+        except queue.Empty:
+            return {"success": False, "error": f"GUI dispatch timed out after {timeout}s"}

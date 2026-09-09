@@ -193,5 +193,97 @@ def test_queued_timeout_cancels_task_without_marking_dispatch_stuck() -> None:
 
         assert result["success"] is False
         assert "code" not in result
+        assert "waiting for 'stale_call' to start" in result["error"]
         assert not ran.is_set()
+        assert gui_dispatch.get_dispatch_status()["state"] == "healthy"
+
+
+def test_run_budget_counts_from_task_start_not_from_enqueue() -> None:
+    """A call queued behind a slow task must not lose its budget while waiting."""
+    with load_gui_dispatch() as gui_dispatch:
+        waker = ThreadedWaker(gui_dispatch)
+        gui_dispatch._waker = waker
+        first_started = threading.Event()
+        release_first = threading.Event()
+        results: dict[str, object] = {}
+
+        def slow_task() -> str:
+            first_started.set()
+            release_first.wait(timeout=2.0)
+            return "first"
+
+        def run_first() -> None:
+            results["first"] = gui_dispatch.dispatch_to_gui(
+                slow_task, timeout=2.0, operation_name="slow_boolean"
+            )
+
+        first_thread = threading.Thread(target=run_first, daemon=True)
+        first_thread.start()
+        assert first_started.wait(timeout=1.0)
+
+        # Second call: its own run takes ~0, but it has to wait 0.3s in the
+        # queue. timeout=0.1 must still succeed because the wait is not billed.
+        def run_second() -> None:
+            results["second"] = gui_dispatch.dispatch_to_gui(
+                lambda: "second",
+                timeout=0.1,
+                queue_timeout=2.0,
+                operation_name="quick_query",
+            )
+
+        second_thread = threading.Thread(target=run_second, daemon=True)
+        second_thread.start()
+        time.sleep(0.3)
+        assert "second" not in results  # still queued behind the slow task
+        release_first.set()
+        first_thread.join(timeout=2.0)
+        second_thread.join(timeout=2.0)
+        waker.join()
+
+        assert results["first"] == "first"
+        assert results["second"] == "second"
+        assert gui_dispatch.get_dispatch_status()["state"] == "healthy"
+
+
+def test_already_queued_call_survives_stuck_predecessor() -> None:
+    """Fail-fast applies to new calls only; a queued call runs once the wedge clears."""
+    with load_gui_dispatch() as gui_dispatch:
+        waker = ThreadedWaker(gui_dispatch)
+        gui_dispatch._waker = waker
+        first_started = threading.Event()
+        release_first = threading.Event()
+        results: dict[str, object] = {}
+
+        def stuck_task() -> bool:
+            first_started.set()
+            release_first.wait(timeout=2.0)
+            return True
+
+        def run_first() -> None:
+            results["first"] = gui_dispatch.dispatch_to_gui(
+                stuck_task, timeout=0.1, operation_name="wedged_op"
+            )
+
+        first_thread = threading.Thread(target=run_first, daemon=True)
+        first_thread.start()
+        assert first_started.wait(timeout=1.0)
+
+        def run_second() -> None:
+            results["second"] = gui_dispatch.dispatch_to_gui(
+                lambda: "queued", timeout=0.1, queue_timeout=2.0,
+                operation_name="queued_behind_wedge",
+            )
+
+        second_thread = threading.Thread(target=run_second, daemon=True)
+        second_thread.start()
+        first_thread.join(timeout=2.0)
+        assert results["first"]["code"] == "GUI_DISPATCH_STUCK"
+        assert gui_dispatch.get_dispatch_status()["state"] == "stuck"
+        # A brand-new call is rejected immediately while the wedge persists.
+        assert gui_dispatch.dispatch_to_gui(lambda: True, timeout=1.0)["code"] == "GUI_DISPATCH_STUCK"
+
+        release_first.set()
+        second_thread.join(timeout=2.0)
+        waker.join()
+        assert results["second"] == "queued"
         assert gui_dispatch.get_dispatch_status()["state"] == "healthy"
