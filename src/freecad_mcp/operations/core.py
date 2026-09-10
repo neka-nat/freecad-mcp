@@ -114,10 +114,25 @@ def execute_code_operation(
             skip_screenshot = only_text_feedback or not include_screenshot
             screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
             return add_screenshot_if_available(response, screenshot, skip_screenshot)
-        return text_response(f"Failed to execute code: {res['error']}")
+        return text_response(format_execute_code_failure(res))
     except Exception as e:
         logger.error(f"Failed to execute code: {str(e)}")
         return text_response(f"Failed to execute code: {str(e)}")
+
+
+def format_execute_code_failure(res: dict) -> str:
+    """Build the failure text for ``execute_code``.
+
+    The addon reports where the *script* failed and what it printed before
+    failing; both are essential for fixing a multi-step script, so they are
+    forwarded verbatim instead of collapsing to the bare exception message.
+    """
+    parts = [f"Failed to execute code: {res.get('error', 'unknown error')}"]
+    if res.get("traceback"):
+        parts.append(str(res["traceback"]))
+    if res.get("output"):
+        parts.append("Output before error:\n" + str(res["output"]).rstrip())
+    return "\n".join(parts)
 
 
 def execute_code_async_operation(

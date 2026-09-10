@@ -82,6 +82,43 @@ def rpc_module(monkeypatch: pytest.MonkeyPatch) -> Iterator[types.ModuleType]:
                 waker.join()
 
 
+def test_execute_code_failure_reports_script_line_and_partial_output(
+    rpc_module: types.ModuleType,
+) -> None:
+    rpc = rpc_module.FreeCADRPC()
+    rpc_module.FreeCAD.Console.PrintError = lambda _message: None
+    result = rpc.execute_code(
+        "print('step 1 ok')\n"
+        "value = 41\n"
+        "raise ValueError('Null shape')\n"
+        "print('never')"
+    )
+    assert result["success"] is False
+    assert result["error"] == "ValueError: Null shape"
+    assert result["traceback"] == "Script line 3: raise ValueError('Null shape')"
+    assert result["output"] == "step 1 ok\n"
+
+
+def test_execute_code_failure_inside_function_names_the_frame(
+    rpc_module: types.ModuleType,
+) -> None:
+    rpc = rpc_module.FreeCADRPC()
+    rpc_module.FreeCAD.Console.PrintError = lambda _message: None
+    result = rpc.execute_code("def f():\n    return 1 / 0\nf()")
+    assert result["success"] is False
+    assert result["error"].startswith("ZeroDivisionError")
+    assert result["traceback"] == "Script line 3: f()\nScript line 2 in f: return 1 / 0"
+
+
+def test_execute_code_syntax_error_points_at_line(rpc_module: types.ModuleType) -> None:
+    rpc = rpc_module.FreeCADRPC()
+    rpc_module.FreeCAD.Console.PrintError = lambda _message: None
+    result = rpc.execute_code("x = 1\ny = (\n")
+    assert result["success"] is False
+    assert result["error"].startswith("SyntaxError")
+    assert result["traceback"].startswith("Script line ")
+
+
 def test_script_names_cannot_replace_rpc_internals(rpc_module: types.ModuleType) -> None:
     rpc = rpc_module.FreeCADRPC()
     original_dispatch = rpc_module.dispatch_to_gui

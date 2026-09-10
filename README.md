@@ -231,6 +231,12 @@ operations and report an RPC fault if dispatch times out or is stuck. FreeCAD GU
 work cannot be force-cancelled safely; if the status does not return to
 `healthy` after the operation finishes, restart FreeCAD.
 
+When a script passed to `execute_code` raises, the tool reports the exception
+together with the failing script line (`Script line N: <source>`, with the
+function name for nested frames) and everything the script printed before it
+failed. Multi-step scripts can therefore be debugged from a single failed call
+instead of re-running them piecewise.
+
 `execute_code` and `execute_code_async` share a persistent script namespace with
 `FreeCAD`/`App` and `FreeCADGui`/`Gui` aliases. Script variables survive between
 calls without overwriting the RPC server's own functions. This prevents accidental
