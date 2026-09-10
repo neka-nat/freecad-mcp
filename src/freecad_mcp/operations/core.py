@@ -107,7 +107,10 @@ def execute_code_operation(
     try:
         res = freecad.execute_code(code)
         if res["success"]:
-            response = text_response(f"Code executed successfully: {res['message']}")
+            response = text_response(
+                f"Code executed successfully: {res['message']}"
+                + format_shape_check(res.get("shape_check"))
+            )
             # Only attempt screenshot when code completed and screenshots are wanted.
             # Skipping on failure avoids a second hanging call while the worker thread
             # may still be running.
@@ -120,6 +123,30 @@ def execute_code_operation(
         return text_response(f"Failed to execute code: {str(e)}")
 
 
+def format_shape_check(check: dict | None) -> str:
+    """Summarise the addon's post-run shape check for the model.
+
+    Warnings (invalid solid, split into several solids, null shape, removed
+    object) are what the caller must act on, so they are listed in full; the
+    changed-object list is kept short.
+    """
+    if not check:
+        return ""
+    changed = check.get("changed") or []
+    warnings = check.get("warnings") or []
+    if not changed and not warnings:
+        return "\nShape check: no shapes changed."
+    names = ", ".join(c["object"] for c in changed[:8])
+    if len(changed) > 8:
+        names += f", … ({len(changed)} total)"
+    text = f"\nShape check: {len(changed)} shape(s) changed ({names})"
+    if warnings:
+        text += "\nWARNING: " + "\nWARNING: ".join(warnings)
+    else:
+        text += "; all valid."
+    return text
+
+
 def execute_code_async_operation(
     freecad: FreeCADConnection,
     code: str,
@@ -127,16 +154,39 @@ def execute_code_async_operation(
     try:
         res = freecad.execute_code_async(code)
         if res["success"]:
+            job_id = res.get("job_id", "")
             return text_response(
-                "Code execution started in background.\n"
-                "Use get_object to poll a document object for completion "
-                "(e.g. check SessionState.Label). "
-                "FreeCAD's Report View will show output when done."
+                f"Code execution started in background (job_id: {job_id}).\n"
+                f"Poll get_async_status(job_id=\"{job_id}\") for state, error "
+                "traceback and the post-run shape check. "
+                "FreeCAD's Report View shows printed output when done."
             )
         return text_response(f"Failed to start async execution: {res.get('error', 'unknown')}")
     except Exception as e:
         logger.error(f"Failed to start async code execution: {str(e)}")
         return text_response(f"Failed to start async code execution: {str(e)}")
+
+
+def get_async_status_operation(
+    freecad: FreeCADConnection, job_id: str = ""
+) -> ToolResponse:
+    try:
+        res = freecad.get_async_status(job_id)
+        if not res.get("success"):
+            return text_response(f"Failed to get async status: {res.get('error', 'unknown')}")
+        job = res.get("job")
+        if job is None:
+            return json_response(res.get("jobs", []))
+        text = f"Async job {job['id']}: {job.get('state', 'unknown')}"
+        if job.get("error"):
+            text += f"\nError: {job['error']}"
+        if job.get("traceback"):
+            text += f"\n{job['traceback']}"
+        text += format_shape_check(job.get("shape_check"))
+        return text_response(text)
+    except Exception as e:
+        logger.error(f"Failed to get async status: {str(e)}")
+        return text_response(f"Failed to get async status: {str(e)}")
 
 
 def get_view_operation(

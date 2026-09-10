@@ -81,6 +81,9 @@ class FreeCADConnection:
     def execute_code_async(self, code: str) -> dict[str, Any]:
         return self.server.execute_code_async(code)
 
+    def get_async_status(self, job_id: str = "") -> dict[str, Any]:
+        return self.server.get_async_status(job_id)
+
     def get_active_screenshot(
         self,
         view_name: str = "Isometric",
