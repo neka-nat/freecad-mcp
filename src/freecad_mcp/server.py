@@ -23,6 +23,7 @@ from .operations import (
     get_object_operation,
     get_objects_operation,
     get_parts_list_operation,
+    get_async_status_operation,
     get_rpc_status_operation,
     get_view_operation,
     insert_part_from_library_operation,
@@ -382,9 +383,27 @@ def execute_code_async(ctx: Context, code: str) -> list[TextContent]:
             document and view writes.
 
     Returns:
-        A message confirming that background execution has started.
+        A message with the job_id of the started background execution.
     """
     return execute_code_async_operation(get_freecad_connection(), code)
+
+
+@mcp.tool(structured_output=False)
+def get_async_status(ctx: Context, job_id: str = "") -> list[TextContent]:
+    """Report the state of background jobs started by execute_code_async.
+
+    Does not use the FreeCAD GUI thread, so it answers even while a job runs.
+
+    Args:
+        job_id: The id returned by execute_code_async. Empty lists all
+            remembered jobs (oldest first).
+
+    Returns:
+        For one job: its state (running/done/failed), the error and traceback
+        when it failed, and the post-run shape check (objects whose shape
+        changed, with warnings for invalid, null or multi-solid results).
+    """
+    return get_async_status_operation(get_freecad_connection(), job_id)
 
 
 @mcp.tool(structured_output=False)
