@@ -395,13 +395,12 @@ def get_async_status(ctx: Context, job_id: str = "") -> list[TextContent]:
     Does not use the FreeCAD GUI thread, so it answers even while a job runs.
 
     Args:
-        job_id: The id returned by execute_code_async. Empty lists all
-            remembered jobs (oldest first).
+        job_id: The id returned by execute_code_async. Empty lists all running
+            jobs and up to 20 recently completed jobs.
 
     Returns:
         For one job: its state (running/done/failed), the error and traceback
-        when it failed, and the post-run shape check (objects whose shape
-        changed, with warnings for invalid, null or multi-solid results).
+        when it failed. History is held in memory until FreeCAD exits.
     """
     return get_async_status_operation(get_freecad_connection(), job_id)
 

@@ -196,7 +196,7 @@ The `--host` value is validated on startup — it must be a valid IPv4/IPv6 addr
 * `get_object`: Get an object in a document.
 * `get_parts_list`: Get the list of parts in the [parts library](https://github.com/FreeCAD/FreeCAD-library).
 * `get_rpc_status`: Report RPC and GUI-dispatch health without using the FreeCAD GUI thread.
-* `get_async_status`: Report background jobs started by `execute_code_async` (state, error traceback, shape check) without using the GUI thread.
+* `get_async_status`: Report background jobs started by `execute_code_async` (state and error traceback) without using the GUI thread.
 * `run_fem_analysis`: Run the CalculiX solver on an existing `Fem::FemAnalysis` and return summary results (max von Mises stress, max displacement, node count, working directory). Auto-creates a `SolverCcxTools` if the analysis has none. See [`examples/cantilever_fem.py`](examples/cantilever_fem.py) for an end-to-end usage example.
 
 Tools that return a screenshot (`create_object`, `edit_object`, `delete_object`, `execute_code`, `insert_part_from_library`, `get_objects`, `get_object`, `run_fem_analysis`) accept optional `include_screenshot` (default `true`) and `view_name` (default `"Isometric"`) parameters to suppress or reorient the returned image per call.
@@ -250,23 +250,17 @@ new `FeaturePython` object before mutating or deleting it. In particular, do
 not continue with an object whose required `Proxy` was never installed, as
 touching that broken object can wedge FreeCAD's GUI thread.
 
-### Shape check after every script
-
-`execute_code` fingerprints every object that has a `Shape` before the script
-runs and compares afterwards. Objects whose shape changed are validated and the
-result is appended to the tool output, e.g.
-`Shape check: 1 shape(s) changed (Doc.Lid); all valid.` or
-`WARNING: Doc.Lid: shape is INVALID`. Warnings cover invalid shapes, null
-shapes, a change in the number of solids, and removed objects. Unchanged shapes
-are not validated, so the check stays cheap on large documents.
-
 ### Background jobs
 
 `execute_code_async` returns a `job_id`. `get_async_status(job_id)` reports
 whether the job is `running`, `done` or `failed`, and for failed jobs the
 exception and traceback that previously reached only FreeCAD's Report View.
-Finished jobs also carry the shape check for everything the job committed to
-the document. `get_rpc_status` lists the ids of jobs still running.
+All running jobs and the 20 most recently completed jobs are retained in memory
+until FreeCAD exits. `get_async_status()` lists this history; `get_rpc_status`
+lists the ids of jobs still running. Job status does not wait for GUI cleanup.
+Scripts still use `commit()` for document access, and script success does not
+certify geometry validity. Install the updated addon to use job status; with an
+older addon, continue polling a document status object and checking Report View.
 
 ## Contributors
 
