@@ -126,8 +126,8 @@ class ThreadedWaker:
             target=lambda: self.gui_dispatch.process_gui_tasks(reschedule=False),
             daemon=True,
         )
-        self.threads.append(thread)
         thread.start()
+        self.threads.append(thread)
 
     def join(self) -> None:
         for thread in self.threads:
