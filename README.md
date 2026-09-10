@@ -215,7 +215,7 @@ counts from the moment it starts on the GUI thread, not from when it was
 queued: a call that arrives while another operation is still running waits
 for its turn without spending its own budget. The wait itself is bounded by a
 separate queue timeout (defaults to the same value); when it expires the task
-is dropped before it starts and dispatch stays `healthy`. Concurrent
+is dropped before it starts without marking dispatch as stuck. Concurrent
 `execute_code` calls are therefore safe to issue, but they still execute
 sequentially, so total wall time is the sum of the individual runs.
 
