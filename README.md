@@ -190,6 +190,7 @@ The `--host` value is validated on startup — it must be a valid IPv4/IPv6 addr
 * `edit_object`: Edit an object in FreeCAD.
 * `delete_object`: Delete an object in FreeCAD.
 * `execute_code`: Execute arbitrary Python code in FreeCAD.
+* `execute_code_headless`: Run a FreeCAD script in a separate `freecadcmd` process (crash-safe for heavy OCCT work such as helical threads, lofts, big booleans); returns exit status and output. Pair with `reload_document`.
 * `insert_part_from_library`: Insert a part from the [parts library](https://github.com/FreeCAD/FreeCAD-library).
 * `get_view`: Get a screenshot of the active view.
 * `get_objects`: Get all objects in a document.
@@ -248,6 +249,21 @@ After an `execute_code` exception on a FreeCAD development build, inspect any
 new `FeaturePython` object before mutating or deleting it. In particular, do
 not continue with an object whose required `Proxy` was never installed, as
 touching that broken object can wedge FreeCAD's GUI thread.
+
+### Headless execution
+
+`execute_code_headless` writes the script to a file and runs it with
+`freecadcmd -c` in a separate process. Use it for OpenCascade work that may
+segfault or block the GUI for minutes: `makeHelix` + `makePipeShell` threads,
+lofts and sweeps, booleans with many B-spline tools. A native crash only ends
+the helper process; the tool reports the signal (e.g. `SIGSEGV`) together with
+everything the script printed, and the GUI keeps its documents. The script
+must open and save documents itself (`FreeCAD.openDocument`, `doc.save()`,
+`Shape.exportBrep`); afterwards `reload_document` refreshes the GUI copy.
+
+The executable is auto-detected (`freecadcmd` on PATH, then the
+`org.freecad.FreeCAD` Flatpak). Override with
+`freecad-mcp --freecadcmd "flatpak run --command=freecadcmd org.freecad.FreeCAD"`.
 
 ## Contributors
 
