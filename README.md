@@ -202,6 +202,14 @@ Tools that return a screenshot (`create_object`, `edit_object`, `delete_object`,
 
 ### GUI dispatch timeouts
 
+GUI calls have separate queue and execution budgets. The queue budget defaults
+to the execution budget; a call cancelled before it starts will not run later.
+`execute_code` allows 90 seconds in the queue and 90 seconds after GUI execution
+starts. The bundled client's socket timeout covers both plus a 30-second margin
+(210 seconds total). FEM calls use the requested `timeout` for each budget, with
+a client socket timeout of at least `2 * timeout + 30` seconds. Other clients
+and MCP hosts must allow these response times in their own timeout settings.
+
 GUI-thread operations run one at a time in FIFO order. An operation's timeout
 counts from the moment it starts on the GUI thread, not from when it was
 queued: a call that arrives while another operation is still running waits

@@ -178,9 +178,6 @@ def get_dispatch_status() -> dict[str, Any]:
     return _dispatch_health.snapshot()
 
 
-_QUEUE_POLL_SECONDS = 0.05
-
-
 def dispatch_to_gui(
     task: Callable[[], Any],
     timeout: float = 60,
@@ -223,17 +220,19 @@ def dispatch_to_gui(
     response_queue: "queue.Queue[Any]" = queue.Queue(maxsize=1)
     state_lock = threading.Lock()
     started_event = threading.Event()
-    started = False
+    started_at: float | None = None
     cancelled = False
 
     def _wrapped() -> None:
-        nonlocal started
+        nonlocal started_at
         with state_lock:
             if cancelled:
                 return  # caller timed out and went away; don't run a stale task
-            started = True
+            started_at = time.monotonic()
             _dispatch_health.start(task_id, operation)
             started_event.set()
+        missing = object()
+        res = missing
         try:
             try:
                 res = task()
@@ -244,24 +243,25 @@ def dispatch_to_gui(
                 )
                 res = f"{type(e).__name__}: {e}"
         finally:
-            _dispatch_health.finish(task_id)
-        response_queue.put_nowait(res)
+            # Publish completion atomically with clearing health, so a deadline
+            # racing with completion cannot report a missing successful result.
+            with state_lock:
+                _dispatch_health.finish(task_id)
+                if res is not missing:
+                    response_queue.put_nowait(res)
 
+    queued_at = time.monotonic()
     _rpc_request_queue.put(_wrapped)
     if _waker is not None:
         _waker.wake()  # immediate wake via Qt signal (thread-safe)
 
     # Phase 1: wait for the task to start. Earlier queued tasks run first on
     # the GUI thread; that wait must not eat into this task's run budget.
-    queued_at = time.monotonic()
     queue_deadline = queued_at + queue_timeout
-    while not started_event.wait(_QUEUE_POLL_SECONDS):
-        if time.monotonic() < queue_deadline:
-            continue
+    if not started_event.wait(max(0, queue_deadline - time.monotonic())):
         with state_lock:
-            if started:
-                break  # started just now; fall through to the run-budget wait
-            cancelled = True  # a queued task must not start after we give up
+            cancelled = started_at is None
+    if cancelled:
         queued_for = time.monotonic() - queued_at
         if _processing:
             busy_for = time.monotonic() - _processing_since
@@ -279,15 +279,18 @@ def dispatch_to_gui(
             ),
         }
 
-    # Phase 2: the task is running; ``timeout`` counts from here.
+    # Phase 2: count from actual GUI start, even if this RPC thread woke late.
+    assert started_at is not None
+    run_remaining = max(0, started_at + timeout - time.monotonic())
     try:
-        return response_queue.get(timeout=timeout)
+        return response_queue.get(timeout=run_remaining)
     except queue.Empty:
-        stuck = _dispatch_health.mark_timed_out(task_id, timeout)
-        if stuck is not None:
-            return stuck_failure(stuck, just_timed_out=True)
-        # The task finished between the timeout and mark_timed_out; take the result.
-        try:
-            return response_queue.get_nowait()
-        except queue.Empty:
-            return {"success": False, "error": f"GUI dispatch timed out after {timeout}s"}
+        with state_lock:
+            # Completion may have won the race while we acquired the lock.
+            try:
+                return response_queue.get_nowait()
+            except queue.Empty:
+                stuck = _dispatch_health.mark_timed_out(task_id, timeout)
+                if stuck is not None:
+                    return stuck_failure(stuck, just_timed_out=True)
+                return {"success": False, "error": f"GUI dispatch timed out after {timeout}s"}

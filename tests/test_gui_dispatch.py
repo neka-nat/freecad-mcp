@@ -287,3 +287,43 @@ def test_already_queued_call_survives_stuck_predecessor() -> None:
         waker.join()
         assert results["second"] == "queued"
         assert gui_dispatch.get_dispatch_status()["state"] == "healthy"
+
+
+def test_run_deadline_does_not_restart_when_rpc_thread_resumes_late() -> None:
+    with load_gui_dispatch() as dispatch:
+        waker = ThreadedWaker(dispatch)
+        entered, release = threading.Event(), threading.Event()
+
+        def delayed_wake() -> None:
+            waker.wake()
+            assert entered.wait(1)
+            time.sleep(0.3)  # Simulate delayed scheduling of the RPC thread.
+
+        def task() -> bool:
+            entered.set()
+            release.wait(2)
+            return True
+
+        dispatch._waker = types.SimpleNamespace(wake=delayed_wake)
+        before = time.monotonic()
+        try:
+            result = dispatch.dispatch_to_gui(task, timeout=0.3)
+            elapsed = time.monotonic() - before
+            assert result["code"] == "GUI_DISPATCH_STUCK"
+            assert elapsed < 0.5  # The run deadline is not reset to another 0.3s.
+        finally:
+            release.set()
+            waker.join()
+
+
+def test_queue_deadline_includes_time_spent_waking_gui() -> None:
+    with load_gui_dispatch() as dispatch:
+        dispatch._waker = types.SimpleNamespace(wake=lambda: time.sleep(0.3))
+        ran = threading.Event()
+        before = time.monotonic()
+        result = dispatch.dispatch_to_gui(ran.set, timeout=1, queue_timeout=0.3)
+        elapsed = time.monotonic() - before
+        assert result["success"] is False
+        assert elapsed < 0.5
+        dispatch.process_gui_tasks(reschedule=False)
+        assert not ran.is_set()
