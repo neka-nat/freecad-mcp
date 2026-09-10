@@ -217,6 +217,14 @@ work cannot be force-cancelled safely; if the status does not return to
 calls without overwriting the RPC server's own functions. This prevents accidental
 name collisions; code execution still has FreeCAD's full privileges.
 
+Async code must keep document and view access on the GUI thread. Build independent
+OCCT shapes in the worker, then use `commit(fn, timeout=120)` to apply the result
+and recompute the document on the GUI thread. The helper returns `fn`'s value or
+raises `RuntimeError` on failure. It persists in the shared namespace so saved
+functions can reuse it in later async calls; calling it from `execute_code` or
+inside a GUI callback raises immediately. Concurrent scripts share live variables
+and must coordinate any intentional writes to the same data.
+
 After an `execute_code` exception on a FreeCAD development build, inspect any
 new `FeaturePython` object before mutating or deleting it. In particular, do
 not continue with an object whose required `Proxy` was never installed, as
