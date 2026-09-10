@@ -191,6 +191,8 @@ The `--host` value is validated on startup — it must be a valid IPv4/IPv6 addr
 * `delete_object`: Delete an object in FreeCAD.
 * `execute_code`: Execute arbitrary Python code in FreeCAD.
 * `execute_code_headless`: Run a FreeCAD script in a separate `freecadcmd` process (crash-safe for heavy OCCT work such as helical threads, lofts, big booleans); returns exit status and output. Pair with `reload_document`.
+* `check_manufacturability`: Headless DFM audit of saved solids for 3-axis milling: internal radii below the shop minimum (grouped by radius and axis) and sharp concave vertical edges.
+* `check_collisions`: Headless pairwise intersection report (volume and bounding box of each interfering region) for objects of a saved document.
 * `insert_part_from_library`: Insert a part from the [parts library](https://github.com/FreeCAD/FreeCAD-library).
 * `get_view`: Get a screenshot of the active view.
 * `get_objects`: Get all objects in a document.
@@ -288,6 +290,13 @@ must open and save documents itself (`FreeCAD.openDocument`, `doc.save()`,
 The executable is auto-detected (`freecadcmd` on PATH, then the
 `org.freecad.FreeCAD` Flatpak). Override with
 `freecad-mcp --freecadcmd "flatpak run --command=freecadcmd org.freecad.FreeCAD"`.
+
+
+`execute_code_headless` also accepts `script_path` (run a generator script
+from disk) and `args` (exposed as `sys.argv[1:]`). Two bundled scripts are
+wrapped as tools: `check_manufacturability(file_path, objects,
+min_internal_radius)` and `check_collisions(file_path, objects)`. Both read
+the saved `.FCStd`, so save the document first.
 
 ## Contributors
 

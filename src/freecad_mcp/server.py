@@ -20,6 +20,8 @@ from .operations import (
     edit_object_operation,
     execute_code_async_operation,
     execute_code_headless_operation,
+    check_manufacturability_operation,
+    check_collisions_operation,
     execute_code_operation,
     get_object_operation,
     get_objects_operation,
@@ -407,14 +409,21 @@ def get_async_status(ctx: Context, job_id: str = "") -> list[TextContent]:
     return get_async_status_operation(get_freecad_connection(), job_id)
 
 @mcp.tool(structured_output=False)
-def execute_code_headless(ctx: Context, code: str, timeout: float = 600) -> list[TextContent]:
+def execute_code_headless(
+    ctx: Context,
+    code: str = "",
+    script_path: str = "",
+    args: list[str] | None = None,
+    timeout: float = 600,
+) -> list[TextContent]:
     """Run a FreeCAD Python script in a separate headless `freecadcmd` process.
 
     Use this for OCCT work that can crash or block FreeCAD: helical threads
     (makeHelix + makePipeShell), lofts and sweeps, booleans with many or
-    B-spline tools, long parametric rebuilds. A native OpenCascade crash
-    here only kills the helper process; the GUI and its open documents
-    survive, and the tool reports the crash signal and the script's output.
+    B-spline tools, full parametric rebuilds of a model from a generator
+    script. A native OpenCascade crash here only kills the helper process;
+    the GUI and its open documents survive, and the tool reports the crash
+    signal and the script's output.
 
     The script runs in a fresh process without GUI: import FreeCAD/Part
     yourself, open documents from disk (FreeCAD.openDocument(path)), save
@@ -424,13 +433,69 @@ def execute_code_headless(ctx: Context, code: str, timeout: float = 600) -> list
     open in the GUI, call reload_document(doc_name) to show the result.
 
     Args:
-        code: Complete Python script for freecadcmd.
+        code: Python source to run (ignored when script_path is given).
+        script_path: Absolute path of a script file to run instead of code,
+            e.g. a project's model generator.
+        args: Strings exposed to the script as sys.argv[1:].
         timeout: Seconds to wait before killing the process (default 600).
 
     Returns:
         Exit status, crash/timeout diagnosis and the script's printed output.
     """
-    return execute_code_headless_operation(state.freecadcmd, code, timeout)
+    return execute_code_headless_operation(state.freecadcmd, code, timeout, script_path, args)
+
+
+@mcp.tool(structured_output=False)
+def check_manufacturability(
+    ctx: Context,
+    file_path: str,
+    objects: list[str],
+    min_internal_radius: float = 2.0,
+    timeout: float = 600,
+) -> list[TextContent]:
+    """Audit solids for 3-axis CNC milling limits (runs headless on the saved file).
+
+    Reports every concave (internal) cylindrical face whose radius is below
+    min_internal_radius, grouped by radius and axis (Z: vertical pocket/wall
+    corners cut from the top; X/Y: features cut from the side), and every
+    sharp concave vertical edge between two planes. Through holes appear in
+    the radius list too; they are drilled, judge them separately. Use it
+    before sending STEP to a shop or when a shop states its minimum internal
+    corner radius. The document must be saved first (doc.save() via
+    execute_code) because the check reads the .FCStd from disk.
+
+    Args:
+        file_path: Absolute path of the saved .FCStd.
+        objects: Object names to check, e.g. ["Korpus", "Kryshka"].
+        min_internal_radius: Shop minimum internal corner radius in mm.
+        timeout: Seconds before the helper process is killed.
+    """
+    return check_manufacturability_operation(state.freecadcmd, file_path, objects, min_internal_radius, timeout)
+
+
+@mcp.tool(structured_output=False)
+def check_collisions(
+    ctx: Context,
+    file_path: str,
+    objects: list[str],
+    min_volume: float = 0.001,
+    timeout: float = 600,
+) -> list[TextContent]:
+    """Report pairwise intersections between objects (runs headless on the saved file).
+
+    For every pair the common volume is computed; non-zero results list the
+    bounding box of each intersecting region so the offending feature can be
+    located. Use after any geometry change to verify housing vs lid, board,
+    connectors and fasteners do not interfere. The document must be saved
+    first because the check reads the .FCStd from disk.
+
+    Args:
+        file_path: Absolute path of the saved .FCStd.
+        objects: Two or more object names.
+        min_volume: Intersections smaller than this (mm3) count as zero.
+        timeout: Seconds before the helper process is killed.
+    """
+    return check_collisions_operation(state.freecadcmd, file_path, objects, min_volume, timeout)
 
 
 @mcp.tool(structured_output=False)

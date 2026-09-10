@@ -47,3 +47,19 @@ def test_parse_command() -> None:
     assert parse_command("flatpak run --command=freecadcmd org.freecad.FreeCAD") == [
         "flatpak", "run", "--command=freecadcmd", "org.freecad.FreeCAD",
     ]
+
+
+def test_args_become_sys_argv() -> None:
+    res = run_headless("import sys; print(sys.argv[1:])", 30, PY, args=["a.FCStd", "K,L", "1.5"])
+    assert res["success"] and res["output"] == "['a.FCStd', 'K,L', '1.5']"
+
+
+def test_run_file_resolves_bundled_scripts(tmp_path) -> None:
+    from freecad_mcp.headless import SCRIPTS_DIR, run_headless_file
+
+    assert (SCRIPTS_DIR / "dfm_check.py").exists() and (SCRIPTS_DIR / "collisions.py").exists()
+    script = tmp_path / "gen.py"
+    script.write_text("import sys; print('gen', sys.argv[1])")
+    res = run_headless_file(script, 30, PY, ["v3"])
+    assert res["success"] and res["output"] == "gen v3"
+    assert run_headless_file("nope.py", 30, PY)["error"] == "script not found: nope.py"

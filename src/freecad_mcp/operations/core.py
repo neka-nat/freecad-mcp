@@ -216,15 +216,51 @@ def format_headless_result(res: dict) -> str:
 
 
 def execute_code_headless_operation(
-    command: list[str] | None, code: str, timeout: float
+    command: list[str] | None,
+    code: str = "",
+    timeout: float = 600,
+    script_path: str = "",
+    args: list[str] | None = None,
 ) -> ToolResponse:
-    from ..headless import run_headless
+    from ..headless import run_headless, run_headless_file
 
     try:
-        return text_response(format_headless_result(run_headless(code, timeout, command)))
+        if script_path:
+            res = run_headless_file(script_path, timeout, command, args)
+        elif code:
+            res = run_headless(code, timeout, command, args)
+        else:
+            return text_response("Failed to run headless code: pass either code or script_path")
+        return text_response(format_headless_result(res))
     except Exception as e:
         logger.error(f"Failed to run headless code: {str(e)}")
         return text_response(f"Failed to run headless code: {str(e)}")
+
+
+def _bundled_check(command, script, file_path, objects, extra, timeout, title) -> ToolResponse:
+    from ..headless import run_headless_file
+
+    try:
+        res = run_headless_file(script, timeout, command, [file_path, ",".join(objects)] + extra)
+        head = f"{title} of {', '.join(objects)} in {file_path}"
+        if not res.get("success"):
+            return text_response(f"{head}\nFAILED: {res.get('error', 'unknown error')}\n{res.get('output', '')}".rstrip())
+        return text_response(f"{head}\n{res.get('output', '').rstrip()}")
+    except Exception as e:
+        logger.error(f"{title} failed: {str(e)}")
+        return text_response(f"{title} failed: {str(e)}")
+
+
+def check_manufacturability_operation(
+    command: list[str] | None, file_path: str, objects: list[str], min_internal_radius: float, timeout: float
+) -> ToolResponse:
+    return _bundled_check(command, "dfm_check.py", file_path, objects, [str(min_internal_radius)], timeout, "DFM check")
+
+
+def check_collisions_operation(
+    command: list[str] | None, file_path: str, objects: list[str], min_volume: float, timeout: float
+) -> ToolResponse:
+    return _bundled_check(command, "collisions.py", file_path, objects, [str(min_volume)], timeout, "Collision check")
 
 
 def get_view_operation(

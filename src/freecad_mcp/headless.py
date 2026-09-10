@@ -54,12 +54,23 @@ def _clean(output: str) -> str:
     return "\n".join(lines)
 
 
-def run_headless(code: str, timeout: float, command: list[str] | None) -> dict[str, Any]:
+SCRIPTS_DIR = Path(__file__).parent / "headless_scripts"
+
+
+def run_headless(
+    code: str,
+    timeout: float,
+    command: list[str] | None,
+    args: list[str] | None = None,
+) -> dict[str, Any]:
     """Execute ``code`` with ``command -c "exec(open(script).read())"``.
 
-    Returns ``success``, ``returncode``, ``output`` (stdout+stderr, noise
-    filtered), and flags ``crashed`` (killed by a signal) / ``timed_out``.
+    ``args`` become ``sys.argv[1:]`` inside the script. Returns ``success``,
+    ``returncode``, ``output`` (stdout+stderr, noise filtered), and flags
+    ``crashed`` (killed by a signal) / ``timed_out``.
     """
+    if args:
+        code = f"import sys; sys.argv = {['headless'] + [str(a) for a in args]!r}\n" + code
     command = command or detect_freecadcmd()
     if not command:
         return {
@@ -104,3 +115,18 @@ def run_headless(code: str, timeout: float, command: list[str] | None) -> dict[s
     elif proc.returncode != 0:
         result["error"] = f"script failed (exit code {proc.returncode})"
     return result
+
+
+def run_headless_file(
+    path: str | Path,
+    timeout: float,
+    command: list[str] | None,
+    args: list[str] | None = None,
+) -> dict[str, Any]:
+    """Run a script file (user path or a bundled ``headless_scripts`` name)."""
+    p = Path(path)
+    if not p.is_absolute() and not p.exists() and (SCRIPTS_DIR / p).exists():
+        p = SCRIPTS_DIR / p
+    if not p.exists():
+        return {"success": False, "error": f"script not found: {path}"}
+    return run_headless(p.read_text(encoding="utf-8"), timeout, command, args)
