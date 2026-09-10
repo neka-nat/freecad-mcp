@@ -190,12 +190,16 @@ The `--host` value is validated on startup — it must be a valid IPv4/IPv6 addr
 * `edit_object`: Edit an object in FreeCAD.
 * `delete_object`: Delete an object in FreeCAD.
 * `execute_code`: Execute arbitrary Python code in FreeCAD.
+* `execute_code_headless`: Run a FreeCAD script in a separate `freecadcmd` process (crash-safe for heavy OCCT work such as helical threads, lofts, big booleans); returns exit status and output. Pair with `reload_document`.
+* `check_manufacturability`: Headless DFM audit of saved solids for 3-axis milling: internal radii below the shop minimum (grouped by radius and axis) and sharp concave vertical edges.
+* `check_collisions`: Headless pairwise intersection report (volume and bounding box of each interfering region) for objects of a saved document.
 * `insert_part_from_library`: Insert a part from the [parts library](https://github.com/FreeCAD/FreeCAD-library).
 * `get_view`: Get a screenshot of the active view.
 * `get_objects`: Get all objects in a document.
 * `get_object`: Get an object in a document.
 * `get_parts_list`: Get the list of parts in the [parts library](https://github.com/FreeCAD/FreeCAD-library).
 * `get_rpc_status`: Report RPC and GUI-dispatch health without using the FreeCAD GUI thread.
+* `get_async_status`: Report background jobs started by `execute_code_async` (state, error traceback, shape check) without using the GUI thread.
 * `run_fem_analysis`: Run the CalculiX solver on an existing `Fem::FemAnalysis` and return summary results (max von Mises stress, max displacement, node count, working directory). Auto-creates a `SolverCcxTools` if the analysis has none. See [`examples/cantilever_fem.py`](examples/cantilever_fem.py) for an end-to-end usage example.
 
 Tools that return a screenshot (`create_object`, `edit_object`, `delete_object`, `execute_code`, `insert_part_from_library`, `get_objects`, `get_object`, `run_fem_analysis`) accept optional `include_screenshot` (default `true`) and `view_name` (default `"Isometric"`) parameters to suppress or reorient the returned image per call.
@@ -231,6 +235,12 @@ operations and report an RPC fault if dispatch times out or is stuck. FreeCAD GU
 work cannot be force-cancelled safely; if the status does not return to
 `healthy` after the operation finishes, restart FreeCAD.
 
+When a script passed to `execute_code` raises, the tool reports the exception
+together with the failing script line (`Script line N: <source>`, with the
+function name for nested frames) and everything the script printed before it
+failed. Multi-step scripts can therefore be debugged from a single failed call
+instead of re-running them piecewise.
+
 `execute_code` and `execute_code_async` share a persistent script namespace with
 `FreeCAD`/`App` and `FreeCADGui`/`Gui` aliases. Script variables survive between
 calls without overwriting the RPC server's own functions. This prevents accidental
@@ -248,6 +258,45 @@ After an `execute_code` exception on a FreeCAD development build, inspect any
 new `FeaturePython` object before mutating or deleting it. In particular, do
 not continue with an object whose required `Proxy` was never installed, as
 touching that broken object can wedge FreeCAD's GUI thread.
+
+### Shape check after every script
+
+`execute_code` fingerprints every object that has a `Shape` before the script
+runs and compares afterwards. Objects whose shape changed are validated and the
+result is appended to the tool output, e.g.
+`Shape check: 1 shape(s) changed (Doc.Lid); all valid.` or
+`WARNING: Doc.Lid: shape is INVALID`. Warnings cover invalid shapes, null
+shapes, a change in the number of solids, and removed objects. Unchanged shapes
+are not validated, so the check stays cheap on large documents.
+
+### Background jobs
+
+`execute_code_async` returns a `job_id`. `get_async_status(job_id)` reports
+whether the job is `running`, `done` or `failed`, and for failed jobs the
+exception and traceback that previously reached only FreeCAD's Report View.
+Finished jobs also carry the shape check for everything the job committed to
+the document. `get_rpc_status` lists the ids of jobs still running.
+### Headless execution
+
+`execute_code_headless` writes the script to a file and runs it with
+`freecadcmd -c` in a separate process. Use it for OpenCascade work that may
+segfault or block the GUI for minutes: `makeHelix` + `makePipeShell` threads,
+lofts and sweeps, booleans with many B-spline tools. A native crash only ends
+the helper process; the tool reports the signal (e.g. `SIGSEGV`) together with
+everything the script printed, and the GUI keeps its documents. The script
+must open and save documents itself (`FreeCAD.openDocument`, `doc.save()`,
+`Shape.exportBrep`); afterwards `reload_document` refreshes the GUI copy.
+
+The executable is auto-detected (`freecadcmd` on PATH, then the
+`org.freecad.FreeCAD` Flatpak). Override with
+`freecad-mcp --freecadcmd "flatpak run --command=freecadcmd org.freecad.FreeCAD"`.
+
+
+`execute_code_headless` also accepts `script_path` (run a generator script
+from disk) and `args` (exposed as `sys.argv[1:]`). Two bundled scripts are
+wrapped as tools: `check_manufacturability(file_path, objects,
+min_internal_radius)` and `check_collisions(file_path, objects)`. Both read
+the saved `.FCStd`, so save the document first.
 
 ## Contributors
 

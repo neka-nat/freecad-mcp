@@ -7,6 +7,7 @@ import io
 import os
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from typing import Any
 from xmlrpc.client import Fault
@@ -28,6 +29,7 @@ from rpc_server.object_factory import create_object_gui, edit_object_gui
 from rpc_server.parts_library import get_parts_list, insert_part_from_library
 from rpc_server.property_mapper import Object
 from rpc_server.serialize import serialize_object
+from rpc_server import shape_check
 from rpc_server.settings import load_settings, save_settings
 from rpc_server.view_manager import save_active_screenshot
 
@@ -47,10 +49,52 @@ _EXEC_NAMESPACE: dict[str, Any] = {
 }
 _async_execution = threading.local()
 
+# Background jobs started by execute_code_async, newest last. Errors raised off
+# the GUI thread used to reach only the Report View; the registry lets the
+# client read them (and the post-run shape check) via get_async_status.
+_ASYNC_JOBS: dict[str, dict[str, Any]] = {}
+_ASYNC_JOBS_LOCK = threading.Lock()
+_ASYNC_JOBS_KEEP = 20
+
+
+def _record_job(job_id: str, **fields: Any) -> None:
+    with _ASYNC_JOBS_LOCK:
+        _ASYNC_JOBS.setdefault(job_id, {"id": job_id}).update(fields)
+        while len(_ASYNC_JOBS) > _ASYNC_JOBS_KEEP:
+            del _ASYNC_JOBS[next(iter(_ASYNC_JOBS))]
+
 
 def _ok(res) -> bool:
     """True when a GUI-thread handler returned success."""
     return res is True
+
+
+def _script_traceback(exc: BaseException, code: str) -> str:
+    """Render the frames of ``exc`` that belong to the executed script.
+
+    ``exec`` compiles the script as ``<string>``; frames from the RPC server
+    itself are dropped so the caller sees ``line N: <source>`` for their own
+    code. Falls back to the full traceback when no script frame is present
+    (e.g. a SyntaxError raised before execution started).
+    """
+    import traceback as _tb
+
+    lines = code.splitlines()
+    frames = [
+        f for f in _tb.extract_tb(exc.__traceback__) if f.filename == "<string>"
+    ]
+    if isinstance(exc, SyntaxError) and exc.lineno:
+        frames = []
+        src = lines[exc.lineno - 1].strip() if 0 < exc.lineno <= len(lines) else ""
+        return f"Script line {exc.lineno}: {src}"
+    if not frames:
+        return "".join(_tb.format_exception(type(exc), exc, exc.__traceback__)).rstrip()
+    out = []
+    for f in frames:
+        src = lines[f.lineno - 1].strip() if 0 < f.lineno <= len(lines) else ""
+        where = f" in {f.name}" if f.name != "<module>" else ""
+        out.append(f"Script line {f.lineno}{where}: {src}")
+    return "\n".join(out)
 
 
 def _err(res) -> dict:
@@ -101,11 +145,29 @@ class FreeCADRPC:
 
     def get_rpc_status(self) -> dict[str, Any]:
         """Report server and GUI-dispatch health without using the GUI thread."""
+        with _ASYNC_JOBS_LOCK:
+            running = [j["id"] for j in _ASYNC_JOBS.values() if j.get("state") == "running"]
         return {
             "success": True,
             "rpc_server": "running",
             "gui_dispatch": get_dispatch_status(),
+            "async_jobs_running": running,
         }
+
+    def get_async_status(self, job_id: str = "") -> dict[str, Any]:
+        """Report background jobs without using the GUI thread.
+
+        With ``job_id`` returns that job (state ``running``/``done``/``failed``,
+        error and traceback when failed, shape check when finished). Without it
+        returns every remembered job, oldest first.
+        """
+        with _ASYNC_JOBS_LOCK:
+            if job_id:
+                job = _ASYNC_JOBS.get(job_id)
+                if job is None:
+                    return {"success": False, "error": f"unknown async job: {job_id}"}
+                return {"success": True, "job": dict(job)}
+            return {"success": True, "jobs": [dict(j) for j in _ASYNC_JOBS.values()]}
 
     def create_document(self, name="New_Document"):
         # The GUI handler reports the document's ACTUAL name — FreeCAD
@@ -238,6 +300,14 @@ class FreeCADRPC:
                 operation_name="clear_async_status",
             )
 
+        job_id = f"job-{int(time.time() * 1000)}-{len(_ASYNC_JOBS) + 1}"
+        code_preview = code if len(code) <= 200 else code[:200] + "…"
+
+        def _shape_check_on_gui(fn: Callable[[], Any], operation: str) -> Any:
+            # A failed snapshot must never fail the job itself.
+            res = dispatch_to_gui(lambda: (fn(),), timeout=30, operation_name=operation)
+            return res[0] if isinstance(res, tuple) else None
+
         def worker() -> None:
             # NOTE: we do NOT redirect sys.stdout here. contextlib.redirect_stdout
             # swaps stdout process-wide, not per-thread, so it would race with the
@@ -246,25 +316,44 @@ class FreeCADRPC:
             # Execute against the live dictionary. Merging a snapshot on exit
             # would restore stale values and lose deletions/concurrent writes.
             _async_execution.active = True
+            before = _shape_check_on_gui(shape_check.snapshot, "async_shape_snapshot")
+            outcome: dict[str, Any] = {"state": "done"}
             try:
                 exec(code, _EXEC_NAMESPACE)
                 FreeCAD.Console.PrintMessage("Async code execution completed.\n")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - report any script failure
                 import traceback as _tb
                 FreeCAD.Console.PrintError(
-                    f"Async code error: {e}\n{_tb.format_exc()}"
+                    f"Async code error ({job_id}): {e}\n{_tb.format_exc()}"
                 )
+                outcome = {
+                    "state": "failed",
+                    "error": f"{type(e).__name__}: {e}",
+                    "traceback": _tb.format_exc().rstrip(),
+                }
             finally:
                 del _async_execution.active
+                if before is not None:
+                    check = _shape_check_on_gui(
+                        lambda: shape_check.check(before), "async_shape_check"
+                    )
+                    if check is not None:
+                        outcome["shape_check"] = check
+                        for w in check["warnings"]:
+                            FreeCAD.Console.PrintWarning(f"Shape check ({job_id}): {w}\n")
+                # State flips last so a poller that sees done/failed also sees the check.
+                _record_job(job_id, finished=time.time(), **outcome)
                 try:
                     _clear_status()
                 except Exception:
                     pass  # never let status cleanup mask or outlive the real work
 
+        _record_job(job_id, state="running", started=time.time(), code=code_preview)
         _set_status("MCP: running background task…")
         threading.Thread(target=worker, daemon=True).start()
         return {
             "success": True,
+            "job_id": job_id,
             "message": (
                 "Code execution started in background. Document writes "
                 "(obj.Shape = ..., recompute, addObject, save, ViewObject) must "
@@ -284,26 +373,44 @@ class FreeCADRPC:
         output_buffer = io.StringIO()
 
         def task():
+            before = shape_check.snapshot()
             with contextlib.redirect_stdout(output_buffer):
-                exec(code, _EXEC_NAMESPACE)
-            return True
+                try:
+                    exec(code, _EXEC_NAMESPACE)
+                except Exception as e:  # noqa: BLE001 - report any script failure
+                    # Keep what the script printed before failing and point at
+                    # the failing line of the *script*, not of the RPC server.
+                    return {
+                        "success": False,
+                        "error": f"{type(e).__name__}: {e}",
+                        "traceback": _script_traceback(e, code),
+                        "output": output_buffer.getvalue(),
+                    }
+            # Report shapes the script changed and whether they are still sound;
+            # a silently invalid solid is the costliest failure to catch late.
+            return {"success": True, "shape_check": shape_check.check(before)}
 
         res = dispatch_to_gui(
             task,
             timeout=self.EXECUTE_CODE_TIMEOUT,
             operation_name="execute_code",
         )
-        if _ok(res):
+        if isinstance(res, dict) and res.get("success"):
             FreeCAD.Console.PrintMessage("Python code executed successfully.\n")
+            for w in res["shape_check"]["warnings"]:
+                FreeCAD.Console.PrintWarning(f"Shape check: {w}\n")
             return {
                 "success": True,
                 "message": "Python code executed successfully.\nOutput: " + output_buffer.getvalue(),
+                "shape_check": res["shape_check"],
             }
         # Log the offending code (truncated) to make errors traceable
         code_preview = code if len(code) <= 800 else code[:800] + "\n...(truncated)"
+        detail = res.get("traceback", "") if isinstance(res, dict) else ""
         FreeCAD.Console.PrintError(
-            f"Error executing Python code: {res}\n"
-            f"--- code ---\n{code_preview}\n--- end ---\n"
+            f"Error executing Python code: {res['error'] if isinstance(res, dict) else res}\n"
+            + (f"{detail}\n" if detail else "")
+            + f"--- code ---\n{code_preview}\n--- end ---\n"
         )
         return _err(res)
 

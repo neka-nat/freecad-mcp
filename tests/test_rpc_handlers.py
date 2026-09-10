@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 import sys
 import threading
+import time
 import types
 from xmlrpc.client import Fault
 
@@ -58,6 +59,12 @@ def rpc_module(monkeypatch: pytest.MonkeyPatch) -> Iterator[types.ModuleType]:
         with monkeypatch.context() as patch:
             for name, stub in stubs.items():
                 patch.setitem(sys.modules, f"rpc_server.{name}", stub)
+            # Real module; must re-import so it binds this test's FreeCAD stub.
+            # ``from rpc_server import shape_check`` reuses the package attribute
+            # when present, so the attribute has to go along with the module.
+            patch.delitem(sys.modules, "rpc_server.shape_check", raising=False)
+            if "rpc_server" in sys.modules:
+                patch.delattr(sys.modules["rpc_server"], "shape_check", raising=False)
             spec = importlib.util.spec_from_file_location("_rpc_handler_test", RPC_PATH)
             assert spec is not None and spec.loader is not None
             module = importlib.util.module_from_spec(spec)
@@ -80,6 +87,43 @@ def rpc_module(monkeypatch: pytest.MonkeyPatch) -> Iterator[types.ModuleType]:
                     thread.join(timeout=2)
                     assert not thread.is_alive()
                 waker.join()
+
+
+def test_execute_code_failure_reports_script_line_and_partial_output(
+    rpc_module: types.ModuleType,
+) -> None:
+    rpc = rpc_module.FreeCADRPC()
+    rpc_module.FreeCAD.Console.PrintError = lambda _message: None
+    result = rpc.execute_code(
+        "print('step 1 ok')\n"
+        "value = 41\n"
+        "raise ValueError('Null shape')\n"
+        "print('never')"
+    )
+    assert result["success"] is False
+    assert result["error"] == "ValueError: Null shape"
+    assert result["traceback"] == "Script line 3: raise ValueError('Null shape')"
+    assert result["output"] == "step 1 ok\n"
+
+
+def test_execute_code_failure_inside_function_names_the_frame(
+    rpc_module: types.ModuleType,
+) -> None:
+    rpc = rpc_module.FreeCADRPC()
+    rpc_module.FreeCAD.Console.PrintError = lambda _message: None
+    result = rpc.execute_code("def f():\n    return 1 / 0\nf()")
+    assert result["success"] is False
+    assert result["error"].startswith("ZeroDivisionError")
+    assert result["traceback"] == "Script line 3: f()\nScript line 2 in f: return 1 / 0"
+
+
+def test_execute_code_syntax_error_points_at_line(rpc_module: types.ModuleType) -> None:
+    rpc = rpc_module.FreeCADRPC()
+    rpc_module.FreeCAD.Console.PrintError = lambda _message: None
+    result = rpc.execute_code("x = 1\ny = (\n")
+    assert result["success"] is False
+    assert result["error"].startswith("SyntaxError")
+    assert result["traceback"].startswith("Script line ")
 
 
 def test_script_names_cannot_replace_rpc_internals(rpc_module: types.ModuleType) -> None:
@@ -312,10 +356,11 @@ def test_status_and_document_reads_during_real_dispatch(
 ) -> None:
     rpc = rpc_module.FreeCADRPC()
     rpc.EXECUTE_CODE_TIMEOUT = 0.5
-    entered, release, read = threading.Event(), threading.Event(), threading.Event()
+    entered, release = threading.Event(), threading.Event()
+    reads: list[float] = []  # execute_code's own shape snapshot reads before the script runs
     rpc_module.FreeCAD.test_entered = entered
     rpc_module.FreeCAD.test_release = release
-    rpc_module.FreeCAD.listDocuments = lambda: (read.set() or {"Doc": object()})
+    rpc_module.FreeCAD.listDocuments = lambda: (reads.append(time.monotonic()) or {"Doc": object()})
     with running_server(rpc) as (host, port), ThreadPoolExecutor(max_workers=2) as workers:
         def request(method: str, *args):
             with client(host, port, 5) as proxy:
@@ -330,17 +375,67 @@ def test_status_and_document_reads_during_real_dispatch(
             status = request("get_rpc_status")
             assert status["gui_dispatch"]["state"] == "busy"
             assert status["gui_dispatch"]["operation"] == "execute_code"
+            reads_before_query = len(reads)
             query = workers.submit(request, "list_documents")
             # The query must not inspect document state until execution ends.
-            assert not read.wait(0.1)
+            time.sleep(0.1)
+            assert len(reads) == reads_before_query
             assert execution.result(timeout=2)["code"] == "GUI_DISPATCH_STUCK"
             assert request("get_rpc_status")["gui_dispatch"]["state"] == "stuck"
             with pytest.raises(Fault, match="GUI_DISPATCH_STUCK"):
                 request("get_objects", "Doc")
             release.set()
             assert query.result(timeout=2) == ["Doc"]
-            assert read.is_set()
+            assert len(reads) > reads_before_query
             assert request("get_rpc_status")["gui_dispatch"]["state"] == "healthy"
             assert request("get_object", "Doc", "Box") == {"Name": "Box"}
         finally:
             release.set()
+
+
+def test_async_failure_is_readable_through_get_async_status(
+    rpc_module: types.ModuleType,
+) -> None:
+    done = threading.Event()
+    rpc_module.FreeCAD.Console.PrintError = lambda _message: done.set()
+    rpc_module.FreeCAD.Console.PrintWarning = lambda _message: None
+    rpc = rpc_module.FreeCADRPC()
+    started = rpc.execute_code_async("partial = 1\nraise ValueError('Null shape')")
+    job_id = started["job_id"]
+    assert started["success"] is True and job_id
+    assert done.wait(2)
+    for _ in range(50):
+        job = rpc.get_async_status(job_id)["job"]
+        if job["state"] != "running":
+            break
+        threading.Event().wait(0.02)
+    assert job["state"] == "failed"
+    assert job["error"] == "ValueError: Null shape"
+    assert 'line 2, in <module>' in job["traceback"]
+    assert job["shape_check"] == {"changed": [], "warnings": []}
+    assert rpc.get_async_status("nope") == {"success": False, "error": "unknown async job: nope"}
+    assert [j["id"] for j in rpc.get_async_status()["jobs"]] == [job_id]
+    assert rpc.get_rpc_status()["async_jobs_running"] == []
+
+
+def test_execute_code_reports_shapes_the_script_broke(
+    rpc_module: types.ModuleType,
+) -> None:
+    from test_shape_check import FakeShape
+
+    lid = FakeShape(volume=10.0)
+    doc = types.SimpleNamespace(Objects=[types.SimpleNamespace(Name="Lid", Shape=lid)])
+    rpc_module.FreeCAD.listDocuments = lambda: {"Doc": doc}
+    rpc_module.FreeCAD.test_lid = lid
+    warned: list[str] = []
+    rpc_module.FreeCAD.Console.PrintWarning = warned.append
+    rpc = rpc_module.FreeCADRPC()
+    result = rpc.execute_code("print('ok')")
+    assert result["success"] is True
+    assert result["shape_check"] == {"changed": [], "warnings": []}
+    result = rpc.execute_code("FreeCAD.test_lid.volume = 9.0\nFreeCAD.test_lid.valid = False")
+    assert result["success"] is True
+    assert result["message"].endswith("Output: ")
+    assert result["shape_check"]["warnings"] == ["Doc.Lid: shape is INVALID"]
+    assert result["shape_check"]["changed"][0]["was"]["volume"] == 10.0
+    assert warned == ["Shape check: Doc.Lid: shape is INVALID\n"]

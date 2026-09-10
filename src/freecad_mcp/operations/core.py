@@ -107,17 +107,59 @@ def execute_code_operation(
     try:
         res = freecad.execute_code(code)
         if res["success"]:
-            response = text_response(f"Code executed successfully: {res['message']}")
+            response = text_response(
+                f"Code executed successfully: {res['message']}"
+                + format_shape_check(res.get("shape_check"))
+            )
             # Only attempt screenshot when code completed and screenshots are wanted.
             # Skipping on failure avoids a second hanging call while the worker thread
             # may still be running.
             skip_screenshot = only_text_feedback or not include_screenshot
             screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
             return add_screenshot_if_available(response, screenshot, skip_screenshot)
-        return text_response(f"Failed to execute code: {res['error']}")
+        return text_response(format_execute_code_failure(res))
     except Exception as e:
         logger.error(f"Failed to execute code: {str(e)}")
         return text_response(f"Failed to execute code: {str(e)}")
+
+
+def format_execute_code_failure(res: dict) -> str:
+    """Build the failure text for ``execute_code``.
+
+    The addon reports where the *script* failed and what it printed before
+    failing; both are essential for fixing a multi-step script, so they are
+    forwarded verbatim instead of collapsing to the bare exception message.
+    """
+    parts = [f"Failed to execute code: {res.get('error', 'unknown error')}"]
+    if res.get("traceback"):
+        parts.append(str(res["traceback"]))
+    if res.get("output"):
+        parts.append("Output before error:\n" + str(res["output"]).rstrip())
+    return "\n".join(parts)
+
+
+def format_shape_check(check: dict | None) -> str:
+    """Summarise the addon's post-run shape check for the model.
+
+    Warnings (invalid solid, split into several solids, null shape, removed
+    object) are what the caller must act on, so they are listed in full; the
+    changed-object list is kept short.
+    """
+    if not check:
+        return ""
+    changed = check.get("changed") or []
+    warnings = check.get("warnings") or []
+    if not changed and not warnings:
+        return "\nShape check: no shapes changed."
+    names = ", ".join(c["object"] for c in changed[:8])
+    if len(changed) > 8:
+        names += f", … ({len(changed)} total)"
+    text = f"\nShape check: {len(changed)} shape(s) changed ({names})"
+    if warnings:
+        text += "\nWARNING: " + "\nWARNING: ".join(warnings)
+    else:
+        text += "; all valid."
+    return text
 
 
 def execute_code_async_operation(
@@ -127,16 +169,98 @@ def execute_code_async_operation(
     try:
         res = freecad.execute_code_async(code)
         if res["success"]:
+            job_id = res.get("job_id", "")
             return text_response(
-                "Code execution started in background.\n"
-                "Use get_object to poll a document object for completion "
-                "(e.g. check SessionState.Label). "
-                "FreeCAD's Report View will show output when done."
+                f"Code execution started in background (job_id: {job_id}).\n"
+                f"Poll get_async_status(job_id=\"{job_id}\") for state, error "
+                "traceback and the post-run shape check. "
+                "FreeCAD's Report View shows printed output when done."
             )
         return text_response(f"Failed to start async execution: {res.get('error', 'unknown')}")
     except Exception as e:
         logger.error(f"Failed to start async code execution: {str(e)}")
         return text_response(f"Failed to start async code execution: {str(e)}")
+
+
+def get_async_status_operation(
+    freecad: FreeCADConnection, job_id: str = ""
+) -> ToolResponse:
+    try:
+        res = freecad.get_async_status(job_id)
+        if not res.get("success"):
+            return text_response(f"Failed to get async status: {res.get('error', 'unknown')}")
+        job = res.get("job")
+        if job is None:
+            return json_response(res.get("jobs", []))
+        text = f"Async job {job['id']}: {job.get('state', 'unknown')}"
+        if job.get("error"):
+            text += f"\nError: {job['error']}"
+        if job.get("traceback"):
+            text += f"\n{job['traceback']}"
+        text += format_shape_check(job.get("shape_check"))
+        return text_response(text)
+    except Exception as e:
+        logger.error(f"Failed to get async status: {str(e)}")
+        return text_response(f"Failed to get async status: {str(e)}")
+
+def format_headless_result(res: dict) -> str:
+    if res.get("success"):
+        text = "Headless FreeCAD script finished (exit 0)."
+    else:
+        text = f"Headless FreeCAD script FAILED: {res.get('error', 'unknown error')}"
+    if res.get("output"):
+        text += "\nOutput:\n" + str(res["output"]).rstrip()
+    if res.get("success"):
+        text += "\nIf the script saved a document that is open in the GUI, call reload_document to see the result."
+    return text
+
+
+def execute_code_headless_operation(
+    command: list[str] | None,
+    code: str = "",
+    timeout: float = 600,
+    script_path: str = "",
+    args: list[str] | None = None,
+) -> ToolResponse:
+    from ..headless import run_headless, run_headless_file
+
+    try:
+        if script_path:
+            res = run_headless_file(script_path, timeout, command, args)
+        elif code:
+            res = run_headless(code, timeout, command, args)
+        else:
+            return text_response("Failed to run headless code: pass either code or script_path")
+        return text_response(format_headless_result(res))
+    except Exception as e:
+        logger.error(f"Failed to run headless code: {str(e)}")
+        return text_response(f"Failed to run headless code: {str(e)}")
+
+
+def _bundled_check(command, script, file_path, objects, extra, timeout, title) -> ToolResponse:
+    from ..headless import run_headless_file
+
+    try:
+        res = run_headless_file(script, timeout, command, [file_path, ",".join(objects)] + extra)
+        head = f"{title} of {', '.join(objects)} in {file_path}"
+        if not res.get("success"):
+            return text_response(f"{head}\nFAILED: {res.get('error', 'unknown error')}\n{res.get('output', '')}".rstrip())
+        return text_response(f"{head}\n{res.get('output', '').rstrip()}")
+    except Exception as e:
+        logger.error(f"{title} failed: {str(e)}")
+        return text_response(f"{title} failed: {str(e)}")
+
+
+def check_manufacturability_operation(
+    command: list[str] | None, file_path: str, objects: list[str], min_internal_radius: float, timeout: float
+) -> ToolResponse:
+    return _bundled_check(command, "dfm_check.py", file_path, objects, [str(min_internal_radius)], timeout, "DFM check")
+
+
+def check_collisions_operation(
+    command: list[str] | None, file_path: str, objects: list[str], min_volume: float, timeout: float
+) -> ToolResponse:
+    return _bundled_check(command, "collisions.py", file_path, objects, [str(min_volume)], timeout, "Collision check")
 
 
 def get_view_operation(
