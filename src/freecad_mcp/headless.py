@@ -9,6 +9,7 @@ the exit status and the script's output back.
 import logging
 import math
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -119,5 +120,16 @@ def run_headless(code: str, timeout: float, command: list[str] | None) -> dict[s
         result["crashed"] = True
         result["error"] = f"headless FreeCAD crashed with {name} (OCCT native crash; the GUI is unaffected)"
     elif proc.returncode != 0:
-        result["error"] = f"script failed (exit code {proc.returncode})"
+        # FreeCAD's own signal handler can print a native backtrace and exit 1,
+        # hiding the signal from the OS exit status. Label this as a report
+        # from FreeCAD, distinct from an OS-observed negative return code.
+        crash = re.search(r"(?m)^Program received signal (SIG[A-Z0-9]+),", output)
+        if crash:
+            result["crashed"] = True
+            result["error"] = (
+                f"headless FreeCAD reported a crash with {crash.group(1)} "
+                f"(exit code {proc.returncode}; the GUI is unaffected)"
+            )
+        else:
+            result["error"] = f"script failed (exit code {proc.returncode})"
     return result

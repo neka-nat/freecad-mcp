@@ -46,6 +46,21 @@ def test_timeout_kills_the_process() -> None:
     assert "did not finish within 1 s" in res["error"]
 
 
+@pytest.mark.parametrize("exit_code", [0, 1])
+def test_freecad_signal_handler_report_requires_failed_exit(exit_code: int) -> None:
+    # Replay the FreeCAD 1.1.1 handler's stderr/exit contract using Python.
+    result = run_headless(
+        "import sys\nprint('Program received signal SIGSEGV, Segmentation fault.', file=sys.stderr)\n"
+        f"sys.exit({exit_code})", 5, PY,
+    )
+    assert result["success"] is (exit_code == 0)
+    if exit_code:
+        assert result["crashed"] is True
+        assert "reported a crash with SIGSEGV" in result["error"]
+    else:
+        assert "crashed" not in result
+
+
 @pytest.mark.parametrize(
     ("output_code", "expected"),
     [
