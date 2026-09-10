@@ -52,6 +52,34 @@ def _ok(res) -> bool:
     return res is True
 
 
+def _script_traceback(exc: BaseException, code: str) -> str:
+    """Render the frames of ``exc`` that belong to the executed script.
+
+    ``exec`` compiles the script as ``<string>``; frames from the RPC server
+    itself are dropped so the caller sees ``line N: <source>`` for their own
+    code. Falls back to the full traceback when no script frame is present
+    (e.g. a SyntaxError raised before execution started).
+    """
+    import traceback as _tb
+
+    lines = code.splitlines()
+    frames = [
+        f for f in _tb.extract_tb(exc.__traceback__) if f.filename == "<string>"
+    ]
+    if isinstance(exc, SyntaxError) and exc.lineno:
+        frames = []
+        src = lines[exc.lineno - 1].strip() if 0 < exc.lineno <= len(lines) else ""
+        return f"Script line {exc.lineno}: {src}"
+    if not frames:
+        return "".join(_tb.format_exception(type(exc), exc, exc.__traceback__)).rstrip()
+    out = []
+    for f in frames:
+        src = lines[f.lineno - 1].strip() if 0 < f.lineno <= len(lines) else ""
+        where = f" in {f.name}" if f.name != "<module>" else ""
+        out.append(f"Script line {f.lineno}{where}: {src}")
+    return "\n".join(out)
+
+
 def _err(res) -> dict:
     """Convert any non-True result (error string or timeout dict) to a failure dict."""
     if isinstance(res, dict):
@@ -220,7 +248,17 @@ class FreeCADRPC:
 
         def task():
             with contextlib.redirect_stdout(output_buffer):
-                exec(code, _EXEC_NAMESPACE)
+                try:
+                    exec(code, _EXEC_NAMESPACE)
+                except Exception as e:  # noqa: BLE001 - report any script failure
+                    # Keep what the script printed before failing and point at
+                    # the failing line of the *script*, not of the RPC server.
+                    return {
+                        "success": False,
+                        "error": f"{type(e).__name__}: {e}",
+                        "traceback": _script_traceback(e, code),
+                        "output": output_buffer.getvalue(),
+                    }
             return True
 
         res = dispatch_to_gui(
@@ -236,9 +274,11 @@ class FreeCADRPC:
             }
         # Log the offending code (truncated) to make errors traceable
         code_preview = code if len(code) <= 800 else code[:800] + "\n...(truncated)"
+        detail = res.get("traceback", "") if isinstance(res, dict) else ""
         FreeCAD.Console.PrintError(
-            f"Error executing Python code: {res}\n"
-            f"--- code ---\n{code_preview}\n--- end ---\n"
+            f"Error executing Python code: {res['error'] if isinstance(res, dict) else res}\n"
+            + (f"{detail}\n" if detail else "")
+            + f"--- code ---\n{code_preview}\n--- end ---\n"
         )
         return _err(res)
 
