@@ -65,9 +65,20 @@ def rpc_module(monkeypatch: pytest.MonkeyPatch) -> Iterator[types.ModuleType]:
             waker = ThreadedWaker(dispatch)
             dispatch._waker = waker
             module.test_dispatch = dispatch
+            async_threads: list[threading.Thread] = []
+
+            def worker_thread(*args, **kwargs) -> threading.Thread:
+                thread = threading.Thread(*args, **kwargs)
+                async_threads.append(thread)
+                return thread
+
+            module.threading = types.SimpleNamespace(Thread=worker_thread)
             try:
                 yield module
             finally:
+                for thread in async_threads:
+                    thread.join(timeout=2)
+                    assert not thread.is_alive()
                 waker.join()
 
 
@@ -156,21 +167,97 @@ def test_async_commit_reports_dispatch_failure_to_the_script(
     assert "'execute_code' timed out" in error
 
 
-def test_async_commit_helper_does_not_leak_into_later_scripts(
+def test_saved_functions_can_commit_in_later_async_scripts(
     rpc_module: types.ModuleType,
 ) -> None:
-    """``commit`` is per-call, so it must not persist in the shared namespace."""
     rpc = rpc_module.FreeCADRPC()
     done = threading.Event()
     rpc_module.FreeCAD.async_done = done
     assert rpc.execute_code_async(
-        "async_only = 7\nFreeCAD.async_done.set()"
+        "shared_value = 7\n"
+        "def apply_later():\n"
+        "    return commit(lambda: shared_value)\n"
+        "FreeCAD.async_done.set()"
     )["success"] is True
     assert done.wait(2)
-    # Variables still persist between calls...
-    assert rpc.execute_code("print(async_only)")["message"].endswith("7\n")
-    # ...but the injected helper is gone, so sync scripts cannot misuse it.
-    assert rpc.execute_code("print('commit' in globals())")["message"].endswith("False\n")
+    assert rpc.execute_code("shared_value = 99")["success"] is True
+    done.clear()
+    assert rpc.execute_code_async(
+        "FreeCAD.test_result = apply_later()\nFreeCAD.async_done.set()"
+    )["success"] is True
+    assert done.wait(2)
+    assert rpc_module.FreeCAD.test_result == 99
+
+
+def test_async_completion_preserves_concurrent_writes_and_deletions(
+    rpc_module: types.ModuleType,
+) -> None:
+    rpc = rpc_module.FreeCADRPC()
+    entered, release, done = threading.Event(), threading.Event(), threading.Event()
+    rpc_module.FreeCAD.test_entered = entered
+    rpc_module.FreeCAD.test_release = release
+    rpc_module.FreeCAD.Console.PrintMessage = (
+        lambda message: done.set() if message == "Async code execution completed.\n" else None
+    )
+    assert rpc.execute_code("shared_value = 1\nobsolete = True")["success"] is True
+    assert rpc.execute_code_async(
+        "FreeCAD.test_entered.set()\nFreeCAD.test_release.wait(2)\n"
+        "del obsolete\nasync_value = 42"
+    )["success"] is True
+    try:
+        assert entered.wait(2)
+        assert rpc.execute_code("shared_value = 99")["success"] is True
+    finally:
+        release.set()
+    assert done.wait(2)
+    result = rpc.execute_code(
+        "assert shared_value == 99\nassert 'obsolete' not in globals()\nassert async_value == 42"
+    )
+    assert result["success"] is True, result
+
+
+def test_async_exception_preserves_completed_assignments(
+    rpc_module: types.ModuleType,
+) -> None:
+    done = threading.Event()
+    rpc_module.FreeCAD.Console.PrintError = lambda _message: done.set()
+    rpc = rpc_module.FreeCADRPC()
+    assert rpc.execute_code_async("partial_result = 42\nraise ValueError('failed')")["success"]
+    assert done.wait(2)
+    assert rpc.execute_code("print(partial_result)")["message"].endswith("42\n")
+
+
+@pytest.mark.parametrize("code", ["commit(lambda: 7)", "commit(lambda: commit(lambda: 7))"])
+def test_commit_rejects_gui_thread_use_without_dispatching(
+    rpc_module: types.ModuleType, code: str,
+) -> None:
+    rpc = rpc_module.FreeCADRPC()
+    if code == "commit(lambda: 7)":
+        # Synchronous scripts already run on the GUI thread.
+        result = rpc.execute_code(code)
+        assert result["success"] is False
+        assert "only available inside execute_code_async" in result["error"]
+    else:
+        done = threading.Event()
+        errors: list[str] = []
+        rpc_module.FreeCAD.Console.PrintError = lambda message: (errors.append(message), done.set())
+        assert rpc.execute_code_async(code)["success"]
+        assert done.wait(2)
+        assert any("only available inside execute_code_async" in error for error in errors)
+
+
+@pytest.mark.parametrize("value", [None, "error-looking text", {"success": False, "error": "data"}])
+def test_commit_preserves_callback_return_values(
+    rpc_module: types.ModuleType, value: object,
+) -> None:
+    done = threading.Event()
+    rpc_module.FreeCAD.test_value = value
+    rpc_module.FreeCAD.async_done = done
+    assert rpc_module.FreeCADRPC().execute_code_async(
+        "FreeCAD.test_result = commit(lambda: FreeCAD.test_value)\nFreeCAD.async_done.set()"
+    )["success"]
+    assert done.wait(2)
+    assert rpc_module.FreeCAD.test_result == value
 
 
 @pytest.mark.parametrize(

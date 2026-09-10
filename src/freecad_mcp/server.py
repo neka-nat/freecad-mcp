@@ -343,6 +343,10 @@ def execute_code_async(ctx: Context, code: str) -> list[TextContent]:
 
         commit(fn, timeout=120) -> fn's return value
 
+    Scripts share a live namespace. Saved functions can use commit() in later
+    async calls; calling it from execute_code or a GUI callback raises immediately.
+    Coordinate concurrent scripts that intentionally modify the same variables.
+
     commit() queues fn on the GUI thread, waits for it, and raises RuntimeError if
     dispatch fails or times out. Example:
 

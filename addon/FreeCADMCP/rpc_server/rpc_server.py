@@ -45,6 +45,7 @@ _EXEC_NAMESPACE: dict[str, Any] = {
     "FreeCADGui": FreeCADGui,
     "Gui": FreeCADGui,
 }
+_async_execution = threading.local()
 
 
 def _ok(res) -> bool:
@@ -57,6 +58,25 @@ def _err(res) -> dict:
     if isinstance(res, dict):
         return res
     return {"success": False, "error": str(res)}
+
+
+def _commit_async(fn: Callable[[], Any], timeout: float = 120) -> Any:
+    """Run an async script's document/view writes on the GUI thread."""
+    if not getattr(_async_execution, "active", False):
+        raise RuntimeError("commit() is only available inside execute_code_async workers")
+    res = dispatch_to_gui(
+        lambda: (fn(),), timeout=timeout, operation_name="async_commit"
+    )
+    if isinstance(res, tuple):
+        return res[0]
+    error = _err(res)
+    raise RuntimeError(f"commit() failed: {error['error']}")
+
+
+# Keep one live namespace, including the helper: saved functions retain this
+# dictionary as their globals. The thread-local guard prevents a GUI callback
+# or synchronous script from waiting on its own GUI thread through commit().
+_EXEC_NAMESPACE["commit"] = _commit_async
 
 
 def _query_on_gui(task: Callable[[], Any], operation: str) -> Any:
@@ -198,7 +218,9 @@ class FreeCADRPC:
             commit(apply)                            # blocks until the GUI thread ran it
 
         ``commit(fn, timeout=...)`` returns ``fn``'s value, or raises RuntimeError
-        if the GUI dispatch failed or timed out.
+        if the GUI dispatch failed or timed out. The helper persists so saved
+        functions can reuse it in later async calls. It may only be called from
+        an async worker, not from a synchronous script or GUI callback.
         """
         def _set_status(msg):
             dispatch_to_gui(
@@ -216,34 +238,16 @@ class FreeCADRPC:
                 operation_name="clear_async_status",
             )
 
-        def commit(fn: Callable[[], Any], timeout: float = 120) -> Any:
-            """Run ``fn`` on the GUI thread; use for every document/view write."""
-            res = dispatch_to_gui(
-                lambda: (fn(),),
-                timeout=timeout,
-                operation_name="async_commit",
-            )
-            if isinstance(res, tuple):
-                return res[0]
-            error = _err(res)
-            raise RuntimeError(f"commit() failed: {error['error']}")
-
         def worker() -> None:
             # NOTE: we do NOT redirect sys.stdout here. contextlib.redirect_stdout
             # swaps stdout process-wide, not per-thread, so it would race with the
             # GUI thread and other concurrent work. Background code should report
             # via FreeCAD.Console (which is thread-safe) instead.
-            #
-            # `commit` is injected per call rather than stored in _EXEC_NAMESPACE
-            # so concurrent async calls cannot clobber each other's helper.
-            namespace = dict(_EXEC_NAMESPACE)
-            namespace["commit"] = commit
+            # Execute against the live dictionary. Merging a snapshot on exit
+            # would restore stale values and lose deletions/concurrent writes.
+            _async_execution.active = True
             try:
-                exec(code, namespace)
-                # Persist user-defined names for later calls, minus the injected
-                # helper, matching the shared-namespace behaviour of execute_code.
-                namespace.pop("commit", None)
-                _EXEC_NAMESPACE.update(namespace)
+                exec(code, _EXEC_NAMESPACE)
                 FreeCAD.Console.PrintMessage("Async code execution completed.\n")
             except Exception as e:
                 import traceback as _tb
@@ -251,6 +255,7 @@ class FreeCADRPC:
                     f"Async code error: {e}\n{_tb.format_exc()}"
                 )
             finally:
+                del _async_execution.active
                 try:
                     _clear_status()
                 except Exception:
