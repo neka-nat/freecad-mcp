@@ -7,6 +7,7 @@ the exit status and the script's output back.
 """
 
 import logging
+import math
 import os
 import shlex
 import shutil
@@ -24,15 +25,18 @@ _NOISE = ("%)", "Importing project files", "Postprocessing", "FreeCAD 1.", "(C) 
 
 def detect_freecadcmd() -> list[str] | None:
     """Find a headless FreeCAD executable: PATH first, then the Flatpak."""
-    for name in ("freecadcmd", "FreeCADCmd", "freecadcmd.exe"):
+    for name in ("freecadcmd", "FreeCADCmd", "freecadcmd.exe", "freecad.cmd"):
         path = shutil.which(name)
         if path:
             return [path]
     flatpak = shutil.which("flatpak")
     if flatpak:
-        probe = subprocess.run(
-            [flatpak, "info", FLATPAK_APP], capture_output=True, text=True, timeout=30
-        )
+        try:
+            probe = subprocess.run(
+                [flatpak, "info", FLATPAK_APP], capture_output=True, timeout=30
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
         if probe.returncode == 0:
             return [flatpak, "run", f"--command=freecadcmd", FLATPAK_APP]
     return None
@@ -49,7 +53,13 @@ def _script_dir() -> Path:
     return d
 
 
-def _clean(output: str) -> str:
+def _clean(output: str | bytes | None) -> str:
+    # TimeoutExpired retains captured bytes even when run(text=True) is used.
+    # A timeout can also cut a multibyte character in half.
+    if output is None:
+        return ""
+    if isinstance(output, bytes):
+        output = output.decode("utf-8", errors="replace")
     lines = [ln for ln in output.splitlines() if ln.strip() and not any(n in ln for n in _NOISE)]
     return "\n".join(lines)
 
@@ -60,6 +70,8 @@ def run_headless(code: str, timeout: float, command: list[str] | None) -> dict[s
     Returns ``success``, ``returncode``, ``output`` (stdout+stderr, noise
     filtered), and flags ``crashed`` (killed by a signal) / ``timed_out``.
     """
+    if not math.isfinite(timeout) or timeout <= 0:
+        return {"success": False, "error": "timeout must be a positive finite number"}
     command = command or detect_freecadcmd()
     if not command:
         return {
@@ -73,15 +85,20 @@ def run_headless(code: str, timeout: float, command: list[str] | None) -> dict[s
         script = f.name
     argv = command + ["-c", f"exec(open({script!r}, encoding='utf-8').read())"]
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(
+            argv, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=timeout,
+        )
     except subprocess.TimeoutExpired as e:
-        out = _clean((e.stdout or "") + "\n" + (e.stderr or ""))
+        out = "\n".join(part for part in (_clean(e.stdout), _clean(e.stderr)) if part)
         return {
             "success": False,
             "timed_out": True,
-            "error": f"headless FreeCAD did not finish within {timeout:.0f} s",
+            "error": f"headless FreeCAD did not finish within {timeout:g} s",
             "output": out,
         }
+    except OSError as e:
+        return {"success": False, "error": f"could not start headless FreeCAD: {e}"}
     finally:
         try:
             os.unlink(script)

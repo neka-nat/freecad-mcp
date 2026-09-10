@@ -398,7 +398,8 @@ def execute_code_headless(ctx: Context, code: str, timeout: float = 600) -> list
     here only kills the helper process; the GUI and its open documents
     survive, and the tool reports the crash signal and the script's output.
 
-    The script runs in a fresh process without GUI: import FreeCAD/Part
+    The script runs on the MCP server machine, independently of --host, in a
+    fresh process without GUI: import FreeCAD/Part
     yourself, open documents from disk (FreeCAD.openDocument(path)), save
     results with doc.save()/saveAs() or Shape.exportBrep(). Nothing from the
     execute_code namespace is available. Print progress to stdout; it is
@@ -407,7 +408,8 @@ def execute_code_headless(ctx: Context, code: str, timeout: float = 600) -> list
 
     Args:
         code: Complete Python script for freecadcmd.
-        timeout: Seconds to wait before killing the process (default 600).
+        timeout: Positive finite seconds to wait before killing the process
+            (default 600). Partial output is preserved on timeout.
 
     Returns:
         Exit status, crash/timeout diagnosis and the script's printed output.

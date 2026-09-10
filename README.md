@@ -261,7 +261,12 @@ everything the script printed, and the GUI keeps its documents. The script
 must open and save documents itself (`FreeCAD.openDocument`, `doc.save()`,
 `Shape.exportBrep`); afterwards `reload_document` refreshes the GUI copy.
 
-The executable is auto-detected (`freecadcmd` on PATH, then the
+The executable runs on the machine hosting the MCP server; `--host` only selects
+the GUI RPC host. Use file paths accessible on the MCP server machine. The
+timeout must be positive and finite. A timeout returns partial stdout/stderr,
+and temporary scripts are removed on success, failure, and timeout.
+
+The executable is auto-detected (`freecadcmd` or Snap's `freecad.cmd` on PATH, then the
 `org.freecad.FreeCAD` Flatpak). Override with
 `freecad-mcp --freecadcmd "flatpak run --command=freecadcmd org.freecad.FreeCAD"`.
 
