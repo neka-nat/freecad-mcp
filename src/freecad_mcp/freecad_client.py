@@ -51,7 +51,8 @@ class FreeCADConnection:
         return self.server.ping()
 
     def get_rpc_status(self) -> dict[str, Any]:
-        return self.server.get_rpc_status()
+        with self._make_proxy(self._timeout) as proxy:
+            return proxy.get_rpc_status()
 
     def create_document(self, name: str) -> dict[str, Any]:
         return self.server.create_document(name)
@@ -80,6 +81,11 @@ class FreeCADConnection:
 
     def execute_code_async(self, code: str) -> dict[str, Any]:
         return self.server.execute_code_async(code)
+
+    def get_async_status(self, job_id: str = "") -> dict[str, Any]:
+        # Polling must not share an HTTP connection with a blocked GUI request.
+        with self._make_proxy(self._timeout) as proxy:
+            return proxy.get_async_status(job_id)
 
     def get_active_screenshot(
         self,

@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 import sys
 import threading
+import time
 import types
 from xmlrpc.client import Fault
 
@@ -344,3 +345,139 @@ def test_status_and_document_reads_during_real_dispatch(
             assert request("get_object", "Doc", "Box") == {"Name": "Box"}
         finally:
             release.set()
+
+
+def test_async_failure_is_readable_through_get_async_status(
+    rpc_module: types.ModuleType,
+) -> None:
+    done = threading.Event()
+    rpc_module.FreeCAD.Console.PrintError = lambda _message: done.set()
+    rpc_module.FreeCAD.Console.PrintWarning = lambda _message: None
+    rpc = rpc_module.FreeCADRPC()
+    started = rpc.execute_code_async("partial = 1\nraise ValueError('Null shape')")
+    job_id = started["job_id"]
+    assert started["success"] is True and job_id
+    assert done.wait(2)
+    for _ in range(50):
+        job = rpc.get_async_status(job_id)["job"]
+        if job["state"] != "running":
+            break
+        threading.Event().wait(0.02)
+    assert job["state"] == "failed"
+    assert job["error"] == "ValueError: Null shape"
+    assert 'line 2, in <module>' in job["traceback"]
+    assert rpc.get_async_status("nope") == {"success": False, "error": "unknown async job: nope"}
+    assert [j["id"] for j in rpc.get_async_status()["jobs"]] == [job_id]
+    assert rpc.get_rpc_status()["async_jobs_running"] == []
+
+
+def wait_for_job(rpc: object, job_id: str) -> dict:
+    deadline = time.monotonic() + 2
+    while True:
+        job = rpc.get_async_status(job_id)["job"]
+        if job["state"] != "running":
+            return job
+        assert time.monotonic() < deadline, job
+        time.sleep(0.005)
+
+
+def test_running_job_survives_completed_history_limit(rpc_module: types.ModuleType) -> None:
+    rpc = rpc_module.FreeCADRPC()
+    release = threading.Event()
+    rpc_module.FreeCAD.test_release = release
+    first = rpc.execute_code_async("FreeCAD.test_release.wait(5)")["job_id"]
+    try:
+        completed = []
+        for _ in range(21):
+            job_id = rpc.execute_code_async("pass")["job_id"]
+            assert wait_for_job(rpc, job_id)["state"] == "done"
+            completed.append(job_id)
+        assert rpc.get_async_status(first)["job"]["state"] == "running"
+        assert rpc.get_rpc_status()["async_jobs_running"] == [first]
+        assert rpc.get_async_status(completed[0])["success"] is False
+        assert len(rpc.get_async_status()["jobs"]) == 21  # 20 finished plus the active job.
+    finally:
+        release.set()
+    assert wait_for_job(rpc, first)["state"] == "done"
+    assert len(rpc.get_async_status()["jobs"]) == 20
+    # The oldest-started job just finished; completion order retains it.
+    assert rpc.get_async_status(first)["success"] is True
+
+
+def test_concurrent_jobs_have_unique_ids_at_fixed_clock(
+    rpc_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rpc = rpc_module.FreeCADRPC()
+    release = threading.Event()
+    rpc_module.FreeCAD.test_release = release
+    monkeypatch.setattr(rpc_module, "time", types.SimpleNamespace(time=lambda: 123456.0))
+    # This case exercises job creation concurrency, independently of Qt wakeup.
+    monkeypatch.setattr(rpc_module, "dispatch_to_gui", lambda task, **_: task())
+    try:
+        with ThreadPoolExecutor(max_workers=8) as callers:
+            results = list(callers.map(lambda _: rpc.execute_code_async("FreeCAD.test_release.wait(5)"), range(32)))
+        ids = [result["job_id"] for result in results]
+        assert len(set(ids)) == 32
+        assert set(rpc.get_rpc_status()["async_jobs_running"]) == set(ids)
+    finally:
+        release.set()
+
+
+@pytest.mark.parametrize("error", ["SystemExit(2)", "KeyboardInterrupt()", "ValueError('failure')"])
+def test_worker_exits_are_reported_as_failed_jobs(rpc_module: types.ModuleType, error: str) -> None:
+    rpc = rpc_module.FreeCADRPC()
+    job_id = rpc.execute_code_async(f"raise {error}")["job_id"]
+    job = wait_for_job(rpc, job_id)
+    assert job["state"] == "failed"
+    assert job["error"].startswith(error.split("(")[0])
+    assert "Traceback" in job["traceback"]
+    assert "finished" in job
+
+
+def test_thread_start_failure_does_not_leave_a_running_job(
+    rpc_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def cannot_start(**_kwargs):
+        raise RuntimeError("cannot start new thread")
+    monkeypatch.setattr(rpc_module, "threading", types.SimpleNamespace(Thread=cannot_start))
+    rpc = rpc_module.FreeCADRPC()
+    result = rpc.execute_code_async("pass")
+    assert result["success"] is False
+    assert wait_for_job(rpc, result["job_id"])["state"] == "failed"
+    assert rpc.get_rpc_status()["async_jobs_running"] == []
+
+
+def test_job_result_is_available_while_cleanup_is_blocked(
+    rpc_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleanup, release = threading.Event(), threading.Event()
+    original = rpc_module.dispatch_to_gui
+
+    def dispatch(task, **kwargs):
+        if kwargs["operation_name"] == "clear_async_status":
+            cleanup.set()
+            release.wait(5)
+            return {"success": False, "error": "GUI busy"}
+        return original(task, **kwargs)
+
+    monkeypatch.setattr(rpc_module, "dispatch_to_gui", dispatch)
+    rpc = rpc_module.FreeCADRPC()
+    job_id = rpc.execute_code_async("raise ValueError('failed before cleanup')")["job_id"]
+    try:
+        assert cleanup.wait(2)
+        assert wait_for_job(rpc, job_id)["state"] == "failed"
+        assert rpc.get_rpc_status()["async_jobs_running"] == []
+    finally:
+        release.set()
+
+
+def test_scripts_and_job_queries_do_not_scan_unrelated_documents(rpc_module: types.ModuleType) -> None:
+    def unexpected_scan():
+        raise AssertionError("unrelated document must not be inspected")
+
+    rpc_module.FreeCAD.listDocuments = unexpected_scan
+    rpc = rpc_module.FreeCADRPC()
+    assert rpc.execute_code("value = 42")["success"] is True
+    job_id = rpc.execute_code_async("value += 1")["job_id"]
+    assert wait_for_job(rpc, job_id)["state"] == "done"
+    assert rpc.execute_code("print(value)")["message"].endswith("43\n")
