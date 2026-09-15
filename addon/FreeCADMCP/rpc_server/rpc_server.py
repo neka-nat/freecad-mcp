@@ -118,6 +118,10 @@ class FreeCADRPC:
     """RPC server for FreeCAD"""
     TIMEOUT = 60               # generous wait for GUI thread to become free
     EXECUTE_CODE_TIMEOUT = 90  # GUI-thread execution; use execute_code_async for heavy OCCT ops
+    # Ceiling for a caller-supplied execute_code timeout. A GUI task cannot be
+    # cancelled once started, so an unbounded wait would hide a wedged GUI
+    # thread from the caller indefinitely.
+    MAX_EXECUTE_CODE_TIMEOUT = 1800
 
     def ping(self):
         return True
@@ -344,14 +348,31 @@ class FreeCADRPC:
             ),
         }
 
-    def execute_code(self, code: str) -> dict[str, Any]:
+    def execute_code(self, code: str, timeout: Any = None) -> dict[str, Any]:
         """Execute Python code on the GUI thread and wait for the result.
 
         Runs on the GUI thread so that FreeCAD document operations
         (addObject, recompute, save) are safe and correctly ordered.
         Use execute_code_async for heavy OCCT boolean ops (fuse/cut)
         that would block the GUI thread too long.
+
+        ``timeout`` overrides EXECUTE_CODE_TIMEOUT for this call only, capped at
+        MAX_EXECUTE_CODE_TIMEOUT. Raise it for genuinely slow GUI-thread work
+        that cannot move off the GUI thread, such as importing or exporting a
+        large STEP assembly. Without it such a call reports a timeout while the
+        task keeps running, and its result is discarded even though the work
+        completes.
         """
+        timeout_s = self.EXECUTE_CODE_TIMEOUT
+        if timeout is not None:
+            try:
+                timeout_s = float(timeout)
+            except (TypeError, ValueError):
+                return {"success": False, "error": f"invalid timeout: {timeout!r}"}
+            if not timeout_s > 0:
+                return {"success": False, "error": f"invalid timeout: {timeout!r}"}
+            timeout_s = min(timeout_s, self.MAX_EXECUTE_CODE_TIMEOUT)
+
         output_buffer = io.StringIO()
 
         def task():
@@ -361,7 +382,7 @@ class FreeCADRPC:
 
         res = dispatch_to_gui(
             task,
-            timeout=self.EXECUTE_CODE_TIMEOUT,
+            timeout=timeout_s,
             operation_name="execute_code",
         )
         if _ok(res):

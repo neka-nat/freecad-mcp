@@ -347,6 +347,52 @@ def test_status_and_document_reads_during_real_dispatch(
             release.set()
 
 
+def test_execute_code_uses_default_timeout_when_none_given(
+    rpc_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rpc = rpc_module.FreeCADRPC()
+    seen: list[float] = []
+    real = rpc_module.dispatch_to_gui
+
+    def spy(task, timeout=60, operation_name=None):
+        seen.append(timeout)
+        return real(task, timeout=timeout, operation_name=operation_name)
+
+    monkeypatch.setattr(rpc_module, "dispatch_to_gui", spy)
+    assert rpc.execute_code("x = 1")["success"] is True
+    assert seen == [rpc_module.FreeCADRPC.EXECUTE_CODE_TIMEOUT]
+
+
+def test_execute_code_honours_caller_timeout_and_caps_it(
+    rpc_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rpc = rpc_module.FreeCADRPC()
+    seen: list[float] = []
+    real = rpc_module.dispatch_to_gui
+
+    def spy(task, timeout=60, operation_name=None):
+        seen.append(timeout)
+        return real(task, timeout=timeout, operation_name=operation_name)
+
+    monkeypatch.setattr(rpc_module, "dispatch_to_gui", spy)
+    assert rpc.execute_code("x = 1", 300)["success"] is True
+    assert rpc.execute_code("x = 1", "240")["success"] is True
+    assert rpc.execute_code("x = 1", 10**9)["success"] is True
+    assert seen == [300.0, 240.0, rpc_module.FreeCADRPC.MAX_EXECUTE_CODE_TIMEOUT]
+
+
+@pytest.mark.parametrize("bad", ["soon", None.__class__, 0, -5])
+def test_execute_code_rejects_invalid_timeout(
+    rpc_module: types.ModuleType, bad: object
+) -> None:
+    rpc = rpc_module.FreeCADRPC()
+    if bad is None.__class__:
+        bad = object()
+    result = rpc.execute_code("x = 1", bad)
+    assert result["success"] is False
+    assert "invalid timeout" in result["error"]
+
+
 def test_async_failure_is_readable_through_get_async_status(
     rpc_module: types.ModuleType,
 ) -> None:

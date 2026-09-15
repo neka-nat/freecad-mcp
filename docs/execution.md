@@ -85,8 +85,16 @@ dispatch as stuck.
 
 | Operation | Queue budget | Execution budget | Bundled client socket timeout |
 | --- | --- | --- | --- |
-| `execute_code` | 90 seconds | 90 seconds | At least 210 seconds |
+| `execute_code` | 90 seconds (or requested `timeout`) | 90 seconds (or requested `timeout`) | At least `2 * timeout + 30` seconds |
 | `run_fem_analysis` | Requested `timeout` | Requested `timeout` | At least `2 * timeout + 30` seconds |
+
+A GUI task cannot be cancelled once it has started, so a slower `execute_code`
+call reports a timeout while the task keeps running, and its result is discarded
+even though the work completes. Pass `timeout` (seconds, capped at 1800) for
+work that genuinely has to run on the GUI thread and takes longer, such as
+importing or exporting a large STEP assembly; the client widens its socket
+timeout to match. For heavy pure-geometry work that touches neither the document
+nor the GUI, prefer `execute_code_async`.
 
 The client timeout covers both budgets plus a 30-second margin. Other clients
 and MCP hosts must allow these response times in their own timeout settings.
