@@ -59,6 +59,12 @@ def rpc_module(monkeypatch: pytest.MonkeyPatch) -> Iterator[types.ModuleType]:
         with monkeypatch.context() as patch:
             for name, stub in stubs.items():
                 patch.setitem(sys.modules, f"rpc_server.{name}", stub)
+            # Real module; must re-import so it binds this test's FreeCAD stub.
+            # ``from rpc_server import shape_check`` reuses the package attribute
+            # when present, so the attribute has to go along with the module.
+            patch.delitem(sys.modules, "rpc_server.shape_check", raising=False)
+            if "rpc_server" in sys.modules:
+                patch.delattr(sys.modules["rpc_server"], "shape_check", raising=False)
             spec = importlib.util.spec_from_file_location("_rpc_handler_test", RPC_PATH)
             assert spec is not None and spec.loader is not None
             module = importlib.util.module_from_spec(spec)
@@ -328,6 +334,9 @@ def test_status_and_document_reads_during_real_dispatch(
         )
         try:
             assert entered.wait(2)
+            # The script's own shape snapshot reads documents by design; clear the
+            # flag so what follows measures the concurrent query alone.
+            read.clear()
             status = request("get_rpc_status")
             assert status["gui_dispatch"]["state"] == "busy"
             assert status["gui_dispatch"]["operation"] == "execute_code"
@@ -471,7 +480,23 @@ def test_job_result_is_available_while_cleanup_is_blocked(
         release.set()
 
 
-def test_scripts_and_job_queries_do_not_scan_unrelated_documents(rpc_module: types.ModuleType) -> None:
+def test_job_queries_do_not_scan_unrelated_documents(rpc_module: types.ModuleType) -> None:
+    # Scripts themselves now scan documents on purpose, to fingerprint shapes for
+    # the post-run check. Status queries still must not: they run while the GUI is
+    # busy, and reading a document there is what wedged them before.
+    scans: list[str] = []
+    rpc_module.FreeCAD.listDocuments = lambda: (scans.append("scan"), {})[1]
+    rpc = rpc_module.FreeCADRPC()
+    assert rpc.execute_code("value = 42")["success"] is True
+    job_id = rpc.execute_code_async("value = 43")["job_id"]
+    assert wait_for_job(rpc, job_id)["state"] == "done"
+    scans.clear()
+    rpc.get_async_status(job_id)
+    rpc.get_rpc_status()
+    assert scans == []
+
+
+def test_scripts_survive_a_document_scan_failure(rpc_module: types.ModuleType) -> None:
     def unexpected_scan():
         raise AssertionError("unrelated document must not be inspected")
 
@@ -481,3 +506,45 @@ def test_scripts_and_job_queries_do_not_scan_unrelated_documents(rpc_module: typ
     job_id = rpc.execute_code_async("value += 1")["job_id"]
     assert wait_for_job(rpc, job_id)["state"] == "done"
     assert rpc.execute_code("print(value)")["message"].endswith("43\n")
+
+
+def test_execute_code_reports_shapes_the_script_broke(
+    rpc_module: types.ModuleType,
+) -> None:
+    from test_shape_check import FakeShape
+
+    lid = FakeShape(volume=10.0)
+    doc = types.SimpleNamespace(Objects=[types.SimpleNamespace(Name="Lid", Shape=lid)])
+    rpc_module.FreeCAD.listDocuments = lambda: {"Doc": doc}
+    rpc_module.FreeCAD.test_lid = lid
+    warned: list[str] = []
+    rpc_module.FreeCAD.Console.PrintWarning = warned.append
+    rpc = rpc_module.FreeCADRPC()
+    result = rpc.execute_code("print('ok')")
+    assert result["success"] is True
+    assert result["shape_check"] == {"changed": [], "warnings": []}
+    result = rpc.execute_code("FreeCAD.test_lid.volume = 9.0\nFreeCAD.test_lid.valid = False")
+    assert result["success"] is True
+    assert result["message"].endswith("Output: ")
+    assert result["shape_check"]["warnings"] == ["Doc.Lid: shape is INVALID"]
+    assert result["shape_check"]["changed"][0]["was"]["volume"] == 10.0
+    assert warned == ["Shape check: Doc.Lid: shape is INVALID\n"]
+
+
+def test_async_job_carries_shape_check(rpc_module: types.ModuleType) -> None:
+    from test_shape_check import FakeShape
+
+    lid = FakeShape(volume=10.0)
+    doc = types.SimpleNamespace(Objects=[types.SimpleNamespace(Name="Lid", Shape=lid)])
+    rpc_module.FreeCAD.listDocuments = lambda: {"Doc": doc}
+    rpc_module.FreeCAD.test_lid = lid
+    rpc_module.FreeCAD.Console.PrintWarning = lambda _message: None
+    rpc = rpc_module.FreeCADRPC()
+    job_id = rpc.execute_code_async("FreeCAD.test_lid.solids = 2")["job_id"]
+    for _ in range(100):
+        job = rpc.get_async_status(job_id)["job"]
+        if job["state"] != "running":
+            break
+        threading.Event().wait(0.02)
+    assert job["state"] == "done"
+    assert job["shape_check"]["warnings"] == ["Doc.Lid: 2 solids (was 1)"]

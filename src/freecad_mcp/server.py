@@ -1,3 +1,4 @@
+import json
 import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, Literal
@@ -463,6 +464,74 @@ def execute_code(
         include_screenshot,
         view_name,
     )
+
+
+@mcp.tool()
+def undo_last_edit(ctx: Context, doc_name: str | None = None) -> list[TextContent]:
+    """Revert the last execute_code call.
+
+    Every execute_code runs inside one undo transaction, so this restores the
+    state from just before it. Use it as soon as a check shows an edit went
+    wrong: FreeCAD overwrites the .FCBak file on the next save, so saving over a
+    bad edit destroys the only copy on disk.
+
+    Args:
+        doc_name: Document to undo. If omitted, undoes one step in the active document.
+    """
+    res = get_freecad_connection().undo_last_edit(doc_name)
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def measure_probe(
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    start: list[float],
+    end: list[float],
+) -> list[TextContent]:
+    """Report where a ray passes through material, and where the gaps are.
+
+    Use this to verify a feature's real dimensions instead of inferring them.
+    `spans` are the solid intervals along the ray, `gaps` the open ones: probing
+    across a vented wall returns the ribs as spans and the slots as gaps, which
+    tells you which of the two a planned cut would actually remove. Probe across
+    a wall's thickness to confirm it before and after an edit.
+
+    Args:
+        doc_name: Document name.
+        obj_name: Object to measure.
+        start: Ray start as [x, y, z].
+        end: Ray end as [x, y, z].
+    """
+    res = get_freecad_connection().measure_probe(doc_name, obj_name, start, end)
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def measure_compare(
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    rays: list[dict[str, list[float]]],
+    before: list[dict[str, Any]] | None = None,
+) -> list[TextContent]:
+    """Probe several rays at once, and compare them against an earlier baseline.
+
+    Call it before an edit to capture a baseline, then pass that call's `probes`
+    list back as `before` afterwards. Any ray whose `grew` flag is true gained
+    material, which after a repair edit means a fill reached past the region it
+    was meant to restore. shape_check cannot see that: the solid stays valid and
+    single, and the bounding box does not move.
+
+    Args:
+        doc_name: Document name.
+        obj_name: Object to measure.
+        rays: Rays as [{"start": [x, y, z], "end": [x, y, z]}, ...].
+        before: `probes` from an earlier call, to diff against.
+    """
+    res = get_freecad_connection().measure_compare(doc_name, obj_name, rays, before)
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
 
 
 @mcp.tool(structured_output=False)
