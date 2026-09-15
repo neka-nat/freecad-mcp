@@ -26,10 +26,13 @@ from rpc_server.gui_dispatch import (
     request_shutdown,
 )
 from rpc_server.ip_filter import FilteredXMLRPCServer, validate_allowed_ips
+from rpc_server import measure as _measure
 from rpc_server.object_factory import create_object_gui, edit_object_gui
 from rpc_server.parts_library import get_parts_list, insert_part_from_library
 from rpc_server.property_mapper import Object
 from rpc_server.serialize import serialize_object
+from rpc_server import shape_check
+from rpc_server import undo_guard
 from rpc_server.settings import load_settings, save_settings
 from rpc_server.view_manager import save_active_screenshot
 
@@ -291,6 +294,9 @@ class FreeCADRPC:
             # would restore stale values and lose deletions/concurrent writes.
             _async_execution.active = True
             outcome: dict[str, Any] = {"state": "done"}
+            # Fingerprint shapes before the script; a failed snapshot never fails the job.
+            snap = dispatch_to_gui(lambda: (shape_check.snapshot(),), timeout=30, operation_name="async_shape_snapshot")
+            before = snap[0] if isinstance(snap, tuple) else None
             try:
                 exec(code, _EXEC_NAMESPACE)
             except BaseException as e:
@@ -304,9 +310,18 @@ class FreeCADRPC:
                 }
             finally:
                 del _async_execution.active
+                if before is not None:
+                    chk = dispatch_to_gui(lambda: (shape_check.check(before),), timeout=30, operation_name="async_shape_check")
+                    if isinstance(chk, tuple):
+                        outcome["shape_check"] = chk[0]
                 # Publish the result before best-effort GUI/log cleanup. A busy
                 # GUI must not prevent a client from observing script failure.
                 _record_job(job_id, finished=time.time(), **outcome)
+                for w in outcome.get("shape_check", {}).get("warnings", []):
+                    try:
+                        FreeCAD.Console.PrintWarning(f"Shape check ({job_id}): {w}\n")
+                    except Exception:
+                        pass
                 try:
                     if outcome["state"] == "done":
                         FreeCAD.Console.PrintMessage("Async code execution completed.\n")
@@ -344,6 +359,47 @@ class FreeCADRPC:
             ),
         }
 
+    def undo_last_edit(self, doc_name: str | None = None) -> dict[str, Any]:
+        """Revert the last execute_code transaction."""
+        res = dispatch_to_gui(
+            lambda: (undo_guard.undo(doc_name),),
+            timeout=60,
+            operation_name="undo_last_edit",
+        )
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def measure_probe(
+        self, doc_name: str, obj_name: str, start: list[float], end: list[float]
+    ) -> dict[str, Any]:
+        """Report the solid spans and open gaps a ray crosses."""
+        res = dispatch_to_gui(
+            lambda: (_measure.probe(doc_name, obj_name, start, end),),
+            timeout=60,
+            operation_name="measure_probe",
+        )
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def measure_compare(
+        self,
+        doc_name: str,
+        obj_name: str,
+        rays: list[dict[str, list[float]]],
+        before: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Probe several rays; with a baseline, report which ones gained material."""
+        res = dispatch_to_gui(
+            lambda: (_measure.compare(doc_name, obj_name, rays, before),),
+            timeout=120,
+            operation_name="measure_compare",
+        )
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
     def execute_code(self, code: str) -> dict[str, Any]:
         """Execute Python code on the GUI thread and wait for the result.
 
@@ -355,20 +411,35 @@ class FreeCADRPC:
         output_buffer = io.StringIO()
 
         def task():
-            with contextlib.redirect_stdout(output_buffer):
-                exec(code, _EXEC_NAMESPACE)
-            return True
+            before = shape_check.snapshot()
+            # One undo step per call, so a wrong boolean can be reverted with
+            # undo_last_edit instead of rebuilt by hand: FreeCAD overwrites the
+            # .FCBak file on the next save, so the file on disk is no fallback.
+            docs = undo_guard.begin("MCP execute_code")
+            try:
+                with contextlib.redirect_stdout(output_buffer):
+                    exec(code, _EXEC_NAMESPACE)
+            except Exception:
+                undo_guard.abort(docs)
+                raise
+            undo_guard.commit(docs)
+            # Report shapes the script changed and whether they are still sound;
+            # a silently invalid solid is the costliest failure to catch late.
+            return {"success": True, "shape_check": shape_check.check(before)}
 
         res = dispatch_to_gui(
             task,
             timeout=self.EXECUTE_CODE_TIMEOUT,
             operation_name="execute_code",
         )
-        if _ok(res):
+        if isinstance(res, dict) and res.get("success"):
             FreeCAD.Console.PrintMessage("Python code executed successfully.\n")
+            for w in res["shape_check"]["warnings"]:
+                FreeCAD.Console.PrintWarning(f"Shape check: {w}\n")
             return {
                 "success": True,
                 "message": "Python code executed successfully.\nOutput: " + output_buffer.getvalue(),
+                "shape_check": res["shape_check"],
             }
         # Log the offending code (truncated) to make errors traceable
         code_preview = code if len(code) <= 800 else code[:800] + "\n...(truncated)"

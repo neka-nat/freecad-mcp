@@ -82,6 +82,23 @@ class FreeCADConnection:
     def execute_code_async(self, code: str) -> dict[str, Any]:
         return self.server.execute_code_async(code)
 
+    def undo_last_edit(self, doc_name: str | None = None) -> dict[str, Any]:
+        return self.server.undo_last_edit(doc_name)
+
+    def measure_probe(
+        self, doc_name: str, obj_name: str, start: list[float], end: list[float]
+    ) -> dict[str, Any]:
+        return self.server.measure_probe(doc_name, obj_name, start, end)
+
+    def measure_compare(
+        self,
+        doc_name: str,
+        obj_name: str,
+        rays: list[dict[str, list[float]]],
+        before: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        return self.server.measure_compare(doc_name, obj_name, rays, before)
+
     def get_async_status(self, job_id: str = "") -> dict[str, Any]:
         # Polling must not share an HTTP connection with a blocked GUI request.
         with self._make_proxy(self._timeout) as proxy:
