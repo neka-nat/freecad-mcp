@@ -24,6 +24,10 @@ class _TimeoutTransport(xmlrpc.client.Transport):
 
 
 class FreeCADConnection:
+    # Keep the run budget in sync with the addon's FreeCADRPC constant.
+    EXECUTE_CODE_TIMEOUT = 90
+    RPC_TIMEOUT_MARGIN = 30
+
     def __init__(self, host: str = "localhost", port: int = 9875, timeout: float = 150):
         self._uri = f"http://{host}:{port}"
         self._timeout = timeout
@@ -47,7 +51,8 @@ class FreeCADConnection:
         return self.server.ping()
 
     def get_rpc_status(self) -> dict[str, Any]:
-        return self.server.get_rpc_status()
+        with self._make_proxy(self._timeout) as proxy:
+            return proxy.get_rpc_status()
 
     def create_document(self, name: str) -> dict[str, Any]:
         return self.server.create_document(name)
@@ -69,18 +74,26 @@ class FreeCADConnection:
         return self.server.insert_part_from_library(relative_path)
 
     def execute_code(self, code: str, timeout: float | None = None) -> dict[str, Any]:
-        # Without an explicit timeout, call with a single argument so a newer
-        # client keeps working against an addon that predates the timeout
-        # parameter.
-        if timeout is None:
-            return self.server.execute_code(code)
-        # The GUI thread blocks the RPC response for up to `timeout` seconds, so
-        # the socket must outlast it, exactly as run_fem_analysis does.
-        proxy = self._make_proxy(max(self._timeout, timeout + 30))
-        return proxy.execute_code(code, timeout)
+        # The addon permits a full queue budget followed by a full run budget.
+        # Both default to EXECUTE_CODE_TIMEOUT, or to the caller's per-call
+        # timeout, so the socket must outlast either budget.
+        run_budget = self.EXECUTE_CODE_TIMEOUT if timeout is None else timeout
+        socket_timeout = max(self._timeout, 2 * run_budget + self.RPC_TIMEOUT_MARGIN)
+        with self._make_proxy(socket_timeout) as proxy:
+            # Without an explicit timeout, call with a single argument so a
+            # newer client keeps working against an addon that predates the
+            # timeout parameter.
+            if timeout is None:
+                return proxy.execute_code(code)
+            return proxy.execute_code(code, timeout)
 
     def execute_code_async(self, code: str) -> dict[str, Any]:
         return self.server.execute_code_async(code)
+
+    def get_async_status(self, job_id: str = "") -> dict[str, Any]:
+        # Polling must not share an HTTP connection with a blocked GUI request.
+        with self._make_proxy(self._timeout) as proxy:
+            return proxy.get_async_status(job_id)
 
     def get_active_screenshot(
         self,
@@ -108,9 +121,7 @@ class FreeCADConnection:
         return self.server.list_documents()
 
     def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600) -> dict[str, Any]:
-        # The solver blocks the RPC response for up to `timeout` seconds, so the
-        # socket must outlast it. The default 150 s transport timeout would abort
-        # any solve longer than that even though the addon is still working.
-        # Use a dedicated proxy whose socket timeout exceeds the solver timeout.
-        proxy = self._make_proxy(max(self._timeout, timeout + 30))
-        return proxy.run_fem_analysis(doc_name, analysis_name, timeout)
+        # Both queueing and solving can consume `timeout` seconds each.
+        socket_timeout = max(self._timeout, 2 * timeout + self.RPC_TIMEOUT_MARGIN)
+        with self._make_proxy(socket_timeout) as proxy:
+            return proxy.run_fem_analysis(doc_name, analysis_name, timeout)

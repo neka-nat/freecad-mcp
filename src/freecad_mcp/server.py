@@ -19,10 +19,12 @@ from .operations import (
     delete_object_operation,
     edit_object_operation,
     execute_code_async_operation,
+    execute_code_headless_operation,
     execute_code_operation,
     get_object_operation,
     get_objects_operation,
     get_parts_list_operation,
+    get_async_status_operation,
     get_rpc_status_operation,
     get_view_operation,
     insert_part_from_library_operation,
@@ -331,34 +333,106 @@ def execute_code_async(ctx: Context, code: str) -> list[TextContent]:
 
     This tool runs the submitted code in a background thread and returns
     immediately. Because it does not run on FreeCAD's main GUI thread, the code
-    must NOT call FreeCADGui APIs, manipulate the active view or selection, create
-    or edit document objects, change object properties, call doc.recompute(), or
-    save documents.
+    must NOT directly call FreeCADGui APIs, manipulate the active view or
+    selection, create or edit document objects, change object properties, call
+    doc.recompute(), or save documents. FreeCAD documents and the Coin3D
+    scenegraph are not thread-safe: writing to them from this thread races the
+    GUI thread and can wedge FreeCAD's event loop, after which the RPC server
+    stops responding entirely and FreeCAD must be restarted.
 
-    For code that touches FreeCAD documents, document objects, FreeCADGui, the
-    active view, selection, recompute, or save operations, use execute_code instead.
-    execute_code runs on the FreeCAD GUI thread and is the safe default for normal
-    FreeCAD automation.
+    Every document or view write must instead be handed to the GUI thread through
+    the injected commit() helper:
 
-    Use execute_code_async only for background-safe work such as long-running
-    pure OCCT geometry calculations (e.g. fuse/cut/loft on already-fetched shapes)
-    or other CPU-bound computations that do not interact with the document or GUI.
+        commit(fn, timeout=120) -> fn's return value
+
+    Scripts share a live namespace. Saved functions can use commit() in later
+    async calls; calling it from execute_code or a GUI callback raises immediately.
+    Coordinate concurrent scripts that intentionally modify the same variables.
+
+    commit() queues fn on the GUI thread, waits for it, and raises RuntimeError if
+    dispatch fails or times out. Example:
+
+        fused = base.fuse(addition).removeSplitter()   # slow, safe in background
+
+        def apply():                                   # runs on the GUI thread
+            obj.Shape = fused
+            doc.recompute()
+
+        commit(apply)
+
+    For code that is not dominated by heavy geometry computation, use execute_code
+    instead. execute_code runs entirely on the FreeCAD GUI thread and is the safe
+    default for normal FreeCAD automation.
+
+    Use execute_code_async only when the heavy part is long-running OCCT geometry
+    (e.g. fuse/cut/loft on already-fetched shapes) or other CPU-bound computation
+    that would exceed execute_code's 90 s GUI-thread budget.
 
     Typical usage pattern:
-    1. Fetch shapes into local variables first (via execute_code on the GUI thread).
-    2. Store intermediate results in a module-level Python variable (not in the
-       FreeCAD document) so execute_code can read them later.
-    3. Run the heavy computation via execute_code_async.
-    4. After the expected computation time has elapsed, apply results to the
-       document via execute_code (which runs on the GUI thread).
+    1. Fetch shapes into module-level variables first (via execute_code).
+    2. Run the heavy computation via execute_code_async.
+    3. Apply the result inside commit(), or store it in a module-level Python
+       variable (not in the FreeCAD document) for a later execute_code call.
+
+    Performance note: boolean operations against shapes with many faces (e.g. a
+    ribbed lid) are expensive. Fuse the additions together first, then apply a
+    single boolean against the heavy shape, and avoid doc.recompute() unless the
+    dependency graph really needs it.
 
     Args:
-        code: Background-safe Python code to execute.
+        code: Background-safe Python code to execute. Use commit(fn) for all
+            document and view writes.
 
     Returns:
-        A message confirming that background execution has started.
+        A message with the job_id of the started background execution.
     """
     return execute_code_async_operation(get_freecad_connection(), code)
+
+
+@mcp.tool(structured_output=False)
+def execute_code_headless(ctx: Context, code: str, timeout: float = 600) -> list[TextContent]:
+    """Run a FreeCAD Python script in a separate headless `freecadcmd` process.
+
+    Use this for OCCT work that can crash or block FreeCAD: helical threads
+    (makeHelix + makePipeShell), lofts and sweeps, booleans with many or
+    B-spline tools, long parametric rebuilds. A native OpenCascade crash
+    here only kills the helper process; the GUI and its open documents
+    survive, and the tool reports the crash signal and the script's output.
+
+    The script runs on the MCP server machine, independently of --host, in a
+    fresh process without GUI: import FreeCAD/Part
+    yourself, open documents from disk (FreeCAD.openDocument(path)), save
+    results with doc.save()/saveAs() or Shape.exportBrep(). Nothing from the
+    execute_code namespace is available. Print progress to stdout; it is
+    returned when the process ends. After the script saved a .FCStd that is
+    open in the GUI, call reload_document(doc_name) to show the result.
+
+    Args:
+        code: Complete Python script for freecadcmd.
+        timeout: Positive finite seconds to wait before killing the process
+            (default 600). Partial output is preserved on timeout.
+
+    Returns:
+        Exit status, crash/timeout diagnosis and the script's printed output.
+    """
+    return execute_code_headless_operation(state.freecadcmd, code, timeout)
+
+
+@mcp.tool(structured_output=False)
+def get_async_status(ctx: Context, job_id: str = "") -> list[TextContent]:
+    """Report the state of background jobs started by execute_code_async.
+
+    Does not use the FreeCAD GUI thread, so it answers even while a job runs.
+
+    Args:
+        job_id: The id returned by execute_code_async. Empty lists all running
+            jobs and up to 20 recently completed jobs.
+
+    Returns:
+        For one job: its state (running/done/failed), the error and traceback
+        when it failed. History is held in memory until FreeCAD exits.
+    """
+    return get_async_status_operation(get_freecad_connection(), job_id)
 
 
 @mcp.tool(structured_output=False)
@@ -655,9 +729,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--only-text-feedback", action="store_true", help="Only return text feedback")
     parser.add_argument("--host", type=_validate_host, default="localhost", help="Host address of the FreeCAD RPC server to connect to (default: localhost)")
+    parser.add_argument("--freecadcmd", default=None, help="Command that starts headless FreeCAD for execute_code_headless, e.g. 'flatpak run --command=freecadcmd org.freecad.FreeCAD' (default: auto-detect PATH, then Flatpak)")
     args = parser.parse_args()
     state.only_text_feedback = args.only_text_feedback
     state.rpc_host = args.host
+    from .headless import parse_command
+    state.freecadcmd = parse_command(args.freecadcmd)
     logger.info(f"Only text feedback: {state.only_text_feedback}")
     logger.info(f"Connecting to FreeCAD RPC server at: {state.rpc_host}")
     mcp.run()
