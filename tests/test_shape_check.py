@@ -193,3 +193,30 @@ def test_a_failing_document_listing_degrades_to_no_findings(shape_check) -> None
     # The check is a diagnostic; it must not become the reason a script fails.
     assert module.snapshot() == {}
     assert module.check({"Doc.Korpus": {"null": False}})["warnings"] == []
+
+
+def test_check_reports_slivers_on_a_changed_shape(shape_check) -> None:
+    module, doc = shape_check
+
+    class SliverShape(FakeShape):
+        @property
+        def Faces(self) -> list:
+            # a 0.5 x 20 strip is fine by width, but its 0.04 mm edges give it away
+            strip = types.SimpleNamespace(
+                Area=10.0, Length=41.0, Surface=types.SimpleNamespace(), BoundBox=FakeBoundBox((15.8, 15.8, 83.65, 84.15, 0, 20))
+            )
+            ledge = types.SimpleNamespace(
+                Area=0.14 * 2.05, Length=2 * (0.14 + 2.05), Surface=types.SimpleNamespace(), BoundBox=FakeBoundBox((115.75, 117.8, 20.05, 20.19, 11.8, 11.8))
+            )
+            return [strip, ledge]
+
+        @property
+        def Edges(self) -> list:
+            return [types.SimpleNamespace(Length=0.042, BoundBox=FakeBoundBox((15.758, 15.8, 84.15, 84.15, 20, 20)))]
+
+    doc.Objects = [obj("Lid", FakeShape(volume=10.0))]
+    before = module.snapshot()
+    doc.Objects = [obj("Lid", SliverShape(volume=9.9))]
+    result = module.check(before)
+    assert any("1 face(s) narrower than 0.3 mm" in w and "0.131" in w for w in result["warnings"])
+    assert any("1 edge(s) shorter than 0.1 mm" in w and "0.042" in w for w in result["warnings"])

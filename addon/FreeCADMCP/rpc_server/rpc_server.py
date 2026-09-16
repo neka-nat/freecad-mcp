@@ -26,6 +26,7 @@ from rpc_server.gui_dispatch import (
     request_shutdown,
 )
 from rpc_server.ip_filter import FilteredXMLRPCServer, validate_allowed_ips
+from rpc_server import dfm as _dfm
 from rpc_server import measure as _measure
 from rpc_server.object_factory import create_object_gui, edit_object_gui
 from rpc_server.parts_library import get_parts_list, insert_part_from_library
@@ -395,6 +396,69 @@ class FreeCADRPC:
             lambda: (_measure.compare(doc_name, obj_name, rays, before),),
             timeout=120,
             operation_name="measure_compare",
+        )
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def check_manufacturability(
+        self,
+        doc_name: str = "",
+        obj_name: str = "",
+        file_path: str = "",
+        r_min: float = 2.0,
+        max_width: float = 0.3,
+        min_edge: float = 0.1,
+        vertical_only: bool = True,
+    ) -> dict[str, Any]:
+        """Internal radii, sharp inside corners, thin faces and short edges of one shape."""
+        res = dispatch_to_gui(
+            lambda: (
+                _dfm.check(
+                    _dfm.load_shape(doc_name, obj_name, file_path), r_min, max_width, min_edge, vertical_only
+                ),
+            ),
+            timeout=300,
+            operation_name="check_manufacturability",
+        )
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def section_profile(
+        self,
+        doc_name: str,
+        obj_name: str,
+        axis: str,
+        value: float,
+        min_segment: float = 0.1,
+        max_jog_deg: float = 2.0,
+        file_path: str = "",
+    ) -> dict[str, Any]:
+        """Outline of the shape in the plane axis=value, with short segments and steps flagged."""
+        res = dispatch_to_gui(
+            lambda: (
+                _dfm.section_profile(
+                    _dfm.load_shape(doc_name, obj_name, file_path), axis, value, min_segment, max_jog_deg
+                ),
+            ),
+            timeout=120,
+            operation_name="section_profile",
+        )
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def shape_diff(
+        self, doc_a: str, obj_a: str, doc_b: str, obj_b: str, file_a: str = "", file_b: str = ""
+    ) -> dict[str, Any]:
+        """Material present in one shape and absent from the other, as solids with bounding boxes."""
+        res = dispatch_to_gui(
+            lambda: (
+                _dfm.shape_diff(_dfm.load_shape(doc_a, obj_a, file_a), _dfm.load_shape(doc_b, obj_b, file_b)),
+            ),
+            timeout=300,
+            operation_name="shape_diff",
         )
         if isinstance(res, tuple):
             return {"success": True, **res[0]}

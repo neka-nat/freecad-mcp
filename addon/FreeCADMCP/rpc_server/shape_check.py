@@ -10,6 +10,13 @@ from typing import Any
 
 import FreeCAD
 
+from rpc_server import dfm
+
+# Slivers a boolean leaves behind: a fill that overhangs an arc by 0.04 mm, a tab
+# whose flat bottom is 0.14 mm wide. Valid, single solid, invisible in a render.
+THIN_FACE_WIDTH = 0.3
+SHORT_EDGE_LENGTH = 0.1
+
 
 def _fingerprint(shape: Any) -> dict[str, Any]:
     if shape.isNull():
@@ -99,6 +106,27 @@ def _growth_warnings(key: str, was: dict[str, Any] | None, now: dict[str, Any]) 
     return out
 
 
+def _sliver_warnings(key: str, shape: Any) -> list[str]:
+    """Report thin faces and short edges on a shape the script changed."""
+    out: list[str] = []
+    try:
+        thin = dfm.thin_faces(shape, THIN_FACE_WIDTH)
+        short = dfm.short_edges(shape, SHORT_EDGE_LENGTH)
+    except Exception:  # noqa: BLE001 - a diagnostic must not fail the script
+        return out
+    if thin:
+        out.append(
+            f"{key}: {len(thin)} face(s) narrower than {THIN_FACE_WIDTH} mm, "
+            f"e.g. {thin[0]['width']} mm at {thin[0]['at']}"
+        )
+    if short:
+        out.append(
+            f"{key}: {len(short)} edge(s) shorter than {SHORT_EDGE_LENGTH} mm, "
+            f"e.g. {short[0]['length']} mm at {short[0]['at']}"
+        )
+    return out
+
+
 def check(before: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """Compare the current documents with ``before``; validate what changed."""
     docs = _documents()
@@ -144,5 +172,6 @@ def check(before: dict[str, dict[str, Any]]) -> dict[str, Any]:
                 )
                 warnings.append(f"{key}: {what}")
             warnings.extend(_growth_warnings(key, was, now))
+            warnings.extend(_sliver_warnings(key, shapes[key]))
         changed.append(entry)
     return {"changed": changed, "warnings": warnings}

@@ -548,3 +548,45 @@ def test_async_job_carries_shape_check(rpc_module: types.ModuleType) -> None:
         threading.Event().wait(0.02)
     assert job["state"] == "done"
     assert job["shape_check"]["warnings"] == ["Doc.Lid: 2 solids (was 1)"]
+
+
+def test_dfm_tools_reach_the_gui_thread(rpc_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+
+    def load_shape(doc_name, obj_name, file_path):
+        calls.append(("load", doc_name, obj_name, file_path))
+        return f"shape:{file_path or obj_name}"
+
+    fake = types.SimpleNamespace(
+        load_shape=load_shape,
+        check=lambda shape, *a: {"shape": shape, "args": a, "thin_faces": []},
+        section_profile=lambda shape, axis, value, *a: {"shape": shape, "axis": axis, "value": value},
+        shape_diff=lambda a, b: {"a": a, "b": b, "volume_only_in_a": 0.0},
+    )
+    monkeypatch.setattr(rpc_module, "_dfm", fake)
+    rpc = rpc_module.FreeCADRPC()
+
+    audit = rpc.check_manufacturability("Doc", "Box", "", 2.0, 0.3, 0.1, True)
+    assert audit["success"] is True and audit["args"] == (2.0, 0.3, 0.1, True)
+    # a STEP file is audited without touching a document
+    assert rpc.check_manufacturability(file_path="/tmp/part.step")["shape"] == "shape:/tmp/part.step"
+
+    section = rpc.section_profile("Doc", "Box", "z", 10.0)
+    assert (section["axis"], section["value"]) == ("z", 10.0)
+
+    diff = rpc.shape_diff("Doc", "Box", "Doc", "Lid")
+    assert diff["success"] is True and diff["a"] == "shape:Box" and diff["b"] == "shape:Lid"
+
+
+def test_dfm_tool_reports_a_missing_object_as_failure(rpc_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_args):
+        raise ValueError("no object 'Nope' in 'Doc'")
+
+    monkeypatch.setattr(
+        rpc_module,
+        "_dfm",
+        types.SimpleNamespace(load_shape=boom, check=lambda *a: pytest.fail("must not run without a shape")),
+    )
+    result = rpc_module.FreeCADRPC().check_manufacturability("Doc", "Nope")
+    assert result["success"] is False
+    assert "no object 'Nope'" in result["error"]
