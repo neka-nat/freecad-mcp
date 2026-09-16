@@ -1,3 +1,4 @@
+import json
 import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, Literal
@@ -463,6 +464,176 @@ def execute_code(
         include_screenshot,
         view_name,
     )
+
+
+@mcp.tool()
+def undo_last_edit(ctx: Context, doc_name: str | None = None) -> list[TextContent]:
+    """Revert the last execute_code call.
+
+    Every execute_code runs inside one undo transaction, so this restores the
+    state from just before it. Use it as soon as a check shows an edit went
+    wrong: FreeCAD overwrites the .FCBak file on the next save, so saving over a
+    bad edit destroys the only copy on disk.
+
+    Args:
+        doc_name: Document to undo. If omitted, undoes one step in the active document.
+    """
+    res = get_freecad_connection().undo_last_edit(doc_name)
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def measure_probe(
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    start: list[float],
+    end: list[float],
+) -> list[TextContent]:
+    """Report where a ray passes through material, and where the gaps are.
+
+    Use this to verify a feature's real dimensions instead of inferring them.
+    `spans` are the solid intervals along the ray, `gaps` the open ones: probing
+    across a vented wall returns the ribs as spans and the slots as gaps, which
+    tells you which of the two a planned cut would actually remove. Probe across
+    a wall's thickness to confirm it before and after an edit.
+
+    Args:
+        doc_name: Document name.
+        obj_name: Object to measure.
+        start: Ray start as [x, y, z].
+        end: Ray end as [x, y, z].
+    """
+    res = get_freecad_connection().measure_probe(doc_name, obj_name, start, end)
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def measure_compare(
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    rays: list[dict[str, list[float]]],
+    before: list[dict[str, Any]] | None = None,
+) -> list[TextContent]:
+    """Probe several rays at once, and compare them against an earlier baseline.
+
+    Call it before an edit to capture a baseline, then pass that call's `probes`
+    list back as `before` afterwards. Any ray whose `grew` flag is true gained
+    material, which after a repair edit means a fill reached past the region it
+    was meant to restore. shape_check cannot see that: the solid stays valid and
+    single, and the bounding box does not move.
+
+    Args:
+        doc_name: Document name.
+        obj_name: Object to measure.
+        rays: Rays as [{"start": [x, y, z], "end": [x, y, z]}, ...].
+        before: `probes` from an earlier call, to diff against.
+    """
+    res = get_freecad_connection().measure_compare(doc_name, obj_name, rays, before)
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def check_manufacturability(
+    ctx: Context,
+    doc_name: str = "",
+    obj_name: str = "",
+    file_path: str = "",
+    r_min: float = 2.0,
+    max_width: float = 0.3,
+    min_edge: float = 0.1,
+    vertical_only: bool = True,
+) -> list[TextContent]:
+    """Audit one solid for what a 3-axis mill cannot make and what a boolean left behind.
+
+    Reports concave cylindrical faces below `r_min` (inside corners smaller than
+    the cutter), sharp concave edges between non-tangent faces of any surface
+    type (with `vertical_only` true, only vertical ones, which is what matters
+    for pockets and walls milled from above), faces narrower than `max_width`
+    and edges shorter than `min_edge`. The last two catch slivers: a fill that
+    overhangs an arc by 0.04 mm, a tab bottom 0.14 mm wide. Those stay valid,
+    single and invisible in a render, and a shop finds them by measuring.
+
+    Pass `file_path` (STEP or BREP) to audit the exact file being sent out
+    instead of a document object.
+
+    Args:
+        doc_name: Document name (ignored when file_path is given).
+        obj_name: Object to audit (ignored when file_path is given).
+        file_path: STEP/BREP file to audit instead of a document object.
+        r_min: Smallest acceptable internal radius, mm.
+        max_width: Faces narrower than this are reported, mm.
+        min_edge: Edges shorter than this are reported, mm.
+        vertical_only: Report only vertical sharp concave edges.
+    """
+    res = get_freecad_connection().check_manufacturability(
+        doc_name, obj_name, file_path, r_min, max_width, min_edge, vertical_only
+    )
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def section_profile(
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    axis: Literal["x", "y", "z"],
+    value: float,
+    min_segment: float = 0.1,
+    max_jog_deg: float = 2.0,
+    file_path: str = "",
+) -> list[TextContent]:
+    """Cut the shape with a plane and read its outline segment by segment.
+
+    Every wire of the section comes back as ordered segments with curve type,
+    length and end points, so a wall profile can be read as numbers rather than
+    guessed from a screenshot. `short` lists segments under `min_segment`;
+    `steps` lists the short ones whose neighbours are nearly parallel, the
+    signature of a ledge left where two features were meant to meet flush.
+
+    Args:
+        doc_name: Document name.
+        obj_name: Object to section.
+        axis: Plane normal: "x", "y" or "z".
+        value: Position of the plane along that axis.
+        min_segment: Segments shorter than this are flagged, mm.
+        max_jog_deg: Neighbours within this angle count as parallel, degrees.
+        file_path: STEP/BREP file to section instead of a document object.
+    """
+    res = get_freecad_connection().section_profile(
+        doc_name, obj_name, axis, value, min_segment, max_jog_deg, file_path
+    )
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def shape_diff(
+    ctx: Context,
+    doc_a: str,
+    obj_a: str,
+    doc_b: str,
+    obj_b: str,
+    file_a: str = "",
+    file_b: str = "",
+) -> list[TextContent]:
+    """List the material one shape has and the other does not.
+
+    Returns the solids of A−B and B−A with volume and bounding box, largest
+    first, plus the shared volume. Use it to see exactly what a rebuild changed
+    against the previous version, or what a hand edit added that the build
+    script does not know about.
+
+    Args:
+        doc_a: Document of the first shape.
+        obj_a: First object.
+        doc_b: Document of the second shape (may equal doc_a).
+        obj_b: Second object.
+        file_a: STEP/BREP file for the first shape instead of a document object.
+        file_b: STEP/BREP file for the second shape instead of a document object.
+    """
+    res = get_freecad_connection().shape_diff(doc_a, obj_a, doc_b, obj_b, file_a, file_b)
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
 
 
 @mcp.tool(structured_output=False)

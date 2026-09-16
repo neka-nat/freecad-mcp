@@ -82,6 +82,54 @@ class FreeCADConnection:
     def execute_code_async(self, code: str) -> dict[str, Any]:
         return self.server.execute_code_async(code)
 
+    def undo_last_edit(self, doc_name: str | None = None) -> dict[str, Any]:
+        return self.server.undo_last_edit(doc_name)
+
+    def measure_probe(
+        self, doc_name: str, obj_name: str, start: list[float], end: list[float]
+    ) -> dict[str, Any]:
+        return self.server.measure_probe(doc_name, obj_name, start, end)
+
+    def measure_compare(
+        self,
+        doc_name: str,
+        obj_name: str,
+        rays: list[dict[str, list[float]]],
+        before: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        return self.server.measure_compare(doc_name, obj_name, rays, before)
+
+    def check_manufacturability(
+        self,
+        doc_name: str = "",
+        obj_name: str = "",
+        file_path: str = "",
+        r_min: float = 2.0,
+        max_width: float = 0.3,
+        min_edge: float = 0.1,
+        vertical_only: bool = True,
+    ) -> dict[str, Any]:
+        return self.server.check_manufacturability(
+            doc_name, obj_name, file_path, r_min, max_width, min_edge, vertical_only
+        )
+
+    def section_profile(
+        self,
+        doc_name: str,
+        obj_name: str,
+        axis: str,
+        value: float,
+        min_segment: float = 0.1,
+        max_jog_deg: float = 2.0,
+        file_path: str = "",
+    ) -> dict[str, Any]:
+        return self.server.section_profile(doc_name, obj_name, axis, value, min_segment, max_jog_deg, file_path)
+
+    def shape_diff(
+        self, doc_a: str, obj_a: str, doc_b: str, obj_b: str, file_a: str = "", file_b: str = ""
+    ) -> dict[str, Any]:
+        return self.server.shape_diff(doc_a, obj_a, doc_b, obj_b, file_a, file_b)
+
     def get_async_status(self, job_id: str = "") -> dict[str, Any]:
         # Polling must not share an HTTP connection with a blocked GUI request.
         with self._make_proxy(self._timeout) as proxy:
