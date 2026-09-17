@@ -42,7 +42,13 @@ class FreeCADMCPAddonWorkbench(Workbench):
 Gui.addWorkbench(FreeCADMCPAddonWorkbench())
 
 
-def _auto_start_mcp():
+def _auto_start_mcp(attempt=1):
+    # A single singleShot(0) at InitGui time is not reliable: it is scheduled
+    # before the main event loop runs, and startup timing occasionally
+    # swallows it, leaving auto_start_rpc=true with no server and no error.
+    # Verify-and-retry (idempotent — start_rpc_server no-ops when running)
+    # with a widening backstop until the server object actually exists.
+    _MAX_ATTEMPTS = 4
     try:
         from rpc_server import rpc_server
 
@@ -50,10 +56,26 @@ def _auto_start_mcp():
         if not settings.get("auto_start_rpc", False):
             return
 
-        msg = rpc_server.start_rpc_server()
-        FreeCAD.Console.PrintMessage(f"[MCP] Auto-start: {msg}\n")
+        if rpc_server.rpc_server_instance is None:
+            msg = rpc_server.start_rpc_server()
+            FreeCAD.Console.PrintMessage(
+                f"[MCP] Auto-start (attempt {attempt}): {msg}\n"
+            )
     except Exception as e:
-        FreeCAD.Console.PrintWarning(f"[MCP] Auto-start failed: {e}\n")
+        FreeCAD.Console.PrintWarning(
+            f"[MCP] Auto-start attempt {attempt} failed: {e}\n"
+        )
+
+    if attempt < _MAX_ATTEMPTS:
+        def _verify():
+            try:
+                from rpc_server import rpc_server as _rs
+                if _rs.rpc_server_instance is None:
+                    _auto_start_mcp(attempt + 1)
+            except Exception:
+                _auto_start_mcp(attempt + 1)
+
+        QtCore.QTimer.singleShot(2000 * attempt, _verify)
 
 
 from PySide import QtCore
