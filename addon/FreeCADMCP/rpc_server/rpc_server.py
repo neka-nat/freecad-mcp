@@ -1,6 +1,13 @@
 import FreeCAD
 import FreeCADGui
 
+# Aliases matching FreeCAD's macro/console environment. execute_code and
+# execute_code_async exec user code against this module's globals, so without
+# these the ubiquitous `App.getDocument(...)` / `Gui.activeDocument()` idiom
+# used throughout FreeCAD's docs and macros fails with NameError.
+App = FreeCAD
+Gui = FreeCADGui
+
 import contextlib
 import base64
 import io
