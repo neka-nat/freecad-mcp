@@ -15,14 +15,29 @@ from rpc_server.ip_filter import validate_allowed_ips
 from rpc_server.settings import load_settings, save_settings
 
 
+def _report_server_command(message: str, error: bool = False) -> None:
+    """Show command feedback even when the Report View is closed."""
+    printer = FreeCAD.Console.PrintError if error else FreeCAD.Console.PrintMessage
+    printer(message + "\n")
+    try:
+        FreeCADGui.getMainWindow().statusBar().showMessage(message, 15000)
+    except Exception:
+        # Console feedback remains available if the main window is closing.
+        pass
+
+
 class StartRPCServerCommand:
     def GetResources(self):
         return {"MenuText": "Start RPC Server", "ToolTip": "Start RPC Server"}
 
-    def Activated(self):
-        from . import rpc_server  # late import: avoids circular at module load
-        msg = rpc_server.start_rpc_server()
-        FreeCAD.Console.PrintMessage(msg + "\n")
+    def Activated(self, checked: int = 0) -> None:
+        try:
+            from . import rpc_server  # late import: avoids circular at module load
+            msg = rpc_server.start_rpc_server()
+        except Exception as exc:
+            _report_server_command(f"RPC Server failed to start: {type(exc).__name__}: {exc}", error=True)
+            return
+        _report_server_command(msg)
 
     def IsActive(self):
         return True
@@ -32,10 +47,14 @@ class StopRPCServerCommand:
     def GetResources(self):
         return {"MenuText": "Stop RPC Server", "ToolTip": "Stop RPC Server"}
 
-    def Activated(self):
-        from . import rpc_server
-        msg = rpc_server.stop_rpc_server()
-        FreeCAD.Console.PrintMessage(msg + "\n")
+    def Activated(self, checked: int = 0) -> None:
+        try:
+            from . import rpc_server
+            msg = rpc_server.stop_rpc_server()
+        except Exception as exc:
+            _report_server_command(f"RPC Server failed to stop: {type(exc).__name__}: {exc}", error=True)
+            return
+        _report_server_command(msg)
 
     def IsActive(self):
         return True

@@ -534,11 +534,12 @@ class FreeCADRPC:
         return save_active_screenshot(save_path, view_name, width, height, focus_object)
 
 
-def start_rpc_server(port=9875):
+def start_rpc_server(port: int = 9875) -> str:
     global rpc_server_thread, rpc_server_instance
 
     if rpc_server_instance:
-        return "RPC Server already running."
+        host, bound_port = rpc_server_instance.server_address
+        return f"RPC Server already running at {host}:{bound_port} (PID {os.getpid()})."
 
     # A previous stop may still be draining an in-flight request off-thread;
     # binding before its server_close() would hit the old socket.
@@ -557,24 +558,27 @@ def start_rpc_server(port=9875):
     else:
         host = "127.0.0.1"
 
-    rpc_server_instance = FilteredXMLRPCServer(
+    server = FilteredXMLRPCServer(
         (host, port), allowed_ips_str=allowed_ips, allow_none=True, logRequests=False
     )
-    rpc_server_instance.register_instance(FreeCADRPC())
+    try:
+        server.register_instance(FreeCADRPC())
+        init_waker()
+        QtCore.QTimer.singleShot(500, process_gui_tasks)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+    except Exception:
+        # A failed start must not retain a listening socket or appear running.
+        # This allows the toolbar command to be retried without restarting FreeCAD.
+        server.server_close()
+        request_shutdown()
+        cleanup_waker()
+        raise
 
-    def server_loop():
-        FreeCAD.Console.PrintMessage(f"RPC Server started at {host}:{port}\n")
-        if remote_enabled:
-            FreeCAD.Console.PrintMessage(f"Remote connections enabled. Allowed IPs: {allowed_ips}\n")
-        rpc_server_instance.serve_forever()
-
-    rpc_server_thread = threading.Thread(target=server_loop, daemon=True)
-    rpc_server_thread.start()
-
-    init_waker()
-    QtCore.QTimer.singleShot(500, process_gui_tasks)
-
-    msg = f"RPC Server started at {host}:{port}."
+    rpc_server_instance = server
+    rpc_server_thread = thread
+    bound_host, bound_port = server.server_address
+    msg = f"RPC Server started at {bound_host}:{bound_port} (PID {os.getpid()})."
     if remote_enabled:
         msg += f" Allowed IPs: {allowed_ips}"
     return msg
