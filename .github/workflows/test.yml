@@ -28,7 +28,7 @@ jobs:
       fail-fast: false
       matrix:
         mcp-requirement:
-          - "mcp[cli]>=1.12.2,<2"
+          - "mcp[cli]>=1.28.1,<2"
           - "mcp[cli]>=2,<3"
     steps:
       - uses: actions/checkout@v4
@@ -37,3 +37,4 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv run --with '${{ matrix.mcp-requirement }}' freecad-mcp --help
+      - run: uv run --with '${{ matrix.mcp-requirement }}' pytest -q
