@@ -85,15 +85,17 @@ dispatch as stuck.
 
 | Operation | Queue budget | Execution budget | Bundled client socket timeout |
 | --- | --- | --- | --- |
-| `execute_code` | 90 seconds (or requested `timeout`) | 90 seconds (or requested `timeout`) | At least `2 * timeout + 30` seconds |
+| `execute_code` | 90 seconds (or capped `timeout`) | 90 seconds (or capped `timeout`) | At least `2 * timeout + 30` seconds; 210 seconds by default |
 | `run_fem_analysis` | Requested `timeout` | Requested `timeout` | At least `2 * timeout + 30` seconds |
 
 A GUI task cannot be cancelled once it has started, so a slower `execute_code`
 call reports a timeout while the task keeps running, and its result is discarded
-even though the work completes. Pass `timeout` (seconds, capped at 1800) for
+even though the work completes. Pass `timeout` (positive finite seconds, capped at 1800) for
 work that genuinely has to run on the GUI thread and takes longer, such as
 importing or exporting a large STEP assembly; the client widens its socket
-timeout to match. For heavy pure-geometry work that touches neither the document
+timeout to match the capped budget. Invalid values are rejected before execution.
+Omitting `timeout` preserves the 90-second default and compatibility with older
+addons; an explicit timeout requires an updated addon. For heavy pure-geometry work that touches neither the document
 nor the GUI, prefer `execute_code_async`.
 
 The client timeout covers both budgets plus a 30-second margin. Other clients

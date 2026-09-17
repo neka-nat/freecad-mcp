@@ -4,6 +4,7 @@ import FreeCADGui
 import contextlib
 import base64
 import io
+import math
 import os
 import tempfile
 import threading
@@ -367,9 +368,9 @@ class FreeCADRPC:
         if timeout is not None:
             try:
                 timeout_s = float(timeout)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 return {"success": False, "error": f"invalid timeout: {timeout!r}"}
-            if not timeout_s > 0:
+            if isinstance(timeout, bool) or not math.isfinite(timeout_s) or timeout_s <= 0:
                 return {"success": False, "error": f"invalid timeout: {timeout!r}"}
             timeout_s = min(timeout_s, self.MAX_EXECUTE_CODE_TIMEOUT)
 

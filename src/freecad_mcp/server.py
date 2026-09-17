@@ -453,8 +453,9 @@ def execute_code(
             printed output, or intermediate steps in a longer sequence of changes.
         view_name: The view orientation of the returned screenshot (default "Isometric").
             Pick the view that best shows the change being made.
-        timeout: Seconds to wait for the GUI thread, overriding the 90 s default
-            for this call only (capped at 1800). Raise it for slow work that must
+        timeout: Positive finite seconds for each of the queue and GUI execution
+            budgets, overriding the 90 s default for this call (capped at 1800).
+            Raise it for slow work that must
             run on the GUI thread, such as importing or exporting a large STEP
             assembly. Without it the call reports a timeout while the task keeps
             running, and the result is lost even though the work finishes. Prefer
