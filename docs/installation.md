@@ -105,6 +105,9 @@ the address is `127.0.0.1:9875`. Startup errors include the exception, such as a
 address already in use. A failed start releases its listener so you can retry
 after correcting the cause.
 
+Examples from a Linux smoke test: [successful startup](../assets/rpc-startup-success.png)
+and [reported startup failure](../assets/rpc-startup-error.png).
+
 The server starts manually by default. See [auto-start configuration](configuration.md#auto-start-rpc-server)
 to enable it on subsequent launches.
 
@@ -150,7 +153,8 @@ The MCP server communicates with its client over standard input/output. Port
 to connect directly to that port.
 
 Some Windows clients report `EFTYPE` / `uv_spawn` when launching the Python
-entrypoint executable. A reported workaround is to launch it through `cmd`:
+entrypoint executable. A [reported workaround](https://github.com/neka-nat/freecad-mcp/issues/140)
+is to launch it through `cmd`:
 
 ```json
 ["cmd", "/c", "freecad-mcp"]
