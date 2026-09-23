@@ -1,3 +1,4 @@
+import functools
 import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, Literal
@@ -33,6 +34,7 @@ from .operations import (
     run_fem_analysis_operation,
 )
 from .prompt_text import ASSET_CREATION_STRATEGY
+from .responses import ToolResponse
 from .server_state import ServerState
 
 
@@ -77,6 +79,20 @@ mcp = FastMCP(
 )
 
 
+def tool(fn):
+    """Register ``fn`` as a tool whose next reply carries a pending version warning."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs) -> ToolResponse:
+        response = fn(*args, **kwargs)
+        notice, state.version_notice = state.version_notice, None
+        if notice:
+            return [TextContent(type="text", text=f"Warning: {notice}"), *response]
+        return response
+
+    return mcp.tool(structured_output=False)(wrapper)
+
+
 def get_freecad_connection() -> FreeCADConnection:
     """Get or create a persistent FreeCAD connection"""
     if state.freecad_connection is None:
@@ -87,10 +103,13 @@ def get_freecad_connection() -> FreeCADConnection:
             raise Exception(
                 "Failed to connect to FreeCAD. Make sure the FreeCAD addon is running."
             )
+        state.version_notice = state.freecad_connection.check_addon_version()
+        if state.version_notice:
+            logger.warning(state.version_notice)
     return state.freecad_connection
 
 
-@mcp.tool(structured_output=False)
+@tool
 def create_document(ctx: Context, name: str) -> list[TextContent]:
     """Create a new document in FreeCAD.
 
@@ -111,7 +130,7 @@ def create_document(ctx: Context, name: str) -> list[TextContent]:
     return create_document_operation(get_freecad_connection(), name)
 
 
-@mcp.tool(structured_output=False)
+@tool
 def create_object(
     ctx: Context,
     doc_name: str,
@@ -256,7 +275,7 @@ def create_object(
     )
 
 
-@mcp.tool(structured_output=False)
+@tool
 def edit_object(
     ctx: Context,
     doc_name: str,
@@ -292,7 +311,7 @@ def edit_object(
     )
 
 
-@mcp.tool(structured_output=False)
+@tool
 def delete_object(
     ctx: Context,
     doc_name: str,
@@ -324,7 +343,7 @@ def delete_object(
     )
 
 
-@mcp.tool(structured_output=False)
+@tool
 def execute_code_async(ctx: Context, code: str) -> list[TextContent]:
     """Execute Python code in FreeCAD without waiting for completion.
 
@@ -389,7 +408,7 @@ def execute_code_async(ctx: Context, code: str) -> list[TextContent]:
     return execute_code_async_operation(get_freecad_connection(), code)
 
 
-@mcp.tool(structured_output=False)
+@tool
 def execute_code_headless(ctx: Context, code: str, timeout: float = 600) -> list[TextContent]:
     """Run a FreeCAD Python script in a separate headless `freecadcmd` process.
 
@@ -418,7 +437,7 @@ def execute_code_headless(ctx: Context, code: str, timeout: float = 600) -> list
     return execute_code_headless_operation(state.freecadcmd, code, timeout)
 
 
-@mcp.tool(structured_output=False)
+@tool
 def get_async_status(ctx: Context, job_id: str = "") -> list[TextContent]:
     """Report the state of background jobs started by execute_code_async.
 
@@ -435,7 +454,7 @@ def get_async_status(ctx: Context, job_id: str = "") -> list[TextContent]:
     return get_async_status_operation(get_freecad_connection(), job_id)
 
 
-@mcp.tool(structured_output=False)
+@tool
 def execute_code(
     ctx: Context,
     code: str,
@@ -475,7 +494,7 @@ def execute_code(
     )
 
 
-@mcp.tool(structured_output=False)
+@tool
 def get_view(
     ctx: Context,
     view_name: ViewName,
@@ -507,7 +526,7 @@ def get_view(
     return get_view_operation(get_freecad_connection(), view_name, width, height, focus_object)
 
 
-@mcp.tool(structured_output=False)
+@tool
 def insert_part_from_library(
     ctx: Context,
     relative_path: str,
@@ -536,7 +555,7 @@ def insert_part_from_library(
     )
 
 
-@mcp.tool(structured_output=False)
+@tool
 def get_objects(
     ctx: Context,
     doc_name: str,
@@ -564,7 +583,7 @@ def get_objects(
     )
 
 
-@mcp.tool(structured_output=False)
+@tool
 def get_object(
     ctx: Context,
     doc_name: str,
@@ -595,14 +614,14 @@ def get_object(
     )
 
 
-@mcp.tool(structured_output=False)
+@tool
 def get_parts_list(ctx: Context) -> list[TextContent]:
     """Get the list of parts in the parts library addon.
     """
     return get_parts_list_operation(get_freecad_connection())
 
 
-@mcp.tool(structured_output=False)
+@tool
 def reload_document(ctx: Context, doc_name: str) -> list[TextContent]:
     """Close and re-open a document to pick up external file changes.
 
@@ -631,7 +650,7 @@ def reload_document(ctx: Context, doc_name: str) -> list[TextContent]:
     return reload_document_operation(get_freecad_connection(), doc_name)
 
 
-@mcp.tool(structured_output=False)
+@tool
 def list_documents(ctx: Context) -> list[TextContent]:
     """Get the list of open documents in FreeCAD.
 
@@ -641,18 +660,20 @@ def list_documents(ctx: Context) -> list[TextContent]:
     return list_documents_operation(get_freecad_connection())
 
 
-@mcp.tool(structured_output=False)
+@tool
 def get_rpc_status(ctx: Context) -> list[TextContent]:
     """Get RPC and FreeCAD GUI-dispatch health.
 
     This tool does not use FreeCAD's GUI thread, so it remains available after
     a GUI operation times out. A ``stuck`` state identifies the operation that
     is still running and indicates that FreeCAD may need to be restarted.
+    ``version_check`` is "ok" or says whether the addon or the server needs
+    updating.
     """
     return get_rpc_status_operation(get_freecad_connection())
 
 
-@mcp.tool(structured_output=False)
+@tool
 def run_fem_analysis(
     ctx: Context,
     doc_name: str,

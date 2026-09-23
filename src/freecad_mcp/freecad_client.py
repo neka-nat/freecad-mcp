@@ -3,6 +3,8 @@ import math
 import xmlrpc.client
 from typing import Any
 
+from .version import addon_version_warning
+
 
 logger = logging.getLogger("FreeCADMCPserver")
 
@@ -23,9 +25,18 @@ class _TimeoutTransport(xmlrpc.client.Transport):
         return conn
 
 
+def _is_budget(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    )
+
 
 class FreeCADConnection:
-    # Keep the run budget in sync with the addon's FreeCADRPC constant.
+    # Fallback run budgets for addons that do not report their own through
+    # get_rpc_status; check_addon_version replaces them when they do.
     EXECUTE_CODE_TIMEOUT = 90
     MAX_EXECUTE_CODE_TIMEOUT = 1800
     RPC_TIMEOUT_MARGIN = 30
@@ -55,6 +66,30 @@ class FreeCADConnection:
     def get_rpc_status(self) -> dict[str, Any]:
         with self._make_proxy(self._timeout) as proxy:
             return proxy.get_rpc_status()
+
+    def check_addon_version(self) -> str | None:
+        """Compare the addon's version with this server and adopt its budgets.
+
+        Returns a warning for an old or mismatched addon, otherwise None.
+        """
+        try:
+            status = self.get_rpc_status()
+        except xmlrpc.client.Fault:
+            # Addons older than get_rpc_status reject the method outright.
+            return addon_version_warning(None)
+        except Exception as e:
+            logger.warning(f"Could not check the FreeCAD addon version: {e}")
+            return None
+        if not isinstance(status, dict):
+            return addon_version_warning({})
+        for key, attr in (
+            ("execute_code_timeout", "EXECUTE_CODE_TIMEOUT"),
+            ("max_execute_code_timeout", "MAX_EXECUTE_CODE_TIMEOUT"),
+        ):
+            value = status.get(key)
+            if _is_budget(value):
+                setattr(self, attr, value)
+        return addon_version_warning(status)
 
     def create_document(self, name: str) -> dict[str, Any]:
         return self.server.create_document(name)

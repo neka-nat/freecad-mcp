@@ -1,10 +1,12 @@
 import logging
+import xmlrpc.client
 from typing import Any
 
 from mcp.types import ImageContent
 
 from ..freecad_client import FreeCADConnection
 from ..responses import ToolResponse, add_screenshot_if_available, json_response, text_response
+from ..version import addon_version_warning
 
 
 logger = logging.getLogger("FreeCADMCPserver")
@@ -283,7 +285,12 @@ def list_documents_operation(freecad: FreeCADConnection) -> ToolResponse:
 def get_rpc_status_operation(freecad: FreeCADConnection) -> ToolResponse:
     """Get bridge health through the GUI-independent RPC status method."""
     try:
-        return json_response(freecad.get_rpc_status())
+        status = freecad.get_rpc_status()
+        if isinstance(status, dict):
+            status["version_check"] = addon_version_warning(status) or "ok"
+        return json_response(status)
+    except xmlrpc.client.Fault:
+        return text_response(addon_version_warning(None))
     except Exception as e:
         logger.error(f"Failed to get RPC status: {str(e)}")
         return text_response(f"Failed to get RPC status: {str(e)}")
