@@ -86,30 +86,119 @@ def short_edges(shape: Any, min_length: float = 0.1) -> list[dict[str, Any]]:
     ]
 
 
-def _is_concave(shape: Any, face_b: Any, mid: Any, tangent: Any, n_a: Any, n_b: Any) -> bool:
-    """An edge is concave when face B rises on the outer side of face A.
+def _oriented_edge(face: Any, edge: Any) -> Any:
+    """The edge as this face traverses it.
 
-    Step off the edge into face B (perpendicular to the edge, within B's tangent
-    plane) and ask whether that direction has a positive component along A's
-    outward normal. Classifying a point on a face is cheap; classifying a point
-    against the whole solid rebuilds a classifier each call and turned a
-    1400-face part into a minute-long check, so that is only the fallback.
+    A face walks its boundary anticlockwise seen from outside, so the same edge
+    runs one way in one face and the other way in its neighbour. That direction
+    is what carries the sign: without it the two normals only give an unsigned
+    angle, which reads the same for the outside of a box and the inside of a
+    pocket.
     """
-    step = n_b.cross(tangent)
-    if step.Length > 1e-9:
-        step.normalize()
-        for candidate in (step, step * -1):
-            try:
-                on_b = face_b.isInside(mid + candidate * 0.05, 0.01, True)
-            except Exception:  # noqa: BLE001
-                on_b = False
-            if on_b:
-                return candidate.dot(n_a) > 1e-6
-    bisector = n_a + n_b
-    if bisector.Length < 1e-9:
+    for candidate in face.Edges:
+        try:
+            same = candidate.isSame(edge)
+        except AttributeError:
+            same = candidate is edge
+        if same:
+            return candidate
+    return edge
+
+
+def _signed_dihedral(face_a: Any, edge: Any, param: float,
+                     n_a: Any, n_b: Any, directed: Any = None) -> float | None:
+    """Angle between the faces at a point, negative on an inside corner.
+
+    ``atan2`` of the normals resolved along the edge, which is pure arithmetic:
+    no point is classified against the solid. ``Shape.isInside`` rebuilds a
+    classifier over the whole body on every call, and the 293 edges that reached
+    it on a 444-face lid cost 28 of that scan's 31 seconds.
+    """
+    if directed is None:
+        directed = _oriented_edge(face_a, edge)
+    try:
+        tangent = directed.tangentAt(param)
+    except Exception:  # noqa: BLE001
+        return None
+    if directed.Orientation == "Reversed":
+        tangent = tangent * -1
+    if tangent.Length < 1e-9:
+        return None
+    tangent.normalize()
+    cross = n_a.cross(n_b)
+    return math.degrees(math.atan2(tangent.dot(cross), n_a.dot(n_b)))
+
+
+def _fast_normal(face: Any, point: Any) -> Any:
+    """Outward normal at a point, without inverting the surface.
+
+    ``Surface.parameter`` locates a point in UV by numerical search, and on a
+    444-face lid that search was 6 of the scan's 9 seconds. Planes and cylinders
+    -- a milled part is almost entirely both -- give their normal from the
+    geometry directly. ``None`` for anything else, which still has to be
+    inverted.
+    """
+    surface = face.Surface
+    kind = surface.__class__.__name__
+    try:
+        if kind == "Plane":
+            axis = surface.Axis
+            normal = FreeCAD.Vector(axis.x, axis.y, axis.z)
+        elif kind == "Cylinder":
+            axis = surface.Axis
+            offset = point - surface.Center
+            # Drop the along-axis part: what is left points straight out from
+            # the axis, which is the surface normal there.
+            radial = offset - FreeCAD.Vector(axis.x, axis.y, axis.z) * offset.dot(axis)
+            if radial.Length < 1e-9:
+                return None
+            normal = radial.normalize()
+        else:
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    if face.Orientation == "Reversed":
+        normal = normal * -1
+    return normal
+
+
+def _curve_normal(face: Any, edge: Any, param: float) -> Any:
+    """Normal where an edge meets a face, taken from the edge's 2D curve.
+
+    Every edge already stores where it runs in each face's UV space, so the UV
+    can be read off instead of searched for. On a B-spline that search costs
+    3.7 ms -- the twelve spline faces of a V-groove were 6 of this scan's 8
+    seconds, while the 400 planes and cylinders around them cost nothing.
+    """
+    try:
+        curve, first, last = face.curveOnSurface(edge)
+        span = last - first
+        length = edge.LastParameter - edge.FirstParameter
+        t = first if length == 0 else first + span * (
+            (param - edge.FirstParameter) / length
+        )
+        uv = curve.value(t)
+        # Face.normalAt already accounts for the face's orientation, so the
+        # result is the outward normal as it stands.
+        return face.normalAt(uv.x, uv.y)
+    except Exception:  # noqa: BLE001 - no stored pcurve: fall back to inverting
+        pass
+    try:
+        u, v = face.Surface.parameter(edge.valueAt(param))
+        return face.normalAt(u, v)
+    except Exception:  # noqa: BLE001 - degenerate parametrisation
+        return None
+
+
+def _parallel_planes(face_a: Any, face_b: Any, cos_min: float) -> bool:
+    """Both faces planar and facing the same way, so no corner between them."""
+    try:
+        sa, sb = face_a.Surface, face_b.Surface
+        if sa.__class__.__name__ != "Plane" or sb.__class__.__name__ != "Plane":
+            return False
+        return abs(sa.Axis.dot(sb.Axis)) > cos_min
+    except Exception:  # noqa: BLE001 - an unreadable surface is judged the slow way
         return False
-    bisector.normalize()
-    return bool(shape.isInside(mid + bisector * 0.05, 1e-7, False))
 
 
 def sharp_concave_edges(
@@ -117,43 +206,77 @@ def sharp_concave_edges(
 ) -> list[dict[str, Any]]:
     """Concave edges where the two faces meet at more than ``min_angle`` degrees.
 
-    Tangent joins (fillets) are skipped. Concavity is decided by stepping a
-    little way along the sum of the two outward normals: for an inside corner
-    that point lies in material, for an outside corner it lies in air.
+    Tangent joins (fillets) are skipped. An inside corner is told from an
+    outside one by the sign of the dihedral angle, taken along the edge as the
+    first face traverses it.
+
+    The angle is sampled at three points rather than only the middle: a curved
+    edge can fold inwards along part of its length and outwards along the rest,
+    and one sample in the middle reports whichever happens to be there.
     """
     out = []
     cos_min = math.cos(math.radians(min_angle))
     # One pass over the faces instead of shape.ancestorsOfType per edge, which
     # walks the whole shape each time and made a 1400-face lid take minutes.
     adjacent: dict[int, list[Any]] = {}
+    # The same pass records how each face walks the edge. Looking that up later
+    # meant rescanning a face's edge list per sample: 45k isSame calls on a lid.
+    directed: dict[tuple[int, int], Any] = {}
     for face in shape.Faces:
         for e in face.Edges:
             adjacent.setdefault(e.hashCode(), []).append(face)
+            directed[(id(face), e.hashCode())] = e
     for edge in shape.Edges:
         if edge.Length <= 0:
             continue
         faces = adjacent.get(edge.hashCode(), [])
         if len(faces) != 2:
             continue
-        mid_param = (edge.FirstParameter + edge.LastParameter) / 2
-        mid = edge.valueAt(mid_param)
+        # Two parallel planes cannot form a corner, whatever their extent, and
+        # reading that off the surfaces skips the parameter inversion below.
+        if _parallel_planes(faces[0], faces[1], cos_min):
+            continue
+        p0, p1 = edge.FirstParameter, edge.LastParameter
+        mid_param = (p0 + p1) / 2
         tangent = edge.tangentAt(mid_param)
         if vertical_only and abs(tangent.z) < 0.99:
             continue
-        normals = []
-        for face in faces:
-            try:
-                u, v = face.Surface.parameter(mid)
-                normals.append(face.normalAt(u, v))
-            except Exception:  # noqa: BLE001 - degenerate parametrisation: judge the rest
-                break
-        if len(normals) != 2:
+        # Straight edges between planes cannot change along their length, so one
+        # sample settles them. Sampling all three regardless tripled the cost of
+        # the surface inversions, which is what the scan spends its time on.
+        straight = edge.Curve.__class__.__name__ == "Line"
+        if straight and _kind(faces[0]) == "Plane" and _kind(faces[1]) == "Plane":
+            fracs = (0.5,)
+        else:
+            fracs = (0.25, 0.5, 0.75)
+        sharpest, normals = None, None
+        for frac in fracs:
+            param = p0 + (p1 - p0) * frac
+            point = edge.valueAt(param)
+            pair = []
+            for face in faces:
+                normal = _fast_normal(face, point)
+                if normal is None:
+                    normal = _curve_normal(face, edge, param)
+                if normal is None:
+                    break
+                pair.append(normal)
+            if len(pair) != 2 or pair[0].dot(pair[1]) > cos_min:
+                continue
+            angle = _signed_dihedral(
+                faces[0], edge, param, pair[0], pair[1],
+                directed.get((id(faces[0]), edge.hashCode())),
+            )
+            if angle is None or angle >= 0:
+                continue
+            # Keep the tightest corner found: that is the one a cutter has to
+            # reach, and the one worth reporting a position for.
+            if sharpest is None or abs(angle) > abs(sharpest[0]):
+                sharpest, normals = (angle, point), pair
+        if sharpest is None:
             continue
+        mid = sharpest[1]
         n1, n2 = normals
-        if n1.dot(n2) > cos_min:
-            continue
-        if not _is_concave(shape, faces[1], mid, tangent, n1, n2):
-            continue
         dihedral = 180 - math.degrees(math.acos(max(-1.0, min(1.0, n1.dot(n2)))))
         out.append(
             {

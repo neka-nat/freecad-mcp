@@ -68,10 +68,13 @@ class Face:
 
 
 class Edge:
-    def __init__(self, length: float, start: Vec, direction: Vec, faces: list[Face] | None = None, curve: str = "Line"):
+    def __init__(self, length: float, start: Vec, direction: Vec, faces: list[Face] | None = None, curve: str = "Line", orientation: str = "Forward"):
         self.Length, self.start, self.direction, self.faces = length, start, direction, faces or []
         self.FirstParameter, self.LastParameter = 0.0, length
         self.Curve = type(curve, (), {})()
+        # Which way the first face walks this edge: the sign of the dihedral
+        # angle comes from that direction, not from the curve's own.
+        self.Orientation = orientation
         e = start + direction * length
         self.BoundBox = BBox(min(start.x, e.x), max(start.x, e.x), min(start.y, e.y), max(start.y, e.y), min(start.z, e.z), max(start.z, e.z))
 
@@ -137,17 +140,23 @@ def test_short_edges_catch_a_fill_that_overhangs_an_arc(dfm) -> None:
 
 def test_sharp_concave_edge_is_told_apart_from_a_convex_one(dfm) -> None:
     up = Vec(0, 0, 1)
-    # L profile: floor z=0 for x<5, wall at x=5 rising above it (outward normal -x)
+    # L profile: floor z=0 for x<5, wall at x=5 rising above it (outward normal
+    # -x). The floor walks this edge in +y, which is what makes the corner read
+    # as inside.
     floor = Face(1, 4, up, contains=lambda p: p.x < 5 and abs(p.z) < 1e-9)
     wall_up = Face(1, 4, Vec(-1, 0, 0), contains=lambda p: abs(p.x - 5) < 1e-9 and p.z > 0)
     inside_corner = Edge(10, Vec(5, 0, 0), Vec(0, 1, 0), [floor, wall_up])
-    # box top edge: top face z=0 for x>0, side at x=0 dropping below (outward normal -x)
+    # Box top edge: same two normals, but the top face walks it the other way,
+    # and that alone is the difference between an inside and an outside corner.
     top = Face(1, 4, up, contains=lambda p: p.x > 0 and abs(p.z) < 1e-9)
     wall_down = Face(1, 4, Vec(-1, 0, 0), contains=lambda p: abs(p.x) < 1e-9 and p.z < 0)
-    outside_corner = Edge(10, Vec(0, 0, 0), Vec(0, 1, 0), [top, wall_down])
+    outside_corner = Edge(10, Vec(0, 0, 0), Vec(0, 1, 0), [top, wall_down],
+                          orientation="Reversed")
     shape = Shape([], [inside_corner, outside_corner], inside=lambda p: pytest.fail("solid classifier must not be needed"))
     found = dfm.sharp_concave_edges(shape)
     assert len(found) == 1
+    # A straight edge between two planes cannot change along its length, so it
+    # is settled from its midpoint alone.
     assert found[0]["at"] == [5.0, 5.0, 0.0]
     assert found[0]["dihedral_deg"] == 90.0
     assert found[0]["direction"] == "horizontal"
@@ -169,7 +178,8 @@ def test_tangent_faces_are_not_sharp(dfm) -> None:
 def test_vertical_only_skips_floor_edges(dfm) -> None:
     up, side = Vec(0, 0, 1), Vec(-1, 0, 0)
     floor_edge = Edge(10, Vec(5, 0, 0), Vec(0, 1, 0), [Face(1, 4, up), Face(1, 4, side)])
-    wall_edge = Edge(10, Vec(5, 5, 0), Vec(0, 0, 1), [Face(1, 4, side), Face(1, 4, Vec(0, -1, 0))])
+    wall_edge = Edge(10, Vec(5, 5, 0), Vec(0, 0, 1),
+                     [Face(1, 4, side), Face(1, 4, Vec(0, -1, 0))], orientation="Reversed")
     shape = Shape([], [floor_edge, wall_edge], inside=lambda p: True)
     found = dfm.sharp_concave_edges(shape, vertical_only=True)
     assert [f["direction"] for f in found] == ["vertical"]
