@@ -48,7 +48,10 @@ class FakeLine:
 def measure() -> Iterator[tuple[types.ModuleType, dict]]:
     with load_gui_dispatch() as dispatch:
         state = {"spans": [], "axis": 0}
-        shape = types.SimpleNamespace(isNull=lambda: False)
+        bbox = types.SimpleNamespace(
+            XMin=0.0, XMax=120.0, YMin=0.0, YMax=90.0, ZMin=0.0, ZMax=25.0
+        )
+        shape = types.SimpleNamespace(isNull=lambda: False, BoundBox=bbox)
         doc = types.SimpleNamespace(getObject=lambda name: types.SimpleNamespace(Shape=shape))
         dispatch.FreeCAD.getDocument = lambda name: doc
         dispatch.FreeCAD.Vector = lambda *a: tuple(a)
@@ -115,6 +118,46 @@ def test_compare_refuses_a_baseline_from_a_different_ray(measure) -> None:
     )["verdicts"][0]
     assert verdict["note"] == "baseline is a different ray"
     assert "grew" not in verdict
+
+
+def test_sweep_walks_every_stop_without_drifting(measure) -> None:
+    module, state = measure
+    state["spans"] = [(115.099, 118.099)]
+    result = module.sweep("Doc", "Korpus", "x", "z", 3.0, 15.0, 0.1, 23.35)
+    stops = [s["z"] for s in result["slices"]]
+    assert len(stops) == 121
+    # Repeated addition of 0.1 lands on 9.999999999999998; a drifted stop would
+    # report a plane it did not sample.
+    assert stops[60] == 9.0
+    assert stops[-1] == 15.0
+    assert result["at_axis"] == "y"
+
+
+def test_sweep_flags_the_height_where_a_hole_opens(measure) -> None:
+    module, state = measure
+    module_spans = module._spans
+
+    def spans_by_height(shape, start, end, axis):
+        # Wall is solid below Z 10.3 and split by an SMA cutout above it.
+        state["spans"] = (
+            [(115.099, 118.099)]
+            if start[2] < 10.3
+            else [(115.099, 116.0), (117.2, 118.099)]
+        )
+        return module_spans(shape, start, end, axis)
+
+    module._spans = spans_by_height
+    try:
+        result = module.sweep("Doc", "Korpus", "x", "z", 9.0, 12.0, 1.0, 23.35)
+    finally:
+        module._spans = module_spans
+    assert result["transitions"] == [{"from": 10.0, "to": 11.0}]
+
+
+def test_sweep_refuses_a_ray_axis_that_is_also_the_step_axis(measure) -> None:
+    module, _ = measure
+    with pytest.raises(ValueError, match="must differ"):
+        module.sweep("Doc", "Korpus", "z", "z", 3.0, 15.0, 0.5, 23.35)
 
 
 def test_probe_rejects_a_missing_object(measure) -> None:

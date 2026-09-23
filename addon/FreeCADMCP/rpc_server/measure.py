@@ -76,6 +76,80 @@ def probe(
     }
 
 
+_AXES = {"x": 0, "y": 1, "z": 2}
+
+
+def sweep(
+    doc_name: str,
+    obj_name: str,
+    ray_axis: str,
+    step_axis: str,
+    step_from: float,
+    step_to: float,
+    step: float,
+    at: float,
+) -> dict[str, Any]:
+    """Fire parallel rays across a range, so a feature's extent is read not guessed.
+
+    ``probe`` answers one line at a time, which makes finding where a cut starts
+    and stops expensive enough that two samples get mistaken for a conclusion: a
+    hole that ends 1 mm above the sampled height reads as no hole at all. This
+    walks ``step_axis`` from ``step_from`` to ``step_to`` and probes along
+    ``ray_axis`` at every stop, holding the third axis at ``at``.
+
+    Each slice reports its spans, and ``transitions`` lists the stops where that
+    pattern changed, which is where a feature begins or ends.
+    """
+    if ray_axis == step_axis:
+        raise ValueError("ray_axis and step_axis must differ")
+    for name, value in (("ray_axis", ray_axis), ("step_axis", step_axis)):
+        if value not in _AXES:
+            raise ValueError(f"{name} must be x, y or z, not {value!r}")
+    if step <= 0:
+        raise ValueError("step must be positive")
+
+    shape = _shape_of(doc_name, obj_name)
+    bb = shape.BoundBox
+    ray_i, step_i = _AXES[ray_axis], _AXES[step_axis]
+    third_i = 3 - ray_i - step_i
+    lo = [bb.XMin, bb.YMin, bb.ZMin][ray_i] - 1.0
+    hi = [bb.XMax, bb.YMax, bb.ZMax][ray_i] + 1.0
+
+    slices = []
+    pos = step_from
+    # Walk by index: adding `step` repeatedly drifts, and a drifted stop silently
+    # samples a different plane than the one reported.
+    n = int(round((step_to - step_from) / step))
+    for k in range(n + 1):
+        pos = round(step_from + k * step, 6)
+        p0, p1 = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
+        p0[ray_i], p1[ray_i] = lo, hi
+        p0[step_i] = p1[step_i] = pos
+        p0[third_i] = p1[third_i] = at
+        spans = _spans(shape, FreeCAD.Vector(*p0), FreeCAD.Vector(*p1), ray_i)
+        slices.append(
+            {
+                step_axis: pos,
+                "spans": spans,
+                "material": round(sum(s[1] - s[0] for s in spans), 4),
+            }
+        )
+
+    transitions = [
+        {"from": slices[i - 1][step_axis], "to": slices[i][step_axis]}
+        for i in range(1, len(slices))
+        if len(slices[i]["spans"]) != len(slices[i - 1]["spans"])
+    ]
+    return {
+        "ray_axis": ray_axis,
+        "step_axis": step_axis,
+        "at_axis": "xyz"[third_i],
+        "at": at,
+        "slices": slices,
+        "transitions": transitions,
+    }
+
+
 def compare(
     doc_name: str,
     obj_name: str,
