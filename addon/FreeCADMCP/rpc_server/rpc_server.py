@@ -32,7 +32,11 @@ from rpc_server.object_factory import create_object_gui, edit_object_gui
 from rpc_server.parts_library import get_parts_list, insert_part_from_library
 from rpc_server.property_mapper import Object
 from rpc_server.serialize import serialize_object
+from rpc_server import face_colors
+from rpc_server import features as _features
+from rpc_server import picking as _picking
 from rpc_server import shape_check
+from rpc_server import transaction as _transaction
 from rpc_server import undo_guard
 from rpc_server.settings import load_settings, save_settings
 from rpc_server.view_manager import save_active_screenshot
@@ -298,6 +302,8 @@ class FreeCADRPC:
             # Fingerprint shapes before the script; a failed snapshot never fails the job.
             snap = dispatch_to_gui(lambda: (shape_check.snapshot(),), timeout=30, operation_name="async_shape_snapshot")
             before = snap[0] if isinstance(snap, tuple) else None
+            csnap = dispatch_to_gui(lambda: (face_colors.snapshot(),), timeout=30, operation_name="async_color_snapshot")
+            colors_before = csnap[0] if isinstance(csnap, tuple) else None
             try:
                 exec(code, _EXEC_NAMESPACE)
             except BaseException as e:
@@ -311,6 +317,14 @@ class FreeCADRPC:
                 }
             finally:
                 del _async_execution.active
+                if colors_before:
+                    rep = dispatch_to_gui(
+                        lambda: (face_colors.restore(colors_before),),
+                        timeout=30,
+                        operation_name="async_color_restore",
+                    )
+                    if isinstance(rep, tuple) and rep[0]:
+                        outcome["face_colors_restored"] = rep[0]
                 if before is not None:
                     chk = dispatch_to_gui(lambda: (shape_check.check(before),), timeout=30, operation_name="async_shape_check")
                     if isinstance(chk, tuple):
@@ -379,6 +393,219 @@ class FreeCADRPC:
             lambda: (_measure.probe(doc_name, obj_name, start, end),),
             timeout=60,
             operation_name="measure_probe",
+        )
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def cut_pocket(
+        self, doc_name: str, obj_name: str, corners: list[Any], depth: float,
+        tool_radius: float, z_top: float, through: bool = False,
+        policy: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Cut a pocket with the corner radii a cutter leaves, and audit it."""
+        def task():
+            cp = _transaction.checkpoint(doc_name, "before pocket", [obj_name])
+            try:
+                out = _features.pocket(doc_name, obj_name, corners, depth,
+                                       tool_radius, z_top, through)
+                doc = FreeCAD.getDocument(doc_name)
+                doc.getObject(obj_name).Shape = out["shape"]
+                doc.recompute()
+            except Exception as e:  # noqa: BLE001
+                _transaction.restore(cp["checkpoint_id"])
+                return ({"verdict": "reject", "restored": True,
+                         "errors": [{"code": "FEATURE_FAILED",
+                                     "detail": f"{type(e).__name__}: {e}"}]},)
+            report = _transaction.audit(doc_name, cp["checkpoint_id"], policy)
+            if report["verdict"] == "reject":
+                _transaction.restore(cp["checkpoint_id"])
+                report["restored"] = True
+            else:
+                report["restored"] = False
+                report["opening"] = out["opening"]
+                report["corner_radius"] = out["corner_radius"]
+                report["volume_removed"] = out["volume_removed"]
+            return (report,)
+
+        res = dispatch_to_gui(task, timeout=self.EXECUTE_CODE_TIMEOUT,
+                              operation_name="cut_pocket")
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def cut_slot(
+        self, doc_name: str, obj_name: str, path: list[Any], width: float,
+        depth: float, z_top: float, policy: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Cut a slot with the rounded ends a cutter leaves, and audit it."""
+        def task():
+            cp = _transaction.checkpoint(doc_name, "before slot", [obj_name])
+            try:
+                out = _features.slot(doc_name, obj_name, path, width, depth, z_top)
+                doc = FreeCAD.getDocument(doc_name)
+                doc.getObject(obj_name).Shape = out["shape"]
+                doc.recompute()
+            except Exception as e:  # noqa: BLE001
+                _transaction.restore(cp["checkpoint_id"])
+                return ({"verdict": "reject", "restored": True,
+                         "errors": [{"code": "FEATURE_FAILED",
+                                     "detail": f"{type(e).__name__}: {e}"}]},)
+            report = _transaction.audit(doc_name, cp["checkpoint_id"], policy)
+            if report["verdict"] == "reject":
+                _transaction.restore(cp["checkpoint_id"])
+                report["restored"] = True
+            else:
+                report["restored"] = False
+                report["end_radius"] = out["end_radius"]
+                report["volume_removed"] = out["volume_removed"]
+            return (report,)
+
+        res = dispatch_to_gui(task, timeout=self.EXECUTE_CODE_TIMEOUT,
+                              operation_name="cut_slot")
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def pick_pixel(self, x: int, y: int, radius: int = 0) -> dict[str, Any]:
+        """Report the face drawn at a pixel of the current view."""
+        res = dispatch_to_gui(
+            lambda: (_picking.pick(x, y, radius),),
+            timeout=30,
+            operation_name="pick_pixel",
+        )
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def pick_region(
+        self, x0: int, y0: int, x1: int, y1: int, step: int = 8
+    ) -> dict[str, Any]:
+        """Report every face drawn inside a rectangle of the current view."""
+        res = dispatch_to_gui(
+            lambda: (_picking.pick_region(x0, y0, x1, y1, step),),
+            timeout=120,
+            operation_name="pick_region",
+        )
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def locate_point(self, point: list[float]) -> dict[str, Any]:
+        """Report where a 3D point falls in the current view."""
+        res = dispatch_to_gui(
+            lambda: (_picking.locate(point),),
+            timeout=30,
+            operation_name="locate_point",
+        )
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def create_checkpoint(
+        self, doc_name: str, label: str = "", objects: list[str] | None = None
+    ) -> dict[str, Any]:
+        """Copy the shapes so a later edit can be rolled back to this state."""
+        res = dispatch_to_gui(
+            lambda: (_transaction.checkpoint(doc_name, label, objects),),
+            timeout=120,
+            operation_name="create_checkpoint",
+        )
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def list_checkpoints(self) -> dict[str, Any]:
+        res = dispatch_to_gui(
+            lambda: ({"checkpoints": _transaction.list_checkpoints()},),
+            timeout=30,
+            operation_name="list_checkpoints",
+        )
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def restore_checkpoint(self, checkpoint_id: str) -> dict[str, Any]:
+        """Put every shape back the way the checkpoint recorded it."""
+        res = dispatch_to_gui(
+            lambda: (_transaction.restore(checkpoint_id),),
+            timeout=180,
+            operation_name="restore_checkpoint",
+        )
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def audit_shapes(
+        self, doc_name: str, checkpoint_id: str = "", policy: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Compare the document against a checkpoint and return a verdict."""
+        res = dispatch_to_gui(
+            lambda: (_transaction.audit(doc_name, checkpoint_id, policy),),
+            timeout=180,
+            operation_name="audit_shapes",
+        )
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def execute_guarded(
+        self, doc_name: str, code: str, label: str = "",
+        policy: dict[str, Any] | None = None, objects: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Run an edit and keep it only if the audit passes."""
+        output_buffer = io.StringIO()
+
+        def task():
+            colors_before = face_colors.snapshot()
+            with contextlib.redirect_stdout(output_buffer):
+                report = _transaction.guarded(
+                    doc_name, code, _EXEC_NAMESPACE, label, policy, objects
+                )
+            # Only a kept edit needs its colors carried over; a rejected one was
+            # restored from the checkpoint, which already holds the old ones.
+            if not report.get("restored"):
+                repainted = face_colors.restore(colors_before)
+                if repainted:
+                    report["face_colors_restored"] = repainted
+            return (report,)
+
+        res = dispatch_to_gui(
+            task,
+            timeout=self.EXECUTE_CODE_TIMEOUT,
+            operation_name="execute_guarded",
+        )
+        if isinstance(res, tuple):
+            return {"success": True, "output": output_buffer.getvalue(), **res[0]}
+        return _err(res)
+
+    def measure_sweep(
+        self,
+        doc_name: str,
+        obj_name: str,
+        ray_axis: str,
+        step_axis: str,
+        step_from: float,
+        step_to: float,
+        step: float,
+        at: float,
+    ) -> dict[str, Any]:
+        """Probe parallel rays across a range and report where the pattern changes."""
+        res = dispatch_to_gui(
+            lambda: (
+                _measure.sweep(
+                    doc_name,
+                    obj_name,
+                    ray_axis,
+                    step_axis,
+                    step_from,
+                    step_to,
+                    step,
+                    at,
+                ),
+            ),
+            timeout=180,
+            operation_name="measure_sweep",
         )
         if isinstance(res, tuple):
             return {"success": True, **res[0]}
@@ -476,6 +703,9 @@ class FreeCADRPC:
 
         def task():
             before = shape_check.snapshot()
+            # Face colors are index-based, so a boolean renumbering the faces
+            # drops them to one flat color and the old order cannot be recovered.
+            colors_before = face_colors.snapshot()
             # One undo step per call, so a wrong boolean can be reverted with
             # undo_last_edit instead of rebuilt by hand: FreeCAD overwrites the
             # .FCBak file on the next save, so the file on disk is no fallback.
@@ -486,10 +716,14 @@ class FreeCADRPC:
             except Exception:
                 undo_guard.abort(docs)
                 raise
+            repainted = face_colors.restore(colors_before)
             undo_guard.commit(docs)
             # Report shapes the script changed and whether they are still sound;
             # a silently invalid solid is the costliest failure to catch late.
-            return {"success": True, "shape_check": shape_check.check(before)}
+            result = {"success": True, "shape_check": shape_check.check(before)}
+            if repainted:
+                result["face_colors_restored"] = repainted
+            return result
 
         res = dispatch_to_gui(
             task,

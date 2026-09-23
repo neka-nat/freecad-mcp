@@ -90,6 +90,69 @@ class FreeCADConnection:
     ) -> dict[str, Any]:
         return self.server.measure_probe(doc_name, obj_name, start, end)
 
+    def cut_pocket(
+        self, doc_name: str, obj_name: str, corners: list[Any], depth: float,
+        tool_radius: float, z_top: float, through: bool = False,
+        policy: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.server.cut_pocket(doc_name, obj_name, corners, depth,
+                                      tool_radius, z_top, through, policy)
+
+    def cut_slot(
+        self, doc_name: str, obj_name: str, path: list[Any], width: float,
+        depth: float, z_top: float, policy: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.server.cut_slot(doc_name, obj_name, path, width, depth,
+                                    z_top, policy)
+
+    def pick_pixel(self, x: int, y: int, radius: int = 0) -> dict[str, Any]:
+        return self.server.pick_pixel(x, y, radius)
+
+    def pick_region(
+        self, x0: int, y0: int, x1: int, y1: int, step: int = 8
+    ) -> dict[str, Any]:
+        return self.server.pick_region(x0, y0, x1, y1, step)
+
+    def locate_point(self, point: list[float]) -> dict[str, Any]:
+        return self.server.locate_point(point)
+
+    def create_checkpoint(
+        self, doc_name: str, label: str = "", objects: list[str] | None = None
+    ) -> dict[str, Any]:
+        return self.server.create_checkpoint(doc_name, label, objects)
+
+    def list_checkpoints(self) -> dict[str, Any]:
+        return self.server.list_checkpoints()
+
+    def restore_checkpoint(self, checkpoint_id: str) -> dict[str, Any]:
+        return self.server.restore_checkpoint(checkpoint_id)
+
+    def audit_shapes(
+        self, doc_name: str, checkpoint_id: str = "", policy: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        return self.server.audit_shapes(doc_name, checkpoint_id, policy)
+
+    def execute_guarded(
+        self, doc_name: str, code: str, label: str = "",
+        policy: dict[str, Any] | None = None, objects: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return self.server.execute_guarded(doc_name, code, label, policy, objects)
+
+    def measure_sweep(
+        self,
+        doc_name: str,
+        obj_name: str,
+        ray_axis: str,
+        step_axis: str,
+        step_from: float,
+        step_to: float,
+        step: float,
+        at: float,
+    ) -> dict[str, Any]:
+        return self.server.measure_sweep(
+            doc_name, obj_name, ray_axis, step_axis, step_from, step_to, step, at
+        )
+
     def measure_compare(
         self,
         doc_name: str,

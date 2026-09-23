@@ -509,6 +509,270 @@ def measure_probe(
 
 
 @mcp.tool()
+def execute_guarded(
+    ctx: Context,
+    doc_name: str,
+    code: str,
+    label: str = "",
+    policy: dict[str, Any] | None = None,
+    objects: list[str] | None = None,
+) -> list[TextContent]:
+    """Run an edit and keep it only if it leaves the part sound.
+
+    Prefer this over `execute_code` for anything that changes geometry. A
+    checkpoint is written first, the code runs, and the result is audited: if
+    the edit split the solid, invalidated it, grew its bounding box or added
+    slivers, the document is restored from that checkpoint and the damage never
+    reaches the model. `execute_code` reports the same defects but keeps them.
+
+    A rejected reply names the defect and where it is, which is the input for
+    the next attempt rather than a reason to guess.
+
+    Args:
+        doc_name: Document the edit targets.
+        code: Python to execute, same environment as execute_code.
+        label: What the edit is for; shown when listing checkpoints.
+        policy: Overrides for the accept/reject thresholds, e.g.
+            {"forbid_bbox_growth": false} for an edit that is meant to add
+            material, or {"max_new_thin_faces": 2} to tolerate known slivers.
+        objects: Names of the objects the edit may change. Narrows what is
+            copied and judged; leave unset to cover the whole document.
+    """
+    res = get_freecad_connection().execute_guarded(
+        doc_name, code, label, policy, objects
+    )
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def cut_pocket(
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    corners: list[list[float]],
+    depth: float,
+    tool_radius: float,
+    z_top: float,
+    through: bool = False,
+    policy: dict[str, Any] | None = None,
+) -> list[TextContent]:
+    """Cut a pocket the way a mill does, and keep it only if the part stays sound.
+
+    Prefer this over assembling a pocket from boxes and cylinders in
+    execute_code. A round cutter cannot leave a square inside corner, so a
+    hand-built pocket is both unmachinable and a source of notches and slivers
+    where the primitives cross. Here the corners come out as arcs of
+    `tool_radius` because the cut is what the cutter sweeps.
+
+    Refused outright if the cutter does not fit the opening, rather than
+    approximating a pocket no tool can produce.
+
+    Args:
+        doc_name: Document to edit.
+        obj_name: Object to cut.
+        corners: Finished opening as [[x0, y0], [x1, y1]].
+        depth: How far down from z_top to cut.
+        tool_radius: Cutter radius; also the radius of every inside corner.
+        z_top: Surface the pocket starts from.
+        through: Cut clear through instead of leaving a floor.
+        policy: Overrides for the accept/reject thresholds.
+    """
+    res = get_freecad_connection().cut_pocket(
+        doc_name, obj_name, corners, depth, tool_radius, z_top, through, policy
+    )
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def cut_slot(
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    path: list[list[float]],
+    width: float,
+    depth: float,
+    z_top: float,
+    policy: dict[str, Any] | None = None,
+) -> list[TextContent]:
+    """Cut a slot along a path, with the rounded ends a cutter leaves.
+
+    `path` is the centreline in XY; the slot reaches half its width either side.
+    A bent path is cut as one swept volume, so the bend has no notch in it --
+    which is what fusing a box per segment produces.
+
+    Args:
+        doc_name: Document to edit.
+        obj_name: Object to cut.
+        path: Centreline as [[x, y], ...]; two points for a straight slot.
+        width: Slot width, equal to the cutter diameter.
+        depth: How far down from z_top to cut.
+        z_top: Surface the slot starts from.
+        policy: Overrides for the accept/reject thresholds.
+    """
+    res = get_freecad_connection().cut_slot(
+        doc_name, obj_name, path, width, depth, z_top, policy
+    )
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def pick_pixel(ctx: Context, x: int, y: int, radius: int = 0) -> list[TextContent]:
+    """Name the face drawn at a pixel of the last screenshot.
+
+    Use this whenever a defect is visible in a render: it turns the thing on
+    screen into a face name, a surface type and a coordinate, instead of
+    scanning the part hoping the numbers match what is in the picture.
+
+    Coordinates match the screenshot: x from the left, y from the top. The
+    screenshot may be scaled down from the view, in which case `view_size` in
+    the reply gives the real size to scale the pixel by.
+
+    Args:
+        x: Pixel column.
+        y: Pixel row.
+        radius: Also try a ring this many pixels around the point, for a target
+            too thin to hit dead-on.
+    """
+    res = get_freecad_connection().pick_pixel(x, y, radius)
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def pick_region(
+    ctx: Context, x0: int, y0: int, x1: int, y1: int, step: int = 8
+) -> list[TextContent]:
+    """List every face drawn inside a rectangle of the last screenshot.
+
+    For "what is all this over here": a single pixel lands on one face, while a
+    suspicious area is usually several. Faces come back most-visible first, with
+    the pixel count each covers.
+
+    Args:
+        x0: Left edge of the rectangle.
+        y0: Top edge.
+        x1: Right edge.
+        y1: Bottom edge.
+        step: Pixels between samples; smaller finds thinner faces and costs more.
+    """
+    res = get_freecad_connection().pick_region(x0, y0, x1, y1, step)
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def locate_point(ctx: Context, point: list[float]) -> list[TextContent]:
+    """Say where a 3D point appears in the current view.
+
+    The reverse of pick_pixel, for pointing at a defect an audit reported by
+    coordinate. `drawn_there` names what is actually visible at that pixel,
+    which is not the point itself when it sits inside the part or behind a wall.
+
+    Args:
+        point: [x, y, z] in model coordinates.
+    """
+    res = get_freecad_connection().locate_point(point)
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def create_checkpoint(
+    ctx: Context, doc_name: str, label: str = "", objects: list[str] | None = None
+) -> list[TextContent]:
+    """Copy the shapes so a later edit can be rolled back to this exact state.
+
+    Undo is a stack the user also drives, and it stops working once its depth
+    runs out; a checkpoint holds its own copies and restores the same way every
+    time.
+
+    Args:
+        doc_name: Document to snapshot.
+        label: What this state represents.
+        objects: Names to copy; leave unset for every shape in the document.
+    """
+    res = get_freecad_connection().create_checkpoint(doc_name, label, objects)
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def list_checkpoints(ctx: Context) -> list[TextContent]:
+    """List the checkpoints available to restore."""
+    res = get_freecad_connection().list_checkpoints()
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def restore_checkpoint(ctx: Context, checkpoint_id: str) -> list[TextContent]:
+    """Put every shape back the way a checkpoint recorded it.
+
+    Args:
+        checkpoint_id: Id returned by create_checkpoint.
+    """
+    res = get_freecad_connection().restore_checkpoint(checkpoint_id)
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def audit_shapes(
+    ctx: Context,
+    doc_name: str,
+    checkpoint_id: str = "",
+    policy: dict[str, Any] | None = None,
+) -> list[TextContent]:
+    """Report the defects in a document, and which ones an edit introduced.
+
+    Without a checkpoint this is the current state of every shape. With one, the
+    verdict covers only what changed since, so a part's pre-existing slivers are
+    not charged to the edit being judged.
+
+    Args:
+        doc_name: Document to audit.
+        checkpoint_id: Compare against this checkpoint instead of judging in
+            isolation.
+        policy: Overrides for the accept/reject thresholds.
+    """
+    res = get_freecad_connection().audit_shapes(doc_name, checkpoint_id, policy)
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def measure_sweep(
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    ray_axis: str,
+    step_axis: str,
+    step_from: float,
+    step_to: float,
+    step: float,
+    at: float,
+) -> list[TextContent]:
+    """Scan a wall with parallel rays to find where a feature starts and stops.
+
+    Reach for this instead of guessing a feature's extent from two `measure_probe`
+    calls: a pocket that ends just above the sampled height reads as absent, and
+    the conclusion "there is no cutout here" is then wrong by a millimetre. Sweep
+    the range and the answer is in the data.
+
+    `slices` holds the spans at every stop; `transitions` flags the stops where
+    the span count changed, i.e. the Z where a hole opens or a wall closes.
+
+    Args:
+        doc_name: Document name.
+        obj_name: Object to measure.
+        ray_axis: Axis each ray travels along ("x", "y" or "z"); the ray spans the
+            object's full extent on it.
+        step_axis: Axis to walk between rays; must differ from ray_axis.
+        step_from: First stop on step_axis.
+        step_to: Last stop on step_axis.
+        step: Distance between stops.
+        at: Fixed coordinate on the remaining third axis.
+    """
+    res = get_freecad_connection().measure_sweep(
+        doc_name, obj_name, ray_axis, step_axis, step_from, step_to, step, at
+    )
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
 def measure_compare(
     ctx: Context,
     doc_name: str,
