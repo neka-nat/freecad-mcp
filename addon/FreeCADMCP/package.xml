@@ -2,7 +2,7 @@
 <package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
   <name>FreeCAD MCP</name>
   <description>Control FreeCAD from AI assistants via the Model Context Protocol — XML-RPC server addon with GUI-thread dispatch, screenshots, parts library and FEM helpers.</description>
-  <version>0.1.24</version>
+  <version>0.1.25</version>
   <date>2026-09-18</date>
   <maintainer email="nekanat.stock@gmail.com">neka-nat</maintainer>
   <license>MIT</license>
