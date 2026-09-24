@@ -1,8 +1,7 @@
 """Qt Command classes for the MCP Addon workbench menu.
 
 Defines the five toolbar/menu entries (Start, Stop, Toggle Auto-Start,
-Toggle Remote, Configure Allowed IPs), plus the post-startup sync that
-reflects saved settings on the checkable items.
+Toggle Remote, Configure Allowed IPs).
 
 ``register_commands()`` and ``schedule_toggle_sync()`` are invoked from
 ``rpc_server.py`` at import time to preserve current side-effect behavior.
@@ -10,20 +9,35 @@ reflects saved settings on the checkable items.
 
 import FreeCAD
 import FreeCADGui
-from PySide import QtCore, QtWidgets
+from PySide import QtWidgets
 
 from rpc_server.ip_filter import validate_allowed_ips
 from rpc_server.settings import load_settings, save_settings
+
+
+def _report_server_command(message: str, error: bool = False) -> None:
+    """Show command feedback even when the Report View is closed."""
+    printer = FreeCAD.Console.PrintError if error else FreeCAD.Console.PrintMessage
+    printer(message + "\n")
+    try:
+        FreeCADGui.getMainWindow().statusBar().showMessage(message, 15000)
+    except Exception:
+        # Console feedback remains available if the main window is closing.
+        pass
 
 
 class StartRPCServerCommand:
     def GetResources(self):
         return {"MenuText": "Start RPC Server", "ToolTip": "Start RPC Server"}
 
-    def Activated(self):
-        from . import rpc_server  # late import: avoids circular at module load
-        msg = rpc_server.start_rpc_server()
-        FreeCAD.Console.PrintMessage(msg + "\n")
+    def Activated(self, checked: int = 0) -> None:
+        try:
+            from . import rpc_server  # late import: avoids circular at module load
+            msg = rpc_server.start_rpc_server()
+        except Exception as exc:
+            _report_server_command(f"RPC Server failed to start: {type(exc).__name__}: {exc}", error=True)
+            return
+        _report_server_command(msg)
 
     def IsActive(self):
         return True
@@ -33,10 +47,14 @@ class StopRPCServerCommand:
     def GetResources(self):
         return {"MenuText": "Stop RPC Server", "ToolTip": "Stop RPC Server"}
 
-    def Activated(self):
-        from . import rpc_server
-        msg = rpc_server.stop_rpc_server()
-        FreeCAD.Console.PrintMessage(msg + "\n")
+    def Activated(self, checked: int = 0) -> None:
+        try:
+            from . import rpc_server
+            msg = rpc_server.stop_rpc_server()
+        except Exception as exc:
+            _report_server_command(f"RPC Server failed to stop: {type(exc).__name__}: {exc}", error=True)
+            return
+        _report_server_command(msg)
 
     def IsActive(self):
         return True
@@ -44,10 +62,11 @@ class StopRPCServerCommand:
 
 class ToggleRemoteConnectionsCommand:
     def GetResources(self):
+        settings = load_settings()
         return {
             "MenuText": "Remote Connections",
             "ToolTip": "Enable or disable remote connections for the RPC server.",
-            "Checkable": True,
+            "Checkable": bool(settings.get("remote_enabled", False)),
         }
 
     def Activated(self, checked=0):
@@ -169,10 +188,11 @@ class SetAuthTokenCommand:
 
 class ToggleAutoStartCommand:
     def GetResources(self):
+        settings = load_settings()
         return {
             "MenuText": "Auto-Start Server",
             "ToolTip": "Automatically start the RPC server when FreeCAD launches.",
-            "Checkable": True,
+            "Checkable": bool(settings.get("auto_start_rpc", False)),
         }
 
     def Activated(self, checked=0):
@@ -202,37 +222,11 @@ def register_commands() -> None:
     FreeCADGui.addCommand("Set_Auth_Token", SetAuthTokenCommand())
 
 
-# Map command objectName -> settings key. Matching on objectName rather than
-# the localized menu text keeps this working under translation.
-_TOGGLE_COMMANDS = {
-    "Toggle_Remote_Connections": "remote_enabled",
-    "Toggle_Auto_Start": "auto_start_rpc",
-}
-_SYNC_MAX_RETRIES = 10  # ~20 s at 2 s/retry before giving up
-
-
-def _sync_toggle_states(retries_left: int = _SYNC_MAX_RETRIES) -> None:
-    """Sync checkable menu items with saved settings on startup.
-
-    The menu actions are created asynchronously, so retry a bounded number of
-    times until they exist rather than polling forever.
-    """
-    try:
-        settings = load_settings()
-        main_window = FreeCADGui.getMainWindow()
-        found = 0
-        for action in main_window.findChildren(QtWidgets.QAction):
-            key = _TOGGLE_COMMANDS.get(action.objectName())
-            if key is not None:
-                action.setChecked(bool(settings.get(key, False)))
-                found += 1
-        if found == len(_TOGGLE_COMMANDS):
-            return
-    except Exception:
-        pass
-    if retries_left > 0:
-        QtCore.QTimer.singleShot(2000, lambda: _sync_toggle_states(retries_left - 1))
-
-
 def schedule_toggle_sync() -> None:
-    QtCore.QTimer.singleShot(2000, _sync_toggle_states)
+    """Compatibility no-op; toggle state is initialized by ``GetResources``.
+
+    FreeCAD treats the presence of the ``Checkable`` resource as making an
+    action checkable and uses its boolean value as the action's initial checked
+    state. Loading the saved setting in ``GetResources`` therefore avoids any
+    delayed QAction lookup or workbench activation at startup.
+    """

@@ -9,3 +9,5 @@ class ServerState:
     rpc_host: str = "localhost"
     auth_token: str | None = None
     freecad_connection: FreeCADConnection | None = None
+    freecadcmd: list[str] | None = None  # headless FreeCAD command; None = auto-detect
+    version_notice: str | None = None  # addon version warning not yet shown in a tool reply

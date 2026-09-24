@@ -2,191 +2,66 @@
 
 # FreeCAD MCP
 
-This repository is a FreeCAD MCP that allows you to control FreeCAD from Claude Desktop.
+Control FreeCAD from Claude Desktop and other MCP clients. Create and edit models,
+run Python scripts, inspect documents, and run FEM analyses.
 
 ## Demo
 
-### Design a flange
+Design a flange:
 
-![demo](./assets/freecad_mcp4.gif)
+![Designing a flange in FreeCAD](./assets/freecad_mcp4.gif)
 
-### Design a toy car
+See [more demos and examples](docs/examples.md) for a toy car, modelling from a
+2D drawing, and agent integrations.
 
-![demo](./assets/make_toycar4.gif)
+## Quick start
 
-### Design a part from 2D drawing
+You need FreeCAD and [uv / uvx](https://docs.astral.sh/uv/guides/tools/).
+FreeCAD MCP has two components: an addon running inside FreeCAD and an MCP server
+launched by your client.
 
-#### Input 2D drawing
-
-![input](./assets/b9-1.png)
-
-#### Demo
-
-![demo](./assets/from_2ddrawing.gif)
-
-This is the conversation history.
-https://claude.ai/share/7b48fd60-68ba-46fb-bb21-2fbb17399b48
-
-## Install addon
-
-FreeCAD Addon directory is
-* Windows: `%APPDATA%\FreeCAD\Mod\`
-* Mac:
-  * FreeCAD 1.1: `~/Library/Application\ Support/FreeCAD/v1-1/Mod/`
-  * FreeCAD 1.0: `~/Library/Application\ Support/FreeCAD/v1-0/Mod/`
-* Linux:
-  * Ubuntu: `~/.FreeCAD/Mod/` or `~/snap/freecad/common/Mod/` (if you install FreeCAD from snap)
-  * Debian: `~/.local/share/FreeCAD/Mod`
-  * Arch / CachyOS (FreeCAD 1.1 from `extra/freecad`): `~/.local/share/FreeCAD/v1-1/Mod/`
-
-Please put `addon/FreeCADMCP` directory to the addon directory.
+### 1. Install and start the FreeCAD addon
 
 ```bash
 git clone https://github.com/neka-nat/freecad-mcp.git
 cd freecad-mcp
-
-# For Linux (Ubuntu/Debian)
-cp -r addon/FreeCADMCP ~/.FreeCAD/Mod/
-
-# For Linux (Arch/CachyOS, FreeCAD 1.1 from extra/freecad)
-mkdir -p ~/.local/share/FreeCAD/v1-1/Mod/
-cp -r addon/FreeCADMCP ~/.local/share/FreeCAD/v1-1/Mod/
-
-# For macOS (FreeCAD 1.1)
-cp -r addon/FreeCADMCP ~/Library/Application\ Support/FreeCAD/v1-1/Mod/
 ```
 
-When you install addon, you need to restart FreeCAD.
-You can select "MCP Addon" from Workbench list and use it.
+Copy `addon/FreeCADMCP` into your [FreeCAD addon directory](docs/installation.md#addon-directory),
+then restart FreeCAD. Select the **MCP Addon** workbench and click
+**Start RPC Server** in the **FreeCAD MCP** toolbar.
 
-![workbench_list](./assets/workbench_list.png)
+See the [installation guide](docs/installation.md) for platform-specific commands
+and screenshots.
 
-And you can start RPC server by "Start RPC Server" command in "FreeCAD MCP" toolbar.
+### 2. Connect Claude Desktop
 
-![start_rpc_server](./assets/start_rpc_server.png)
-
-### Auto-Start RPC Server
-
-By default, the RPC server must be started manually each time FreeCAD opens. To start it automatically:
-
-1. Open the **FreeCAD MCP** menu (switch to the MCP Addon workbench first)
-2. Check **Auto-Start Server**
-
-The setting is saved to `freecad_mcp_settings.json` and persists across sessions. On the next FreeCAD launch, the RPC server will start automatically once the application finishes loading.
-
-You can disable it at any time by unchecking **Auto-Start Server** in the same menu.
-
-## Setting up Claude Desktop
-
-Pre-installation of the [uvx](https://docs.astral.sh/uv/guides/tools/) is required.
-
-And you need to edit Claude Desktop config file, `claude_desktop_config.json`.
-
-For user.
+Add the following entry to `claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "freecad": {
       "command": "uvx",
-      "args": [
-        "freecad-mcp"
-      ]
+      "args": ["freecad-mcp"]
     }
   }
 }
 ```
 
-If you want to save token, you can set `only_text_feedback` to `true` and use only text feedback.
+Restart Claude Desktop to load the configuration, keep FreeCAD open with its RPC
+server running, and ask Claude to create a model. Connections use `localhost` by
+default.
 
-```json
-{
-  "mcpServers": {
-    "freecad": {
-      "command": "uvx",
-      "args": [
-        "freecad-mcp",
-        "--only-text-feedback"
-      ]
-    }
-  }
-}
-```
+## Documentation
 
-
-For developer.
-First, you need clone this repository.
-
-```bash
-git clone https://github.com/neka-nat/freecad-mcp.git
-```
-
-```json
-{
-  "mcpServers": {
-    "freecad": {
-      "command": "uv",
-      "args": [
-        "--directory",
-        "/path/to/freecad-mcp/",
-        "run",
-        "freecad-mcp"
-      ]
-    }
-  }
-}
-```
-
-## Remote Connections
-
-By default the RPC server does not accept remote connections and listens on `localhost`. To control FreeCAD from another machine on your network:
-
-### 1. Enable remote connections in FreeCAD
-
-In the **FreeCAD MCP** toolbar:
-
-1. Check **Remote Connections** — the RPC server will bind to `0.0.0.0` (all interfaces) on the next restart. For security reasons, it only accepts connections from the IP addresses or CIDR subnets specified in the **Allowed IPs** field. By default this is `127.0.0.1`.
-2. Click **Configure Allowed IPs** and enter a comma-separated list of IP addresses or CIDR subnets that are allowed to connect, e.g.:
-
-   ```
-   192.168.1.100, 10.0.0.0/24
-   ```
-
-   `127.0.0.1` is always the default. Invalid entries are rejected with an error dialog. Restart the RPC server after changing these settings.
-
-### 2. Point the MCP server at the remote host
-
-Pass the `--host` flag with the IP address or hostname of the machine running FreeCAD:
-
-```json
-{
-  "mcpServers": {
-    "freecad": {
-      "command": "uvx",
-      "args": [
-        "freecad-mcp",
-        "--host", "192.168.1.100"
-      ]
-    }
-  }
-}
-```
-
-The `--host` value is validated on startup — it must be a valid IPv4/IPv6 address or hostname.
-
-## Tools
-
-* `create_document`: Create a new document in FreeCAD.
-* `create_object`: Create a new object in FreeCAD.
-* `edit_object`: Edit an object in FreeCAD.
-* `delete_object`: Delete an object in FreeCAD.
-* `execute_code`: Execute arbitrary Python code in FreeCAD.
-* `insert_part_from_library`: Insert a part from the [parts library](https://github.com/FreeCAD/FreeCAD-library).
-* `get_view`: Get a screenshot of the active view.
-* `get_objects`: Get all objects in a document.
-* `get_object`: Get an object in a document.
-* `get_parts_list`: Get the list of parts in the [parts library](https://github.com/FreeCAD/FreeCAD-library).
-* `run_fem_analysis`: Run the CalculiX solver on an existing `Fem::FemAnalysis` and return summary results (max von Mises stress, max displacement, node count, working directory). Auto-creates a `SolverCcxTools` if the analysis has none. See [`examples/cantilever_fem.py`](examples/cantilever_fem.py) for an end-to-end usage example.
+| Guide | Contents |
+| --- | --- |
+| [Installation](docs/installation.md) | Addon directories, setup screenshots, running from source |
+| [Configuration](docs/configuration.md) | Auto-start, text feedback, remote connections |
+| [Tools](docs/tools.md) | Available tools, screenshots, FEM analysis |
+| [Code execution](docs/execution.md) | GUI execution, background jobs, headless scripts, timeout troubleshooting |
+| [Demos and examples](docs/examples.md) | Design demos, FEM example, ADK and LangChain integrations |
 
 ## Contributors
 

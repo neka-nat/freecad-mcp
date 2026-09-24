@@ -1,6 +1,6 @@
 [project]
 name = "freecad-mcp"
-version = "0.1.19"
+version = "0.1.24"
 description = "Add your description here"
 readme = "README.md"
 authors = [
@@ -9,12 +9,20 @@ authors = [
 license = { text = "MIT" }
 requires-python = ">=3.12"
 dependencies = [
-    "mcp[cli]>=1.12.2",
+    "mcp[cli]>=1.28.1,<3",
     "validators>=0.34.0",
 ]
 
 [project.scripts]
 freecad-mcp = "freecad_mcp.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<10",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.hatch.build.targets.sdist]
 exclude = ["assets", "results"]

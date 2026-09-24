@@ -1,8 +1,16 @@
+import functools
 import logging
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, Literal
+from typing import Any, AsyncIterator, Callable, Dict, Literal
 
-from mcp.server.fastmcp import Context, FastMCP
+try:
+    # mcp 1.x
+    from mcp.server.fastmcp import Context, FastMCP
+except ImportError:
+    # mcp 2.x moved mcp.server.fastmcp to mcp.server.mcpserver and renamed
+    # FastMCP to MCPServer; the API surface used here is unchanged.
+    from mcp.server.mcpserver import Context
+    from mcp.server.mcpserver import MCPServer as FastMCP
 from mcp.types import ImageContent, TextContent
 
 from .freecad_client import FreeCADConnection
@@ -12,10 +20,13 @@ from .operations import (
     delete_object_operation,
     edit_object_operation,
     execute_code_async_operation,
+    execute_code_headless_operation,
     execute_code_operation,
     get_object_operation,
     get_objects_operation,
     get_parts_list_operation,
+    get_async_status_operation,
+    get_rpc_status_operation,
     get_view_operation,
     insert_part_from_library_operation,
     list_documents_operation,
@@ -23,6 +34,7 @@ from .operations import (
     run_fem_analysis_operation,
 )
 from .prompt_text import ASSET_CREATION_STRATEGY
+from .responses import ToolResponse
 from .server_state import ServerState
 
 
@@ -31,6 +43,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("FreeCADMCPserver")
 logger.setLevel(logging.INFO)
+
+ViewName = Literal[
+    "Isometric", "Front", "Top", "Right", "Back", "Left", "Bottom", "Dimetric", "Trimetric"
+]
 
 state = ServerState()
 
@@ -63,22 +79,52 @@ mcp = FastMCP(
 )
 
 
+def tool(fn: Callable[..., ToolResponse]) -> Callable[..., ToolResponse]:
+    """Register ``fn`` as a tool whose next reply carries a pending version warning."""
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> ToolResponse:
+        response = fn(*args, **kwargs)
+        notice, state.version_notice = state.version_notice, None
+        if notice:
+            return [TextContent(type="text", text=f"Warning: {notice}"), *response]
+        return response
+
+    return mcp.tool(structured_output=False)(wrapper)
+
+
 def get_freecad_connection() -> FreeCADConnection:
-    """Get or create a persistent FreeCAD connection"""
+    """Get or create a persistent FreeCAD connection.
+
+    The connection is cached only after FreeCAD answers, so a server started
+    before FreeCAD checks the addon version on the first call that reaches it.
+    """
     if state.freecad_connection is None:
-        state.freecad_connection = FreeCADConnection(
+        connection = FreeCADConnection(
             host=state.rpc_host, port=9875, token=state.auth_token
         )
-        if not state.freecad_connection.ping():
+        try:
+            # ping() raises, rather than returning False, when nothing listens.
+            reachable = connection.ping()
+        except Exception as e:
+            connection.disconnect()
+            raise Exception(
+                f"Failed to connect to FreeCAD ({e}). Make sure the FreeCAD addon is running."
+            ) from e
+        if not reachable:
             logger.error("Failed to ping FreeCAD")
-            state.freecad_connection = None
+            connection.disconnect()
             raise Exception(
                 "Failed to connect to FreeCAD. Make sure the FreeCAD addon is running."
             )
+        state.version_notice = connection.check_addon_version()
+        if state.version_notice:
+            logger.warning(state.version_notice)
+        state.freecad_connection = connection
     return state.freecad_connection
 
 
-@mcp.tool()
+@tool
 def create_document(ctx: Context, name: str) -> list[TextContent]:
     """Create a new document in FreeCAD.
 
@@ -99,7 +145,7 @@ def create_document(ctx: Context, name: str) -> list[TextContent]:
     return create_document_operation(get_freecad_connection(), name)
 
 
-@mcp.tool()
+@tool
 def create_object(
     ctx: Context,
     doc_name: str,
@@ -107,15 +153,41 @@ def create_object(
     obj_name: str,
     analysis_name: str | None = None,
     obj_properties: dict[str, Any] = None,
+    include_screenshot: bool = True,
+    view_name: ViewName = "Isometric",
 ) -> list[TextContent | ImageContent]:
     """Create a new object in FreeCAD.
-    Object type is starts with "Part::" or "Draft::" or "PartDesign::" or "Fem::".
+
+    ``obj_type`` must name a type registered in FreeCAD's C++ type system, such
+    as "Part::", "PartDesign::" or "Fem::" types. A number of FreeCAD features
+    are implemented in Python rather than C++ and so are not registered types;
+    of those, these are supported here through dedicated factories, and each
+    requires the properties listed beside it:
+
+        Part::Tube        InnerRadius, OuterRadius, Height
+        Draft::Circle     Radius
+        Draft::Rectangle  Length, Height
+        Draft::Polygon    FacesNumber, Radius
+        Draft::Wire       Points (list of {x, y, z}), optional Closed
+
+    Any other Python-implemented type (Draft::Point, Draft::Ellipse, ...) must
+    be built with ``execute_code`` instead.
+
+    Note that the Draft factories name objects themselves, so for those the
+    returned object_name will differ from the requested obj_name, which is
+    applied to the object's Label instead. Always use the returned name in
+    later get_object/edit_object calls.
 
     Args:
         doc_name: The name of the document to create the object in.
-        obj_type: The type of the object to create (e.g. 'Part::Box', 'Part::Cylinder', 'Draft::Circle', 'PartDesign::Body', etc.).
+        obj_type: The type of the object to create (e.g. 'Part::Box', 'Part::Cylinder', 'Part::Cut', 'PartDesign::Body', etc.).
         obj_name: The name of the object to create.
         obj_properties: The properties of the object to create.
+        include_screenshot: Whether to return a screenshot of the model (default True).
+            Set to False to save tokens when visual feedback is not needed,
+            e.g. for intermediate steps in a longer sequence of changes.
+        view_name: The view orientation of the returned screenshot (default "Isometric").
+            Pick the view that best shows the change being made.
 
     Returns:
         A message indicating the success or failure of the object creation and a screenshot of the object.
@@ -152,12 +224,32 @@ def create_object(
         }
         ```
 
-        If you want to create a circle with a radius of 10, you can use the following data.
+        If you want to cut one solid out of another, create both solids first,
+        then reference them by name as 'Base' and 'Tool'.
         ```json
         {
-            "doc_name": "MyCircle",
-            "obj_name": "Circle",
-            "obj_type": "Draft::Circle",
+            "doc_name": "MyPart",
+            "obj_name": "Cut",
+            "obj_type": "Part::Cut",
+            "obj_properties": {
+                "Base": "Box",
+                "Tool": "Cylinder"
+            }
+        }
+        ```
+
+        If you want to create a pipe with an outer diameter of 250, a 10 wall
+        and a length of 500, you can use the following data.
+        ```json
+        {
+            "doc_name": "MyPipe",
+            "obj_name": "Pipe",
+            "obj_type": "Part::Tube",
+            "obj_properties": {
+                "OuterRadius": 125,
+                "InnerRadius": 115,
+                "Height": 500
+            }
         }
         ```
 
@@ -232,12 +324,19 @@ def create_object(
         obj_name,
         analysis_name,
         obj_properties,
+        include_screenshot,
+        view_name,
     )
 
 
-@mcp.tool()
+@tool
 def edit_object(
-    ctx: Context, doc_name: str, obj_name: str, obj_properties: dict[str, Any]
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    obj_properties: dict[str, Any],
+    include_screenshot: bool = True,
+    view_name: ViewName = "Isometric",
 ) -> list[TextContent | ImageContent]:
     """Edit an object in FreeCAD.
     This tool is used when the `create_object` tool cannot handle the object creation.
@@ -246,6 +345,11 @@ def edit_object(
         doc_name: The name of the document to edit the object in.
         obj_name: The name of the object to edit.
         obj_properties: The properties of the object to edit.
+        include_screenshot: Whether to return a screenshot of the model (default True).
+            Set to False to save tokens when visual feedback is not needed,
+            e.g. for intermediate steps in a longer sequence of changes.
+        view_name: The view orientation of the returned screenshot (default "Isometric").
+            Pick the view that best shows the change being made.
 
     Returns:
         A message indicating the success or failure of the object editing and a screenshot of the object.
@@ -256,16 +360,29 @@ def edit_object(
         doc_name,
         obj_name,
         obj_properties,
+        include_screenshot,
+        view_name,
     )
 
 
-@mcp.tool()
-def delete_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextContent | ImageContent]:
+@tool
+def delete_object(
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    include_screenshot: bool = True,
+    view_name: ViewName = "Isometric",
+) -> list[TextContent | ImageContent]:
     """Delete an object in FreeCAD.
 
     Args:
         doc_name: The name of the document to delete the object from.
         obj_name: The name of the object to delete.
+        include_screenshot: Whether to return a screenshot of the model (default True).
+            Set to False to save tokens when visual feedback is not needed,
+            e.g. for intermediate steps in a longer sequence of changes.
+        view_name: The view orientation of the returned screenshot (default "Isometric").
+            Pick the view that best shows the change being made.
 
     Returns:
         A message indicating the success or failure of the object deletion and a screenshot of the object.
@@ -275,10 +392,12 @@ def delete_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextConten
         state.only_text_feedback,
         doc_name,
         obj_name,
+        include_screenshot,
+        view_name,
     )
 
 
-@mcp.tool()
+@tool
 def execute_code_async(ctx: Context, code: str) -> list[TextContent]:
     """Execute Python code in FreeCAD without waiting for completion.
 
@@ -287,53 +406,152 @@ def execute_code_async(ctx: Context, code: str) -> list[TextContent]:
 
     This tool runs the submitted code in a background thread and returns
     immediately. Because it does not run on FreeCAD's main GUI thread, the code
-    must NOT call FreeCADGui APIs, manipulate the active view or selection, create
-    or edit document objects, change object properties, call doc.recompute(), or
-    save documents.
+    must NOT directly call FreeCADGui APIs, manipulate the active view or
+    selection, create or edit document objects, change object properties, call
+    doc.recompute(), or save documents. FreeCAD documents and the Coin3D
+    scenegraph are not thread-safe: writing to them from this thread races the
+    GUI thread and can wedge FreeCAD's event loop, after which the RPC server
+    stops responding entirely and FreeCAD must be restarted.
 
-    For code that touches FreeCAD documents, document objects, FreeCADGui, the
-    active view, selection, recompute, or save operations, use execute_code instead.
-    execute_code runs on the FreeCAD GUI thread and is the safe default for normal
-    FreeCAD automation.
+    Every document or view write must instead be handed to the GUI thread through
+    the injected commit() helper:
 
-    Use execute_code_async only for background-safe work such as long-running
-    pure OCCT geometry calculations (e.g. fuse/cut/loft on already-fetched shapes)
-    or other CPU-bound computations that do not interact with the document or GUI.
+        commit(fn, timeout=120) -> fn's return value
+
+    Scripts share a live namespace. Saved functions can use commit() in later
+    async calls; calling it from execute_code or a GUI callback raises immediately.
+    Coordinate concurrent scripts that intentionally modify the same variables.
+
+    commit() queues fn on the GUI thread, waits for it, and raises RuntimeError if
+    dispatch fails or times out. Example:
+
+        fused = base.fuse(addition).removeSplitter()   # slow, safe in background
+
+        def apply():                                   # runs on the GUI thread
+            obj.Shape = fused
+            doc.recompute()
+
+        commit(apply)
+
+    For code that is not dominated by heavy geometry computation, use execute_code
+    instead. execute_code runs entirely on the FreeCAD GUI thread and is the safe
+    default for normal FreeCAD automation.
+
+    Use execute_code_async only when the heavy part is long-running OCCT geometry
+    (e.g. fuse/cut/loft on already-fetched shapes) or other CPU-bound computation
+    that would exceed execute_code's 90 s GUI-thread budget.
 
     Typical usage pattern:
-    1. Fetch shapes into local variables first (via execute_code on the GUI thread).
-    2. Store intermediate results in a module-level Python variable (not in the
-       FreeCAD document) so execute_code can read them later.
-    3. Run the heavy computation via execute_code_async.
-    4. After the expected computation time has elapsed, apply results to the
-       document via execute_code (which runs on the GUI thread).
+    1. Fetch shapes into module-level variables first (via execute_code).
+    2. Run the heavy computation via execute_code_async.
+    3. Apply the result inside commit(), or store it in a module-level Python
+       variable (not in the FreeCAD document) for a later execute_code call.
+
+    Performance note: boolean operations against shapes with many faces (e.g. a
+    ribbed lid) are expensive. Fuse the additions together first, then apply a
+    single boolean against the heavy shape, and avoid doc.recompute() unless the
+    dependency graph really needs it.
 
     Args:
-        code: Background-safe Python code to execute.
+        code: Background-safe Python code to execute. Use commit(fn) for all
+            document and view writes.
 
     Returns:
-        A message confirming that background execution has started.
+        A message with the job_id of the started background execution.
     """
     return execute_code_async_operation(get_freecad_connection(), code)
 
 
-@mcp.tool()
-def execute_code(ctx: Context, code: str) -> list[TextContent | ImageContent]:
+@tool
+def execute_code_headless(ctx: Context, code: str, timeout: float = 600) -> list[TextContent]:
+    """Run a FreeCAD Python script in a separate headless `freecadcmd` process.
+
+    Use this for OCCT work that can crash or block FreeCAD: helical threads
+    (makeHelix + makePipeShell), lofts and sweeps, booleans with many or
+    B-spline tools, long parametric rebuilds. A native OpenCascade crash
+    here only kills the helper process; the GUI and its open documents
+    survive, and the tool reports the crash signal and the script's output.
+
+    The script runs on the MCP server machine, independently of --host, in a
+    fresh process without GUI: import FreeCAD/Part
+    yourself, open documents from disk (FreeCAD.openDocument(path)), save
+    results with doc.save()/saveAs() or Shape.exportBrep(). Nothing from the
+    execute_code namespace is available. Print progress to stdout; it is
+    returned when the process ends. After the script saved a .FCStd that is
+    open in the GUI, call reload_document(doc_name) to show the result.
+
+    Args:
+        code: Complete Python script for freecadcmd.
+        timeout: Positive finite seconds to wait before killing the process
+            (default 600). Partial output is preserved on timeout.
+
+    Returns:
+        Exit status, crash/timeout diagnosis and the script's printed output.
+    """
+    return execute_code_headless_operation(state.freecadcmd, code, timeout)
+
+
+@tool
+def get_async_status(ctx: Context, job_id: str = "") -> list[TextContent]:
+    """Report the state of background jobs started by execute_code_async.
+
+    Does not use the FreeCAD GUI thread, so it answers even while a job runs.
+
+    Args:
+        job_id: The id returned by execute_code_async. Empty lists all running
+            jobs and up to 20 recently completed jobs.
+
+    Returns:
+        For one job: its state (running/done/failed), the error and traceback
+        when it failed. History is held in memory until FreeCAD exits.
+    """
+    return get_async_status_operation(get_freecad_connection(), job_id)
+
+
+@tool
+def execute_code(
+    ctx: Context,
+    code: str,
+    include_screenshot: bool = True,
+    view_name: ViewName = "Isometric",
+    timeout: float | None = None,
+) -> list[TextContent | ImageContent]:
     """Execute arbitrary Python code in FreeCAD.
 
     Args:
         code: The Python code to execute.
+        include_screenshot: Whether to return a screenshot of the model (default True).
+            Set to False to save tokens when the code does not change the model's
+            appearance, e.g. analytical or computational scripts whose result is
+            printed output, or intermediate steps in a longer sequence of changes.
+        view_name: The view orientation of the returned screenshot (default "Isometric").
+            Pick the view that best shows the change being made.
+        timeout: Positive finite seconds for each of the queue and GUI execution
+            budgets, overriding the 90 s default for this call (capped at 1800).
+            Raise it for slow work that must
+            run on the GUI thread, such as importing or exporting a large STEP
+            assembly. Without it the call reports a timeout while the task keeps
+            running, and the result is lost even though the work finishes. Prefer
+            execute_code_async for heavy pure-geometry work that touches neither
+            the document nor the GUI.
 
     Returns:
         A message indicating the success or failure of the code execution, the output of the code execution, and a screenshot of the object.
     """
-    return execute_code_operation(get_freecad_connection(), state.only_text_feedback, code)
+    return execute_code_operation(
+        get_freecad_connection(),
+        state.only_text_feedback,
+        code,
+        include_screenshot,
+        view_name,
+        timeout,
+    )
 
 
-@mcp.tool()
+@tool
 def get_view(
     ctx: Context,
-    view_name: Literal["Isometric", "Front", "Top", "Right", "Back", "Left", "Bottom", "Dimetric", "Trimetric"],
+    view_name: ViewName,
     width: int | None = None,
     height: int | None = None,
     focus_object: str | None = None,
@@ -362,12 +580,22 @@ def get_view(
     return get_view_operation(get_freecad_connection(), view_name, width, height, focus_object)
 
 
-@mcp.tool()
-def insert_part_from_library(ctx: Context, relative_path: str) -> list[TextContent | ImageContent]:
+@tool
+def insert_part_from_library(
+    ctx: Context,
+    relative_path: str,
+    include_screenshot: bool = True,
+    view_name: ViewName = "Isometric",
+) -> list[TextContent | ImageContent]:
     """Insert a part from the parts library addon.
 
     Args:
         relative_path: The relative path of the part to insert.
+        include_screenshot: Whether to return a screenshot of the model (default True).
+            Set to False to save tokens when visual feedback is not needed,
+            e.g. for intermediate steps in a longer sequence of changes.
+        view_name: The view orientation of the returned screenshot (default "Isometric").
+            Pick the view that best shows the change being made.
 
     Returns:
         A message indicating the success or failure of the part insertion and a screenshot of the object.
@@ -376,31 +604,56 @@ def insert_part_from_library(ctx: Context, relative_path: str) -> list[TextConte
         get_freecad_connection(),
         state.only_text_feedback,
         relative_path,
+        include_screenshot,
+        view_name,
     )
 
 
-@mcp.tool()
-def get_objects(ctx: Context, doc_name: str) -> list[TextContent | ImageContent]:
+@tool
+def get_objects(
+    ctx: Context,
+    doc_name: str,
+    include_screenshot: bool = True,
+    view_name: ViewName = "Isometric",
+) -> list[TextContent | ImageContent]:
     """Get all objects in a document.
     You can use this tool to get the objects in a document to see what you can check or edit.
 
     Args:
         doc_name: The name of the document to get the objects from.
+        include_screenshot: Whether to return a screenshot of the document (default True).
+            Set to False to save tokens when only the object data is needed.
+        view_name: The view orientation of the returned screenshot (default "Isometric").
 
     Returns:
         A list of objects in the document and a screenshot of the document.
     """
-    return get_objects_operation(get_freecad_connection(), state.only_text_feedback, doc_name)
+    return get_objects_operation(
+        get_freecad_connection(),
+        state.only_text_feedback,
+        doc_name,
+        include_screenshot,
+        view_name,
+    )
 
 
-@mcp.tool()
-def get_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextContent | ImageContent]:
+@tool
+def get_object(
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    include_screenshot: bool = True,
+    view_name: ViewName = "Isometric",
+) -> list[TextContent | ImageContent]:
     """Get an object from a document.
     You can use this tool to get the properties of an object to see what you can check or edit.
 
     Args:
         doc_name: The name of the document to get the object from.
         obj_name: The name of the object to get.
+        include_screenshot: Whether to return a screenshot of the document (default True).
+            Set to False to save tokens when only the object data is needed.
+        view_name: The view orientation of the returned screenshot (default "Isometric").
 
     Returns:
         The object and a screenshot of the object.
@@ -410,17 +663,19 @@ def get_object(ctx: Context, doc_name: str, obj_name: str) -> list[TextContent |
         state.only_text_feedback,
         doc_name,
         obj_name,
+        include_screenshot,
+        view_name,
     )
 
 
-@mcp.tool()
+@tool
 def get_parts_list(ctx: Context) -> list[TextContent]:
     """Get the list of parts in the parts library addon.
     """
     return get_parts_list_operation(get_freecad_connection())
 
 
-@mcp.tool()
+@tool
 def reload_document(ctx: Context, doc_name: str) -> list[TextContent]:
     """Close and re-open a document to pick up external file changes.
 
@@ -449,7 +704,7 @@ def reload_document(ctx: Context, doc_name: str) -> list[TextContent]:
     return reload_document_operation(get_freecad_connection(), doc_name)
 
 
-@mcp.tool()
+@tool
 def list_documents(ctx: Context) -> list[TextContent]:
     """Get the list of open documents in FreeCAD.
 
@@ -459,12 +714,27 @@ def list_documents(ctx: Context) -> list[TextContent]:
     return list_documents_operation(get_freecad_connection())
 
 
-@mcp.tool()
+@tool
+def get_rpc_status(ctx: Context) -> list[TextContent]:
+    """Get RPC and FreeCAD GUI-dispatch health.
+
+    This tool does not use FreeCAD's GUI thread, so it remains available after
+    a GUI operation times out. A ``stuck`` state identifies the operation that
+    is still running and indicates that FreeCAD may need to be restarted.
+    ``version_check`` is "ok" or says whether the addon or the server needs
+    updating.
+    """
+    return get_rpc_status_operation(get_freecad_connection())
+
+
+@tool
 def run_fem_analysis(
     ctx: Context,
     doc_name: str,
     analysis_name: str,
     timeout: int = 600,
+    include_screenshot: bool = True,
+    view_name: ViewName = "Isometric",
 ) -> list[TextContent | ImageContent]:
     """Run the CalculiX solver on an existing Fem::FemAnalysis container and return summary results.
 
@@ -491,6 +761,9 @@ def run_fem_analysis(
         doc_name: Name of the FreeCAD document.
         analysis_name: Name of the Fem::AnalysisPython object.
         timeout: Seconds to wait for the solver (default 600).
+        include_screenshot: Whether to return a screenshot of the model (default True).
+            Set to False to save tokens when only the numeric results are needed.
+        view_name: The view orientation of the returned screenshot (default "Isometric").
     """
     return run_fem_analysis_operation(
         get_freecad_connection(),
@@ -498,6 +771,8 @@ def run_fem_analysis(
         doc_name,
         analysis_name,
         timeout,
+        include_screenshot,
+        view_name,
     )
 
 
@@ -537,10 +812,13 @@ def main():
         help="Auth token the FreeCAD RPC server requires (falls back to the "
         "FREECAD_MCP_TOKEN environment variable; omit if the addon has no token set)",
     )
+    parser.add_argument("--freecadcmd", default=None, help="Command that starts headless FreeCAD for execute_code_headless, e.g. 'flatpak run --command=freecadcmd org.freecad.FreeCAD' (default: auto-detect PATH, then Flatpak)")
     args = parser.parse_args()
     state.only_text_feedback = args.only_text_feedback
     state.rpc_host = args.host
     state.auth_token = args.auth_token or os.environ.get("FREECAD_MCP_TOKEN") or None
+    from .headless import parse_command
+    state.freecadcmd = parse_command(args.freecadcmd)
     logger.info(f"Only text feedback: {state.only_text_feedback}")
     logger.info(f"Connecting to FreeCAD RPC server at: {state.rpc_host}")
     if state.auth_token:
