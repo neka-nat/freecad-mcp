@@ -11,6 +11,7 @@ import xmlrpc.client
 
 import pytest
 
+from freecad_mcp.freecad_client import FreeCADConnection
 from test_rpc_concurrency import filtered_server_class
 
 
@@ -121,6 +122,24 @@ def test_empty_token_disables_authentication() -> None:
     with token_server("") as (interface, port):
         assert post(port, {}) == 200
     assert interface.calls == ["ping"]
+
+
+def test_client_sends_the_token_without_exposing_it() -> None:
+    with token_server(TOKEN) as (interface, port):
+        right = FreeCADConnection("127.0.0.1", port, timeout=5, token=TOKEN)
+        wrong = FreeCADConnection("127.0.0.1", port, timeout=5, token="wrong-token")
+        try:
+            assert right.ping() is True
+            with pytest.raises(xmlrpc.client.ProtocolError) as rejected:
+                wrong.ping()
+        finally:
+            right.disconnect()
+            wrong.disconnect()
+    assert interface.calls == ["ping"]
+    assert rejected.value.errcode == 401
+    # Tools return error text to the model, so it must not carry the token.
+    assert "wrong-token" not in str(rejected.value)
+    assert "wrong-token" not in repr(wrong.server)
 
 
 def test_browser_requests_stay_refused_with_a_token_set() -> None:

@@ -1,6 +1,5 @@
 import logging
 import math
-import urllib.parse
 import xmlrpc.client
 from typing import Any
 
@@ -53,10 +52,11 @@ class FreeCADConnection:
         timeout: float = 150,
         token: str | None = None,
     ):
-        # A configured token travels as the password field of HTTP Basic auth
-        # (username empty), which xmlrpc.client extracts from the URI itself.
-        auth = f":{urllib.parse.quote(token, safe='')}@" if token else ""
-        self._uri = f"http://{auth}{host}:{port}"
+        self._uri = f"http://{host}:{port}"
+        # A header, not URL userinfo: xmlrpc.client repeats the URL's host part,
+        # userinfo included, in its repr and error messages, and tools return
+        # those messages to the model.
+        self._headers = [("Authorization", f"Bearer {token}")] if token else []
         self._timeout = timeout
         self.server = self._make_proxy(timeout)
 
@@ -64,7 +64,7 @@ class FreeCADConnection:
         return xmlrpc.client.ServerProxy(
             self._uri,
             allow_none=True,
-            transport=_TimeoutTransport(timeout=timeout),
+            transport=_TimeoutTransport(timeout=timeout, headers=self._headers),
         )
 
     def disconnect(self) -> None:
