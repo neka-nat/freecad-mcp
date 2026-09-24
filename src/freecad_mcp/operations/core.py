@@ -1,12 +1,11 @@
 import logging
-import xmlrpc.client
 from typing import Any
 
 from mcp.types import ImageContent
 
 from ..freecad_client import FreeCADConnection
 from ..responses import ToolResponse, add_screenshot_if_available, json_response, text_response
-from ..version import addon_version_warning
+from ..version import addon_version_warning, is_missing_method_fault
 
 
 logger = logging.getLogger("FreeCADMCPserver")
@@ -289,9 +288,9 @@ def get_rpc_status_operation(freecad: FreeCADConnection) -> ToolResponse:
         if isinstance(status, dict):
             status["version_check"] = addon_version_warning(status) or "ok"
         return json_response(status)
-    except xmlrpc.client.Fault:
-        return text_response(addon_version_warning(None))
     except Exception as e:
+        if is_missing_method_fault(e):
+            return text_response(addon_version_warning(None))
         logger.error(f"Failed to get RPC status: {str(e)}")
         return text_response(f"Failed to get RPC status: {str(e)}")
 

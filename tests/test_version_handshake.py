@@ -60,6 +60,13 @@ class VersionedAddon(OldestAddon):
         return self.status
 
 
+class BrokenStatusAddon(OldestAddon):
+    """Has get_rpc_status, but the method fails."""
+
+    def get_rpc_status(self) -> dict:
+        raise RuntimeError("status exploded")
+
+
 def check(interface: object) -> tuple[str | None, FreeCADConnection]:
     with running_server(interface) as (host, port):
         connection = FreeCADConnection(host, port, timeout=2)
@@ -92,6 +99,29 @@ def test_addon_without_version_fields_is_reported_as_old() -> None:
     assert warning is not None
     assert "does not report a version" in warning
     assert "Update the addon" in warning
+
+
+def test_failing_get_rpc_status_is_not_reported_as_an_old_addon() -> None:
+    warning, connection = check(BrokenStatusAddon())
+    assert warning is None
+    assert connection.EXECUTE_CODE_TIMEOUT == 90
+
+
+def rpc_status_tool_text(interface: object) -> str:
+    with running_server(interface) as (host, port):
+        connection = FreeCADConnection(host, port, timeout=2)
+        try:
+            return get_rpc_status_operation(connection)[0].text
+        finally:
+            connection.disconnect()
+
+
+def test_rpc_status_tool_tells_an_old_addon_from_a_failing_one() -> None:
+    assert "no get_rpc_status" in rpc_status_tool_text(OldestAddon())
+    failing = rpc_status_tool_text(BrokenStatusAddon())
+    assert "Failed to get RPC status" in failing
+    assert "status exploded" in failing
+    assert "no get_rpc_status" not in failing
 
 
 @pytest.mark.parametrize(

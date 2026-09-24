@@ -5,6 +5,7 @@ directory), so either side can be older. The addon reports its versions via
 get_rpc_status; this module turns that report into a warning the user sees.
 """
 
+import xmlrpc.client
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
@@ -21,6 +22,17 @@ _UPDATE_ADDON = (
     "release into FreeCAD's Mod directory and restart FreeCAD."
 )
 _UPDATE_SERVER = "Update the MCP server: run `uvx freecad-mcp@latest` or upgrade the package."
+
+
+def is_missing_method_fault(error: BaseException) -> bool:
+    """True when an XML-RPC error says the addon lacks the called method.
+
+    SimpleXMLRPCServer reports an unknown method as 'method "x" is not
+    supported'. Any other Fault is a failure inside a method the addon has.
+    """
+    return isinstance(error, xmlrpc.client.Fault) and "is not supported" in str(
+        error.faultString
+    )
 
 
 def addon_version_warning(status: dict[str, Any] | None) -> str | None:

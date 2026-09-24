@@ -3,7 +3,7 @@ import math
 import xmlrpc.client
 from typing import Any
 
-from .version import addon_version_warning
+from .version import addon_version_warning, is_missing_method_fault
 
 
 logger = logging.getLogger("FreeCADMCPserver")
@@ -74,10 +74,10 @@ class FreeCADConnection:
         """
         try:
             status = self.get_rpc_status()
-        except xmlrpc.client.Fault:
-            # Addons older than get_rpc_status reject the method outright.
-            return addon_version_warning(None)
         except Exception as e:
+            if is_missing_method_fault(e):
+                # Addons older than get_rpc_status reject the method outright.
+                return addon_version_warning(None)
             logger.warning(f"Could not check the FreeCAD addon version: {e}")
             return None
         if not isinstance(status, dict):
