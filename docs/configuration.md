@@ -42,6 +42,14 @@ By default, the RPC server listens on `localhost` and does not accept remote
 connections. To control FreeCAD from another machine on your network, configure
 both the addon and the MCP client.
 
+The RPC server has no authentication and does not encrypt traffic. Any program
+that can reach the port from an allowed address can call every tool, including
+`execute_code`, which runs arbitrary Python inside FreeCAD with your user's
+permissions. Allow only machines you trust, keep the list as narrow as
+possible, and prefer an [SSH tunnel](#alternative-ssh-tunnel) on networks you do
+not control. Whatever the settings, the server refuses requests sent by web
+browsers, so a web page cannot call it.
+
 ### 1. Enable remote connections in FreeCAD
 
 In the **FreeCAD MCP** toolbar:
@@ -80,3 +88,17 @@ or hostname. Restart your MCP client after updating its configuration.
 `--host` selects the GUI RPC host. [Headless execution](execution.md#headless-execution)
 runs on the machine hosting the MCP server, so its file paths must be accessible
 there.
+
+### Alternative: SSH tunnel
+
+To reach FreeCAD on another machine without opening the port to the network,
+leave **Remote Connections** off and forward the port over SSH from the machine
+that runs the MCP server:
+
+```bash
+ssh -N -L 9875:localhost:9875 user@freecad-host
+```
+
+Keep the MCP server on its default `--host localhost`. With remote connections
+off, the RPC server only answers requests addressed to `localhost` or a
+loopback address such as `127.0.0.1`.
