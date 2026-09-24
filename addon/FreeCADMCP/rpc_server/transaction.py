@@ -18,6 +18,7 @@ from typing import Any
 
 import FreeCAD
 
+from rpc_server import connectivity
 from rpc_server import dfm
 
 # Defects worth rejecting an edit for. A part that is still one valid solid can
@@ -26,6 +27,7 @@ from rpc_server import dfm
 DEFAULT_POLICY = {
     "require_valid": True,
     "require_solid_count": True,
+    "require_one_piece": True,
     "max_new_thin_faces": 0,
     "max_new_short_edges": 0,
     "max_new_sharp_concave": 0,
@@ -80,6 +82,15 @@ def _measure(shape: Any, policy: dict[str, Any]) -> dict[str, Any]:
     # Only the count and a few examples are kept. The verdict needs the count,
     # the reply needs something to point at, and holding every defect of a
     # 400-face lid in each checkpoint costs memory for detail nobody reads.
+    # How many pieces the part is really in. A block fused a fraction short of
+    # what it was meant to meet stays one solid and one valid shape, and hangs
+    # free in the render with nothing else to report it.
+    try:
+        m["pieces"] = connectivity.count_islands(shape)
+    except Exception as e:  # noqa: BLE001
+        m["pieces"] = None
+        m.setdefault("scan_errors", {})["pieces"] = f"{type(e).__name__}: {e}"
+
     for key, fn, args in (
         ("thin_faces", dfm.thin_faces, (policy["thin_face_width"],)),
         ("short_edges", dfm.short_edges, (policy["short_edge_length"],)),
@@ -128,6 +139,14 @@ def _judge(name: str, was: dict[str, Any] | None, now: dict[str, Any],
             errors.append({
                 "code": "SOLID_COUNT_CHANGED", "object": name,
                 "before": was["solids"], "after": now["solids"],
+            })
+        if (policy["require_one_piece"] and now.get("pieces") is not None
+                and was.get("pieces") is not None
+                and now["pieces"] > was["pieces"]):
+            errors.append({
+                "code": "PART_IN_PIECES", "object": name,
+                "before": was["pieces"], "after": now["pieces"],
+                "detail": "the edit left material joined to nothing, or only touching",
             })
         if policy["forbid_bbox_growth"] and was.get("bbox") and now.get("bbox"):
             grew = []

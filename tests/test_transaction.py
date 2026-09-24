@@ -57,6 +57,9 @@ def tx() -> Iterator[tuple[types.ModuleType, types.SimpleNamespace]]:
         # Patch the reference the module already bound: replacing the entry in
         # sys.modules leaves `from rpc_server import dfm` pointing at whichever
         # dfm an earlier test imported.
+        module.connectivity = types.SimpleNamespace(
+            count_islands=lambda s: getattr(s, "pieces", 1),
+        )
         module.dfm = types.SimpleNamespace(
             thin_faces=lambda s, w: [{"width": 0.1, "at": [1, 2, 3]}] * s.thin,
             short_edges=lambda s, l: [{"length": 0.01, "at": [1, 2, 3]}] * s.short,
@@ -153,6 +156,21 @@ def test_an_untouched_shape_is_not_reported_as_changed(tx) -> None:
     report = module.audit("Doc", cp["checkpoint_id"])
     assert report["verdict"] == "pass"
     assert report["changed"] == []
+
+
+def test_an_edit_that_leaves_material_unattached_is_rejected(tx) -> None:
+    module, doc = tx
+    cp = module.checkpoint("Doc", "before")
+
+    # Same solid count, still valid: a block fused a fraction short of the wall
+    # it was meant to meet, which every other check passes.
+    after = Shape(volume=110.0)
+    after.pieces = 2
+    doc.Objects[0].Shape = after
+
+    report = module.audit("Doc", cp["checkpoint_id"], {"forbid_bbox_growth": False})
+    assert report["verdict"] == "reject"
+    assert [e["code"] for e in report["errors"]] == ["PART_IN_PIECES"]
 
 
 def test_a_narrowed_checkpoint_ignores_objects_it_never_saw(tx) -> None:
