@@ -94,18 +94,31 @@ def tool(fn):
 
 
 def get_freecad_connection() -> FreeCADConnection:
-    """Get or create a persistent FreeCAD connection"""
+    """Get or create a persistent FreeCAD connection.
+
+    The connection is cached only after FreeCAD answers, so a server started
+    before FreeCAD checks the addon version on the first call that reaches it.
+    """
     if state.freecad_connection is None:
-        state.freecad_connection = FreeCADConnection(host=state.rpc_host, port=9875)
-        if not state.freecad_connection.ping():
+        connection = FreeCADConnection(host=state.rpc_host, port=9875)
+        try:
+            # ping() raises, rather than returning False, when nothing listens.
+            reachable = connection.ping()
+        except Exception as e:
+            connection.disconnect()
+            raise Exception(
+                f"Failed to connect to FreeCAD ({e}). Make sure the FreeCAD addon is running."
+            ) from e
+        if not reachable:
             logger.error("Failed to ping FreeCAD")
-            state.freecad_connection = None
+            connection.disconnect()
             raise Exception(
                 "Failed to connect to FreeCAD. Make sure the FreeCAD addon is running."
             )
-        state.version_notice = state.freecad_connection.check_addon_version()
+        state.version_notice = connection.check_addon_version()
         if state.version_notice:
             logger.warning(state.version_notice)
+        state.freecad_connection = connection
     return state.freecad_connection
 
 

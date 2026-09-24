@@ -186,3 +186,42 @@ def test_warning_is_shown_once_in_the_next_tool_reply(monkeypatch: pytest.Monkey
     second = server.list_documents(None)
     assert len(second) == 1
     assert json.loads(second[0].text) == ["Doc"]
+
+
+def test_version_is_checked_when_freecad_starts_after_the_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # MCP clients usually launch the server before FreeCAD is open.
+    freecad_running = False
+    checks: list[str] = []
+
+    class Connection:
+        def ping(self) -> bool:
+            if not freecad_running:
+                raise ConnectionRefusedError(111, "Connection refused")
+            return True
+
+        def check_addon_version(self) -> str:
+            checks.append("checked")
+            return "addon is old"
+
+        def list_documents(self) -> list[str]:
+            return ["Doc"]
+
+        def disconnect(self) -> None:
+            pass
+
+    monkeypatch.setattr(server, "state", ServerState())
+    monkeypatch.setattr(server, "FreeCADConnection", lambda **_kwargs: Connection())
+
+    with pytest.raises(Exception, match="Failed to connect to FreeCAD"):
+        server.list_documents(None)
+    assert server.state.freecad_connection is None
+    assert checks == []
+
+    freecad_running = True
+    reply = server.list_documents(None)
+    assert reply[0].text == "Warning: addon is old"
+    assert json.loads(reply[1].text) == ["Doc"]
+    assert checks == ["checked"]
+    assert server.state.freecad_connection is not None
