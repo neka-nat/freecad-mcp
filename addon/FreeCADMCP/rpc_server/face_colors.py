@@ -34,6 +34,56 @@ def _key(face: Any) -> tuple:
     )
 
 
+def _facing(face: Any) -> tuple | None:
+    """Which way a planar face points, and where its centre is.
+
+    Recorded so a face that merely moved can be found again: growing a pad
+    0.35 mm thicker replaces its end cap with one 0.35 mm further out, facing
+    the same way. Neither the exact key nor the plane key survives that -- the
+    plane itself changed -- so without this the new cap falls back to the
+    object's colour, and a yellow pad comes out part grey.
+    """
+    surface = face.Surface
+    if surface.__class__.__name__ != "Plane":
+        return None
+    try:
+        n = surface.Axis
+        c = face.CenterOfMass
+        return ((round(n.x, 4), round(n.y, 4), round(n.z, 4)), (c.x, c.y, c.z))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _nearest_colour(face: Any, moved: dict, limit: float = 1.0) -> Any:
+    """Colour the recorded faces around this one agree on.
+
+    A face that moved sits among the faces it used to border: the new end cap
+    of a thicker pad is surrounded by that pad's sides. When they all carried
+    one colour, it is the face's own; when they disagree, the neighbourhood
+    says nothing and guessing would be worse than the fallback.
+
+    The radius follows the face's own size, so a pad's cap consults that pad
+    and a small chip's face consults that chip.
+    """
+    facing = _facing(face)
+    if facing is None:
+        return None
+    cx, cy, cz = facing[1]
+    try:
+        limit = max(limit, face.Area ** 0.5)
+    except Exception:  # noqa: BLE001
+        pass
+    near = set()
+    for candidates in moved.values():
+        for (px, py, pz), colour in candidates:
+            d = ((px - cx) ** 2 + (py - cy) ** 2 + (pz - cz) ** 2) ** 0.5
+            if d < limit:
+                near.add(tuple(colour))
+    if len(near) != 1:
+        return None
+    return next(iter(near))
+
+
 def _plane_key(face: Any) -> tuple | None:
     """Where a face's surface lies, ignoring its outline.
 
@@ -64,6 +114,24 @@ def _plane_key(face: Any) -> tuple | None:
     except Exception:  # noqa: BLE001 - an exotic surface simply has no plane key
         return None
     return None
+
+
+def _shape_id(shape: Any) -> tuple | None:
+    """Enough of a shape to tell whether an edit replaced it.
+
+    Face positions are part of it: growing a pad moves a face without changing
+    how many there are or how much they cover, and a shape that reads as
+    unchanged there would have its restore skipped.
+    """
+    try:
+        centres = []
+        for face in shape.Faces:
+            c = face.CenterOfMass
+            centres.append((round(c.x, 5), round(c.y, 5), round(c.z, 5),
+                            round(face.Area, 5)))
+        return (len(shape.Faces), tuple(centres))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _objects(doc: Any) -> list[Any]:
@@ -102,16 +170,29 @@ def snapshot() -> dict[str, Any]:
             # re-applying a stale color later.
             if len(colors) < 2 or len(colors) != len(faces):
                 continue
-            by_face, by_plane = {}, {}
+            by_face, by_plane, by_facing = {}, {}, {}
             for face, color in zip(faces, colors):
                 by_face[_key(face)] = color
+                facing = _facing(face)
+                if facing is not None:
+                    by_facing.setdefault(facing[0], []).append((facing[1], color))
                 pk = _plane_key(face)
-                if pk is not None:
+                if pk is None:
+                    continue
+                # A plane only speaks for a new face if everything already on it
+                # agrees. Two parts can share a plane -- a mounting pad's side
+                # and the connector's side sit flush -- and taking whichever was
+                # recorded first paints the new face in its neighbour's colour.
+                if pk in by_plane and by_plane[pk] != color:
+                    by_plane[pk] = None
+                else:
                     by_plane.setdefault(pk, color)
             state[f"{doc.Name}.{obj.Name}"] = {
                 "by_face": by_face,
                 "by_plane": by_plane,
+                "by_facing": by_facing,
                 "count": len(faces),
+                "shape": _shape_id(obj.Shape),
             }
     return state
 
@@ -131,6 +212,11 @@ def restore(before: dict[str, Any]) -> list[str]:
             entry = before.get(f"{doc.Name}.{obj.Name}")
             if entry is None:
                 continue
+            # Only an edit that rebuilt the shape can scramble the colour list.
+            # A script that deliberately recoloured a face left the shape alone,
+            # and restoring there would undo what it was asked to do.
+            if entry.get("shape") is not None and _shape_id(obj.Shape) == entry["shape"]:
+                continue
             faces = obj.Shape.Faces
             view = obj.ViewObject
             try:
@@ -146,12 +232,16 @@ def restore(before: dict[str, Any]) -> list[str]:
             ):
                 if [by_face[_key(face)] for face in faces] == current:
                     continue
+            by_facing = entry.get("by_facing", {})
             colors, matched = [], 0
             for face in faces:
                 color = by_face.get(_key(face))
                 if color is None:
                     pk = _plane_key(face)
                     color = by_plane.get(pk) if pk is not None else None
+                if color is None:
+                    # Last: a face that moved rather than appeared.
+                    color = _nearest_colour(face, by_facing)
                 if color is None:
                     colors.append(fallback)
                 else:
