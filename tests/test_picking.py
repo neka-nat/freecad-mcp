@@ -88,6 +88,27 @@ def test_a_pixel_resolves_to_a_face_with_its_geometry(picking) -> None:
     assert hit["face"]["centre"] == [5.0, 5.0, 10.0]
 
 
+def test_a_pixel_from_a_scaled_screenshot_is_scaled_back(picking) -> None:
+    module, view = picking
+    # Screenshots come back smaller than the view, so a pixel read off one is
+    # not the pixel the view would pick: without scaling it lands half a screen
+    # away and reports a confident hit on the wrong face.
+    view.drawn[(50, 40)] = _info(1.0, 2.0, 3.0)
+    assert module.pick(25, 20, image_width=50, image_height=40)["hit"] is True
+    # The same pixel taken at face value misses.
+    assert module.pick(25, 20)["hit"] is False
+
+
+def test_a_region_from_a_scaled_screenshot_is_scaled_back(picking) -> None:
+    module, view = picking
+    for x in range(40, 61, 2):
+        for y in range(30, 51, 2):
+            view.drawn[(x, y)] = _info(0.0, 0.0, 0.0, comp="Face1")
+    out = module.pick_region(20, 15, 30, 25, step=1, image_width=50, image_height=40)
+    assert out["rect"] == [40, 30, 60, 50]
+    assert [f["component"] for f in out["faces"]] == ["Face1"]
+
+
 def test_empty_space_is_reported_as_a_miss(picking) -> None:
     module, _ = picking
     assert module.pick(10, 10)["hit"] is False

@@ -76,15 +76,36 @@ def _describe(face: Any) -> dict[str, Any]:
     return out
 
 
-def pick(x: int, y: int, radius: int = 0) -> dict[str, Any]:
+def _scale(view: Any, image_width: int, image_height: int) -> tuple[float, float]:
+    """Factor from a screenshot's pixels to the view's own.
+
+    Screenshots are scaled down before they reach the caller, so a pixel read
+    off one is not the pixel the view would pick: on a 1573-wide window sent as
+    1024, everything is out by half a screen, and the reply is a confident hit
+    on the wrong face.
+    """
+    width, height = view.getSize()
+    sx = width / image_width if image_width else 1.0
+    sy = height / image_height if image_height else 1.0
+    return sx, sy
+
+
+def pick(x: int, y: int, radius: int = 0,
+         image_width: int = 0, image_height: int = 0) -> dict[str, Any]:
     """What the pixel at ``(x, y)`` is drawing.
 
     Coordinates are as in the screenshot: x from the left, y from the top.
     ``radius`` retries in a ring around the point, for a target too thin to hit
     dead-on -- the faces worth asking about are often a fraction of a pixel wide.
+
+    Pass the screenshot's own size when it differs from the view's, so the
+    pixel is scaled instead of landing somewhere else entirely.
     """
     view = _view()
     width, height = view.getSize()
+    if image_width or image_height:
+        sx, sy = _scale(view, image_width or width, image_height or height)
+        x, y = int(round(x * sx)), int(round(y * sy))
     attempts = [(x, y)]
     for r in range(1, radius + 1):
         attempts += [(x + r, y), (x - r, y), (x, y + r), (x, y - r),
@@ -113,15 +134,24 @@ def pick(x: int, y: int, radius: int = 0) -> dict[str, Any]:
             "searched_radius": radius}
 
 
-def pick_region(x0: int, y0: int, x1: int, y1: int, step: int = 8) -> dict[str, Any]:
+def pick_region(x0: int, y0: int, x1: int, y1: int, step: int = 8,
+                image_width: int = 0, image_height: int = 0) -> dict[str, Any]:
     """Every face drawn inside a rectangle of the screenshot.
 
     Sampling on a grid rather than tracing the outline: a region is usually
     drawn by a handful of faces, and the question is which ones, not their
     exact silhouette.
+
+    Pass the screenshot's own size when it differs from the view's, so the
+    rectangle covers the area that was actually looked at.
     """
     view = _view()
     width, height = view.getSize()
+    if image_width or image_height:
+        sx, sy = _scale(view, image_width or width, image_height or height)
+        x0, x1 = int(round(x0 * sx)), int(round(x1 * sx))
+        y0, y1 = int(round(y0 * sy)), int(round(y1 * sy))
+        step = max(1, int(round(step * sx)))
     x0, x1 = sorted((max(0, x0), min(width - 1, x1)))
     y0, y1 = sorted((max(0, y0), min(height - 1, y1)))
     step = max(1, step)

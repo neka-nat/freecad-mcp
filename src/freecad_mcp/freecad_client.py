@@ -105,13 +105,17 @@ class FreeCADConnection:
         return self.server.cut_slot(doc_name, obj_name, path, width, depth,
                                     z_top, policy)
 
-    def pick_pixel(self, x: int, y: int, radius: int = 0) -> dict[str, Any]:
-        return self.server.pick_pixel(x, y, radius)
+    def pick_pixel(self, x: int, y: int, radius: int = 0,
+                   image_width: int = 0, image_height: int = 0) -> dict[str, Any]:
+        return self.server.pick_pixel(x, y, radius, image_width, image_height)
 
     def pick_region(
-        self, x0: int, y0: int, x1: int, y1: int, step: int = 8
+        self, x0: int, y0: int, x1: int, y1: int, step: int = 8,
+        image_width: int = 0, image_height: int = 0,
     ) -> dict[str, Any]:
-        return self.server.pick_region(x0, y0, x1, y1, step)
+        return self.server.pick_region(
+            x0, y0, x1, y1, step, image_width, image_height
+        )
 
     def locate_point(self, point: list[float]) -> dict[str, Any]:
         return self.server.locate_point(point)

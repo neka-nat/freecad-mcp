@@ -616,7 +616,10 @@ def cut_slot(
 
 
 @mcp.tool()
-def pick_pixel(ctx: Context, x: int, y: int, radius: int = 0) -> list[TextContent]:
+def pick_pixel(
+    ctx: Context, x: int, y: int, radius: int = 0,
+    image_width: int = 0, image_height: int = 0,
+) -> list[TextContent]:
     """Name the face drawn at a pixel of the last screenshot.
 
     Use this whenever a defect is visible in a render: it turns the thing on
@@ -632,14 +635,20 @@ def pick_pixel(ctx: Context, x: int, y: int, radius: int = 0) -> list[TextConten
         y: Pixel row.
         radius: Also try a ring this many pixels around the point, for a target
             too thin to hit dead-on.
+        image_width: Width of the screenshot the pixel was read from. Required
+            whenever it differs from `view_size`, which it usually does --
+            screenshots are scaled down, and an unscaled pixel lands on the
+            wrong face with no sign that it did.
+        image_height: Height of that screenshot.
     """
-    res = get_freecad_connection().pick_pixel(x, y, radius)
+    res = get_freecad_connection().pick_pixel(x, y, radius, image_width, image_height)
     return [TextContent(type="text", text=json.dumps(res, indent=2))]
 
 
 @mcp.tool()
 def pick_region(
-    ctx: Context, x0: int, y0: int, x1: int, y1: int, step: int = 8
+    ctx: Context, x0: int, y0: int, x1: int, y1: int, step: int = 8,
+    image_width: int = 0, image_height: int = 0,
 ) -> list[TextContent]:
     """List every face drawn inside a rectangle of the last screenshot.
 
@@ -653,8 +662,13 @@ def pick_region(
         x1: Right edge.
         y1: Bottom edge.
         step: Pixels between samples; smaller finds thinner faces and costs more.
+        image_width: Width of the screenshot the rectangle was read from.
+            Required whenever it differs from `view_size`.
+        image_height: Height of that screenshot.
     """
-    res = get_freecad_connection().pick_region(x0, y0, x1, y1, step)
+    res = get_freecad_connection().pick_region(
+        x0, y0, x1, y1, step, image_width, image_height
+    )
     return [TextContent(type="text", text=json.dumps(res, indent=2))]
 
 

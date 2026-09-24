@@ -467,10 +467,11 @@ class FreeCADRPC:
             return {"success": True, **res[0]}
         return _err(res)
 
-    def pick_pixel(self, x: int, y: int, radius: int = 0) -> dict[str, Any]:
+    def pick_pixel(self, x: int, y: int, radius: int = 0,
+                   image_width: int = 0, image_height: int = 0) -> dict[str, Any]:
         """Report the face drawn at a pixel of the current view."""
         res = dispatch_to_gui(
-            lambda: (_picking.pick(x, y, radius),),
+            lambda: (_picking.pick(x, y, radius, image_width, image_height),),
             timeout=30,
             operation_name="pick_pixel",
         )
@@ -479,11 +480,13 @@ class FreeCADRPC:
         return _err(res)
 
     def pick_region(
-        self, x0: int, y0: int, x1: int, y1: int, step: int = 8
+        self, x0: int, y0: int, x1: int, y1: int, step: int = 8,
+        image_width: int = 0, image_height: int = 0
     ) -> dict[str, Any]:
         """Report every face drawn inside a rectangle of the current view."""
         res = dispatch_to_gui(
-            lambda: (_picking.pick_region(x0, y0, x1, y1, step),),
+            lambda: (_picking.pick_region(
+                x0, y0, x1, y1, step, image_width, image_height),),
             timeout=120,
             operation_name="pick_region",
         )
