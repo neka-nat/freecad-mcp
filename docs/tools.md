@@ -19,7 +19,7 @@
 | `execute_code_async` | Start a background computation and return its job ID; use `commit()` for document and view access. |
 | `get_async_status` | Get background job state and failure tracebacks without using the GUI thread. |
 | `execute_code_headless` | Run a script in a separate `freecadcmd` process and return its exit status and output. |
-| `get_rpc_status` | Report RPC and GUI-dispatch health without using the GUI thread. |
+| `get_rpc_status` | Report RPC and GUI-dispatch health, addon version, and version check without using the GUI thread. |
 | `insert_part_from_library` | Insert a part from the [FreeCAD parts library](https://github.com/FreeCAD/FreeCAD-library). |
 | `get_parts_list` | List parts in the [FreeCAD parts library](https://github.com/FreeCAD/FreeCAD-library). |
 | `run_fem_analysis` | Run CalculiX on an existing analysis and return summary results. |

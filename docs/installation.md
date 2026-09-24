@@ -111,6 +111,14 @@ and [reported startup failure](../assets/rpc-startup-error.png).
 The server starts manually by default. See [auto-start configuration](configuration.md#auto-start-rpc-server)
 to enable it on subsequent launches.
 
+### Keep the addon and server in sync
+
+The addon and the `freecad-mcp` package are updated separately. On first
+connection the MCP server compares its protocol version with the addon's. If the
+addon is older, newer, or predates version reporting, the next tool reply starts
+with a warning that says which side to update, and `get_rpc_status` reports it
+under `version_check`. After updating the addon, restart FreeCAD.
+
 ### Verify the connection on Windows
 
 Check the listening port in PowerShell:

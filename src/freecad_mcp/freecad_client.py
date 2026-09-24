@@ -3,6 +3,8 @@ import math
 import xmlrpc.client
 from typing import Any
 
+from .version import addon_version_warning, is_missing_method_fault
+
 
 logger = logging.getLogger("FreeCADMCPserver")
 
@@ -23,12 +25,25 @@ class _TimeoutTransport(xmlrpc.client.Transport):
         return conn
 
 
+def _is_budget(value: Any, ceiling: float) -> bool:
+    """True for a number of seconds in (0, ceiling]; NaN and infinities fail."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and 0 < value <= ceiling
+    )
+
 
 class FreeCADConnection:
-    # Keep the run budget in sync with the addon's FreeCADRPC constant.
+    # Fallback run budgets for addons that do not report their own through
+    # get_rpc_status; check_addon_version replaces them when they do.
     EXECUTE_CODE_TIMEOUT = 90
     MAX_EXECUTE_CODE_TIMEOUT = 1800
     RPC_TIMEOUT_MARGIN = 30
+    # get_rpc_status never waits for the GUI thread, so a healthy addon answers
+    # at once. The check runs while the MCP server starts, so a hung addon must
+    # not hold up the session for the full connection timeout.
+    VERSION_CHECK_TIMEOUT = 5
 
     def __init__(self, host: str = "localhost", port: int = 9875, timeout: float = 150):
         self._uri = f"http://{host}:{port}"
@@ -55,6 +70,33 @@ class FreeCADConnection:
     def get_rpc_status(self) -> dict[str, Any]:
         with self._make_proxy(self._timeout) as proxy:
             return proxy.get_rpc_status()
+
+    def check_addon_version(self) -> str | None:
+        """Compare the addon's version with this server and adopt its budgets.
+
+        Returns a warning for an old or mismatched addon, otherwise None.
+        """
+        try:
+            with self._make_proxy(self.VERSION_CHECK_TIMEOUT) as proxy:
+                status = proxy.get_rpc_status()
+        except Exception as e:
+            if is_missing_method_fault(e):
+                # Addons older than get_rpc_status reject the method outright.
+                return addon_version_warning(None)
+            logger.warning(f"Could not check the FreeCAD addon version: {e}")
+            return None
+        if not isinstance(status, dict):
+            return addon_version_warning({})
+        for key, attr in (
+            ("execute_code_timeout", "EXECUTE_CODE_TIMEOUT"),
+            ("max_execute_code_timeout", "MAX_EXECUTE_CODE_TIMEOUT"),
+        ):
+            value = status.get(key)
+            # Socket timeouts are derived from these budgets, so this client's
+            # own ceiling bounds how long an addon's report can make it wait.
+            if _is_budget(value, FreeCADConnection.MAX_EXECUTE_CODE_TIMEOUT):
+                setattr(self, attr, value)
+        return addon_version_warning(status)
 
     def create_document(self, name: str) -> dict[str, Any]:
         return self.server.create_document(name)

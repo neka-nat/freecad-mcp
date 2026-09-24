@@ -32,6 +32,7 @@ from rpc_server.parts_library import get_parts_list, insert_part_from_library
 from rpc_server.property_mapper import Object
 from rpc_server.serialize import serialize_object
 from rpc_server.settings import load_settings, save_settings
+from rpc_server.version import PROTOCOL_VERSION, __version__ as ADDON_VERSION
 from rpc_server.view_manager import save_active_screenshot
 
 rpc_server_thread = None
@@ -136,6 +137,10 @@ class FreeCADRPC:
             "rpc_server": "running",
             "gui_dispatch": get_dispatch_status(),
             "async_jobs_running": running,
+            "addon_version": ADDON_VERSION,
+            "protocol_version": PROTOCOL_VERSION,
+            "execute_code_timeout": self.EXECUTE_CODE_TIMEOUT,
+            "max_execute_code_timeout": self.MAX_EXECUTE_CODE_TIMEOUT,
         }
 
     def get_async_status(self, job_id: str = "") -> dict[str, Any]:
