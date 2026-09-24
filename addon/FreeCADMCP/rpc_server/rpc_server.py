@@ -32,7 +32,9 @@ from rpc_server.object_factory import create_object_gui, edit_object_gui
 from rpc_server.parts_library import get_parts_list, insert_part_from_library
 from rpc_server.property_mapper import Object
 from rpc_server.serialize import serialize_object
+from rpc_server import connectivity as _connectivity
 from rpc_server import face_colors
+from rpc_server import mating as _mating
 from rpc_server import features as _features
 from rpc_server import picking as _picking
 from rpc_server import shape_check
@@ -434,6 +436,49 @@ class FreeCADRPC:
             return {"success": True, **res[0]}
         return _err(res)
 
+    def check_cutter(
+        self, doc_name: str, obj_name: str, box: list[float],
+        within: list[float] | None = None, avoid: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Report what a cutting box would take, before cutting with it.
+
+        ``box`` and ``within`` are [x0, y0, z0, x1, y1, z1]. A block placed from
+        remembered numbers cuts cleanly by every other measure and leaves its
+        damage somewhere the next audit cannot attribute to it.
+        """
+        def task():
+            import Part
+
+            doc = FreeCAD.getDocument(doc_name)
+            obj = doc.getObject(obj_name) if doc else None
+            if obj is None:
+                raise ValueError(f"no object {obj_name!r} in {doc_name!r}")
+
+            def solid(spec):
+                x0, y0, z0, x1, y1, z1 = (float(v) for v in spec)
+                x0, x1 = sorted((x0, x1))
+                y0, y1 = sorted((y0, y1))
+                z0, z1 = sorted((z0, z1))
+                if x1 - x0 <= 0 or y1 - y0 <= 0 or z1 - z0 <= 0:
+                    raise ValueError(f"box {spec} has no volume")
+                return Part.makeBox(x1 - x0, y1 - y0, z1 - z0,
+                                    FreeCAD.Vector(x0, y0, z0))
+
+            others = {}
+            for name in (avoid or []):
+                other = doc.getObject(name)
+                if other is None:
+                    raise ValueError(f"no object {name!r} in {doc_name!r}")
+                others[name] = other.Shape
+            return (_features.check_cutter(
+                obj.Shape, solid(box),
+                solid(within) if within else None, others),)
+
+        res = dispatch_to_gui(task, timeout=60, operation_name="check_cutter")
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
     def cut_slot(
         self, doc_name: str, obj_name: str, path: list[Any], width: float,
         depth: float, z_top: float, policy: dict[str, Any] | None = None,
@@ -463,6 +508,115 @@ class FreeCADRPC:
 
         res = dispatch_to_gui(task, timeout=self.EXECUTE_CODE_TIMEOUT,
                               operation_name="cut_slot")
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def add_mating_material(
+        self, doc_name: str, obj_name: str, neighbour: str,
+        blank: list[float], clearance: float, towards: str,
+        avoid: list[str] | None = None, steps: int = 5,
+        policy: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Add material to one part that keeps its clearance from another."""
+        def task():
+            import Part
+
+            cp = _transaction.checkpoint(doc_name, "before mating addition", [obj_name])
+            try:
+                doc = FreeCAD.getDocument(doc_name)
+                target = doc.getObject(obj_name)
+                x0, y0, z0, x1, y1, z1 = blank
+                box = Part.makeBox(x1 - x0, y1 - y0, z1 - z0,
+                                   FreeCAD.Vector(x0, y0, z0))
+                out = _mating.mating_addition(
+                    target.Shape, box,
+                    _dfm.load_shape(doc_name, neighbour), clearance, towards,
+                    [_dfm.load_shape(doc_name, n) for n in (avoid or [])],
+                    steps,
+                )
+                target.Shape = out["shape"]
+                doc.recompute()
+            except Exception as e:  # noqa: BLE001
+                _transaction.restore(cp["checkpoint_id"])
+                return ({"verdict": "reject", "restored": True,
+                         "errors": [{"code": "MATING_FAILED",
+                                     "detail": f"{type(e).__name__}: {e}"}]},)
+            report = _transaction.audit(doc_name, cp["checkpoint_id"], policy)
+            if report["verdict"] == "reject":
+                _transaction.restore(cp["checkpoint_id"])
+                report["restored"] = True
+            else:
+                report["restored"] = False
+                report.update({k: v for k, v in out.items()
+                               if k not in ("shape", "addition")})
+            return (report,)
+
+        res = dispatch_to_gui(task, timeout=self.EXECUTE_CODE_TIMEOUT,
+                              operation_name="add_mating_material")
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def find_islands(self, doc_name: str, obj_name: str) -> dict[str, Any]:
+        """Report groups of faces joined to each other but not to the rest."""
+        res = dispatch_to_gui(
+            lambda: (_connectivity.islands(_dfm.load_shape(doc_name, obj_name)),),
+            timeout=120,
+            operation_name="find_islands",
+        )
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def find_gaps(
+        self, doc_name: str, obj_name: str, ray_axis: str, step_axis: str,
+        step_from: float, step_to: float, step: float, at: float,
+        max_gap: float = 1.0,
+    ) -> dict[str, Any]:
+        """Report thin slots of air inside a part."""
+        res = dispatch_to_gui(
+            lambda: (_connectivity.gaps(
+                _dfm.load_shape(doc_name, obj_name), ray_axis, step_axis,
+                step_from, step_to, step, at, max_gap),),
+            timeout=180,
+            operation_name="find_gaps",
+        )
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def check_clearance(
+        self, doc_name: str, obj_a: str, obj_b: str, along: str,
+        step: float = 1.0, expect: float | None = None,
+        tolerance: float = 0.01, shape_a: Any = None,
+    ) -> dict[str, Any]:
+        """Measure the gap between two parts the whole way along an axis."""
+        res = dispatch_to_gui(
+            lambda: (_connectivity.clearance(
+                _dfm.load_shape(doc_name, obj_a),
+                _dfm.load_shape(doc_name, obj_b),
+                along, step, expect, tolerance),),
+            timeout=180,
+            operation_name="check_clearance",
+        )
+        if isinstance(res, tuple):
+            return {"success": True, **res[0]}
+        return _err(res)
+
+    def compare_section(
+        self, doc_name: str, obj_a: str, obj_b: str, axis: str, value: float,
+        ray_axis: str, step_from: float, step_to: float, step: float,
+    ) -> dict[str, Any]:
+        """Compare two parts' cross-sections on one plane."""
+        res = dispatch_to_gui(
+            lambda: (_connectivity.compare_section(
+                _dfm.load_shape(doc_name, obj_a),
+                _dfm.load_shape(doc_name, obj_b),
+                axis, value, ray_axis, step_from, step_to, step),),
+            timeout=180,
+            operation_name="compare_section",
+        )
         if isinstance(res, tuple):
             return {"success": True, **res[0]}
         return _err(res)

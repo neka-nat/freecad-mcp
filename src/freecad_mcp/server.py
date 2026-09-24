@@ -584,6 +584,42 @@ def cut_pocket(
 
 
 @mcp.tool()
+def check_cutter(
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    box: list[float],
+    within: list[float] | None = None,
+    avoid: list[str] | None = None,
+) -> list[TextContent]:
+    """Report what a cutting box would remove, before cutting with it.
+
+    Run this on any block you are about to `cut` with in execute_code. A block
+    placed from remembered numbers -- a tenth too tall, half a millimetre too
+    far along -- still cuts to a valid single solid with no warning, and leaves
+    a sliver on a face you were not working on. The audit finds it later without
+    being able to say which edit made it.
+
+    `within` is the region the cut is allowed to touch, usually the feature
+    being trimmed. Anything removed outside it comes back under `strays` with
+    its volume and position, so the block gets corrected instead of the result
+    getting repaired. `avoid` names parts the cut must not reach at all.
+
+    A block that intersects nothing is reported too: cutting nothing looks
+    exactly like a cut that worked.
+
+    Args:
+        doc_name: Document holding the part.
+        obj_name: Part the cut would be applied to.
+        box: The cutting block as [x0, y0, z0, x1, y1, z1].
+        within: Region the cut may touch, same form. Omit to skip the check.
+        avoid: Names of objects the block must not reach.
+    """
+    res = get_freecad_connection().check_cutter(doc_name, obj_name, box, within, avoid)
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
 def cut_slot(
     ctx: Context,
     doc_name: str,
@@ -611,6 +647,181 @@ def cut_slot(
     """
     res = get_freecad_connection().cut_slot(
         doc_name, obj_name, path, width, depth, z_top, policy
+    )
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def add_mating_material(
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    neighbour: str,
+    blank: list[float],
+    clearance: float,
+    towards: str,
+    avoid: list[str] | None = None,
+    steps: int = 5,
+    policy: dict[str, Any] | None = None,
+) -> list[TextContent]:
+    """Add material to one part that keeps a set clearance from another.
+
+    Reach for this instead of cutting a block against the neighbour by hand in
+    execute_code. That cut stops at the neighbour's surface, so the two touch,
+    and where the neighbour's shape varies -- a wall thickening towards a corner
+    -- the fault appears only there and only in the render. Here the cut is
+    against the neighbour grown by the clearance, so the gap is kept wherever
+    the neighbour reaches.
+
+    The reply carries what decides whether it was right: how much was added, how
+    much of it overlaps the part it must weld to, and how many pieces it came
+    out in. An addition overlapping nothing is one that will hang in mid-air.
+
+    Args:
+        doc_name: Document holding both parts.
+        obj_name: Part to add to.
+        neighbour: Part to stay clear of.
+        blank: Region to fill as [x0, y0, z0, x1, y1, z1] -- the volume the
+            addition would occupy if nothing were in the way.
+        clearance: Gap to keep from the neighbour.
+        towards: Direction the neighbour is grown in, as "-x", "+y" and so on;
+            point it from the neighbour towards the part being added to.
+        avoid: Other parts to cut out of the addition, such as a board.
+        steps: How finely the growth is sampled. Raise it where the neighbour's
+            surface is angled rather than square to the direction.
+        policy: Overrides for the accept/reject thresholds.
+    """
+    res = get_freecad_connection().add_mating_material(
+        doc_name, obj_name, neighbour, blank, clearance, towards, avoid,
+        steps, policy
+    )
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def find_gaps(
+    ctx: Context,
+    doc_name: str,
+    obj_name: str,
+    ray_axis: str,
+    step_axis: str,
+    step_from: float,
+    step_to: float,
+    step: float,
+    at: float,
+    max_gap: float = 1.0,
+) -> list[TextContent]:
+    """Find thin slots of air inside a part, where an edit failed to reach.
+
+    Run this after fusing material on. A block added a fraction short of what it
+    was meant to meet leaves a parallel gap rather than a join: the body stays
+    one valid solid, every other check passes, and the piece is left hanging in
+    the render with nothing to say so.
+
+    Gaps wider than `max_gap` are ignored, being cavities the part is meant to
+    have.
+
+    Args:
+        doc_name: Document name.
+        obj_name: Object to inspect.
+        ray_axis: Axis each ray travels along.
+        step_axis: Axis to walk between rays; must differ from ray_axis.
+        step_from: First stop on step_axis.
+        step_to: Last stop on step_axis.
+        step: Distance between stops.
+        at: Fixed coordinate on the remaining third axis.
+        max_gap: Widest gap still counted as a fault.
+    """
+    res = get_freecad_connection().find_gaps(
+        doc_name, obj_name, ray_axis, step_axis, step_from, step_to, step,
+        at, max_gap
+    )
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def find_islands(ctx: Context, doc_name: str, obj_name: str) -> list[TextContent]:
+    """Report the groups of faces a part is made of.
+
+    One group is a part in one piece. More than one means something is only
+    touching the rest, which `Shape.Solids` does not always show.
+
+    Args:
+        doc_name: Document name.
+        obj_name: Object to inspect.
+    """
+    res = get_freecad_connection().find_islands(doc_name, obj_name)
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def check_clearance(
+    ctx: Context,
+    doc_name: str,
+    obj_a: str,
+    obj_b: str,
+    along: str,
+    step: float = 1.0,
+    expect: float | None = None,
+    tolerance: float = 0.01,
+) -> list[TextContent]:
+    """Measure the gap between two parts the whole way along an axis.
+
+    A clearance holds where it was checked and nowhere else unless someone
+    looks: a tongue can sit against its wall at one end and half a millimetre
+    clear at the other, and a single section calls the fit good.
+
+    Use it before committing a mating edit, not after. With `expect` set, the
+    reply says whether the figure holds at every stop and names the ones that
+    disagree -- which is the answer to "does this hold all the way along".
+
+    Args:
+        doc_name: Document holding both objects.
+        obj_a: First object, e.g. the lid.
+        obj_b: Second object, e.g. the housing.
+        along: Axis to walk while measuring ("x", "y" or "z").
+        step: Distance between stops.
+        expect: The clearance this joint is supposed to have.
+        tolerance: How far a stop may stray from `expect` and still pass.
+    """
+    res = get_freecad_connection().check_clearance(
+        doc_name, obj_a, obj_b, along, step, expect, tolerance
+    )
+    return [TextContent(type="text", text=json.dumps(res, indent=2))]
+
+
+@mcp.tool()
+def compare_section(
+    ctx: Context,
+    doc_name: str,
+    obj_a: str,
+    obj_b: str,
+    axis: str,
+    value: float,
+    ray_axis: str,
+    step_from: float,
+    step_to: float,
+    step: float,
+) -> list[TextContent]:
+    """Compare two parts' cross-sections on one plane, with the clearance between.
+
+    For a lid and the housing it closes onto: both are probed on the same plane
+    and their spans set side by side, so a tongue that stops short of its wall
+    reads as a clearance rather than as two lists of numbers to line up by eye.
+
+    Args:
+        doc_name: Document holding both objects.
+        obj_a: First object, e.g. the lid.
+        obj_b: Second object, e.g. the housing.
+        axis: Axis normal to the cutting plane.
+        value: Where that plane sits.
+        ray_axis: Axis the probe rays travel along.
+        step_from: First stop on the remaining axis.
+        step_to: Last stop.
+        step: Distance between stops.
+    """
+    res = get_freecad_connection().compare_section(
+        doc_name, obj_a, obj_b, axis, value, ray_axis, step_from, step_to, step
     )
     return [TextContent(type="text", text=json.dumps(res, indent=2))]
 

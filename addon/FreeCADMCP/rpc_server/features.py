@@ -86,6 +86,62 @@ def cutter_volume(path: list[Any], radius: float, z: float, depth: float,
     return body.removeSplitter()
 
 
+def check_cutter(target: Any, tool: Any, within: Any = None,
+                 avoid: dict[str, Any] | None = None) -> dict[str, Any]:
+    """What a cutting solid would take, before it takes it.
+
+    A cutter placed by hand is placed from remembered numbers, and a block one
+    tenth too tall or half a millimetre too far along reads as a clean boolean:
+    valid, one solid, no warning. The damage is a sliver somewhere else on the
+    part, found later by an audit that cannot say which edit made it.
+
+    ``within`` is the region the cut is allowed to touch -- usually the feature
+    being trimmed, as a box. Anything the tool removes outside it is reported as
+    ``strays``, with the volume and where it sits, so the block can be corrected
+    rather than the result repaired.
+
+    ``avoid`` maps a name to a shape the cut must not reach at all.
+    """
+    if not tool.Solids:
+        raise ValueError("tool has no solid to cut with")
+    removed = target.common(tool)
+    out: dict[str, Any] = {
+        "removes": round(removed.Volume, 4),
+        "touches_target": bool(removed.Solids),
+        "strays": [],
+        "hits": [],
+    }
+    if not removed.Solids:
+        # A tool that misses entirely is the likelier mistake, and silently
+        # cutting nothing looks identical to a cut that worked.
+        out["warning"] = "tool does not intersect the target"
+        return out
+
+    bb = removed.BoundBox
+    out["removed_bbox"] = [round(v, 4) for v in
+                           (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)]
+
+    if within is not None:
+        stray = removed.cut(within)
+        if stray.Solids and stray.Volume > 1e-9:
+            for s in stray.Solids:
+                sb = s.BoundBox
+                out["strays"].append({
+                    "volume": round(s.Volume, 4),
+                    "at": [round(sb.Center.x, 3), round(sb.Center.y, 3),
+                           round(sb.Center.z, 3)],
+                    "bbox": [round(v, 4) for v in
+                             (sb.XMin, sb.YMin, sb.ZMin, sb.XMax, sb.YMax, sb.ZMax)],
+                })
+    for name, shape in (avoid or {}).items():
+        clash = tool.common(shape)
+        if clash.Solids and clash.Volume > 1e-9:
+            out["hits"].append({"name": name, "volume": round(clash.Volume, 4)})
+
+    out["clean"] = not out["strays"] and not out["hits"]
+    return out
+
+
 def pocket(doc_name: str, obj_name: str, corners: list[Any], depth: float,
            tool_radius: float, z_top: float, through: bool = False) -> dict[str, Any]:
     """Cut a rectangular pocket, with the inside corners the cutter leaves.

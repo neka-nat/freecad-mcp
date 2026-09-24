@@ -90,3 +90,49 @@ def test_a_pocket_removes_the_volume_it_reports() -> None:
         assert out["volume_removed"] < 24 * 14 * 4
     finally:
         FreeCAD.closeDocument("FeatureTest")
+
+
+class TestCheckCutter:
+    """A cutting block is placed from remembered numbers, so it is checked."""
+
+    def test_a_block_inside_the_region_is_clean(self) -> None:
+        target = Part.makeBox(10, 10, 10)
+        tool = Part.makeBox(2, 2, 2, FreeCAD.Vector(8, 0, 8))
+        within = Part.makeBox(3, 3, 3, FreeCAD.Vector(7, 0, 7))
+        out = features.check_cutter(target, tool, within)
+        assert out["clean"] is True
+        assert out["strays"] == []
+        assert out["removes"] == 8.0
+
+    def test_a_block_reaching_past_the_region_reports_where(self) -> None:
+        # The fault this exists for: a cutter 0.2 taller than the feature, which
+        # shaves the face above it. Valid, one solid, and a sliver somewhere the
+        # next audit cannot trace back to this edit.
+        target = Part.makeBox(10, 10, 10)
+        tool = Part.makeBox(2, 2, 3, FreeCAD.Vector(8, 0, 7))
+        within = Part.makeBox(2, 2, 2, FreeCAD.Vector(8, 0, 8))
+        out = features.check_cutter(target, tool, within)
+        assert out["clean"] is False
+        assert len(out["strays"]) == 1
+        assert out["strays"][0]["volume"] == 4.0
+        assert out["strays"][0]["bbox"][5] == 8.0
+
+    def test_a_block_that_misses_is_not_silently_accepted(self) -> None:
+        target = Part.makeBox(10, 10, 10)
+        tool = Part.makeBox(2, 2, 2, FreeCAD.Vector(50, 50, 50))
+        out = features.check_cutter(target, tool)
+        assert out["touches_target"] is False
+        assert "warning" in out
+
+    def test_anything_in_avoid_is_named(self) -> None:
+        target = Part.makeBox(10, 10, 10)
+        neighbour = Part.makeBox(4, 10, 10, FreeCAD.Vector(9, 0, 0))
+        tool = Part.makeBox(3, 2, 2, FreeCAD.Vector(8, 0, 4))
+        out = features.check_cutter(target, tool, avoid={"housing": neighbour})
+        assert out["clean"] is False
+        assert out["hits"][0]["name"] == "housing"
+
+    def test_a_tool_without_a_solid_is_refused(self) -> None:
+        target = Part.makeBox(10, 10, 10)
+        with pytest.raises(ValueError, match="no solid"):
+            features.check_cutter(target, Part.makeVertex(FreeCAD.Vector(0, 0, 0)))

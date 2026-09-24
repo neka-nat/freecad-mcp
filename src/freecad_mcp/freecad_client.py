@@ -105,6 +105,96 @@ class FreeCADConnection:
         return self.server.cut_slot(doc_name, obj_name, path, width, depth,
                                     z_top, policy)
 
+    def add_mating_material(
+        self, doc_name: str, obj_name: str, neighbour: str,
+        blank: list[float], clearance: float, towards: str,
+        avoid: list[str] | None = None, steps: int = 5,
+        policy: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.server.add_mating_material(
+            doc_name, obj_name, neighbour, blank, clearance, towards,
+            avoid, steps, policy
+        )
+
+    def find_islands(self, doc_name: str, obj_name: str) -> dict[str, Any]:
+        return self.server.find_islands(doc_name, obj_name)
+
+    def find_gaps(
+        self, doc_name: str, obj_name: str, ray_axis: str, step_axis: str,
+        step_from: float, step_to: float, step: float, at: float,
+        max_gap: float = 1.0,
+    ) -> dict[str, Any]:
+        return self.server.find_gaps(
+            doc_name, obj_name, ray_axis, step_axis, step_from, step_to,
+            step, at, max_gap
+        )
+
+    def check_clearance(
+        self, doc_name: str, obj_a: str, obj_b: str, along: str,
+        step: float = 1.0, expect: float | None = None, tolerance: float = 0.01,
+    ) -> dict[str, Any]:
+        return self.server.check_clearance(
+            doc_name, obj_a, obj_b, along, step, expect, tolerance
+        )
+
+    def compare_section(
+        self, doc_name: str, obj_a: str, obj_b: str, axis: str, value: float,
+        ray_axis: str, step_from: float, step_to: float, step: float,
+    ) -> dict[str, Any]:
+        return self.server.compare_section(
+            doc_name, obj_a, obj_b, axis, value, ray_axis, step_from,
+            step_to, step
+        )
+
+    def find_gaps(
+        self, doc_name: str, obj_name: str, ray_axis: str, step_axis: str,
+        step_from: float, step_to: float, step: float, at: float,
+        max_gap: float = 1.0,
+    ) -> dict[str, Any]:
+        return self.server.find_gaps(
+            doc_name, obj_name, ray_axis, step_axis, step_from, step_to, step,
+            at, max_gap
+        )
+
+    def find_islands(self, doc_name: str, obj_name: str) -> dict[str, Any]:
+        return self.server.find_islands(doc_name, obj_name)
+
+    def check_cutter(
+        self, doc_name: str, obj_name: str, box: list[float],
+        within: list[float] | None = None, avoid: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return self.server.check_cutter(doc_name, obj_name, box, within, avoid)
+
+    def cut_pocket(
+        self, doc_name: str, obj_name: str, corners: list[list[float]],
+        depth: float, tool_radius: float, z_top: float, through: bool = False,
+        policy: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.server.cut_pocket(
+            doc_name, obj_name, corners, depth, tool_radius, z_top, through,
+            policy
+        )
+
+    def cut_slot(
+        self, doc_name: str, obj_name: str, path: list[list[float]],
+        width: float, depth: float, z_top: float,
+        policy: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.server.cut_slot(
+            doc_name, obj_name, path, width, depth, z_top, policy
+        )
+
+    def add_mating_material(
+        self, doc_name: str, obj_name: str, neighbour: str,
+        blank: list[float], clearance: float, towards: str,
+        avoid: list[str] | None = None, steps: int = 5,
+        policy: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.server.add_mating_material(
+            doc_name, obj_name, neighbour, blank, clearance, towards, avoid,
+            steps, policy
+        )
+
     def pick_pixel(self, x: int, y: int, radius: int = 0,
                    image_width: int = 0, image_height: int = 0) -> dict[str, Any]:
         return self.server.pick_pixel(x, y, radius, image_width, image_height)
