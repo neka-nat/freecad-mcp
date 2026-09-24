@@ -818,7 +818,9 @@ def main():
         "--auth-token",
         default=None,
         help="Auth token the FreeCAD RPC server requires (falls back to the "
-        "FREECAD_MCP_TOKEN environment variable; omit if the addon has no token set)",
+        "FREECAD_MCP_TOKEN environment variable, which is preferable because "
+        "other users can read command-line arguments; omit if the addon has "
+        "no token set)",
     )
     parser.add_argument("--freecadcmd", default=None, help="Command that starts headless FreeCAD for execute_code_headless, e.g. 'flatpak run --command=freecadcmd org.freecad.FreeCAD' (default: auto-detect PATH, then Flatpak)")
     args = parser.parse_args()
