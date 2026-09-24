@@ -42,13 +42,14 @@ By default, the RPC server listens on `localhost` and does not accept remote
 connections. To control FreeCAD from another machine on your network, configure
 both the addon and the MCP client.
 
-The RPC server has no authentication and does not encrypt traffic. Any program
-that can reach the port from an allowed address can call every tool, including
-`execute_code`, which runs arbitrary Python inside FreeCAD with your user's
-permissions. Allow only machines you trust, keep the list as narrow as
-possible, and prefer an [SSH tunnel](#alternative-ssh-tunnel) on networks you do
-not control. Whatever the settings, the server refuses requests sent by web
-browsers, so a web page cannot call it.
+Unless you [set an auth token](#3-require-an-auth-token), the RPC server has no
+authentication, and it never encrypts traffic. Any program that can reach the
+port from an allowed address can call every tool, including `execute_code`,
+which runs arbitrary Python inside FreeCAD with your user's permissions. Set a
+token whenever remote connections are on, allow only machines you trust, keep
+the list as narrow as possible, and prefer an [SSH tunnel](#alternative-ssh-tunnel)
+on networks you do not control. Whatever the settings, the server refuses
+requests sent by web browsers, so a web page cannot call it.
 
 ### 1. Enable remote connections in FreeCAD
 
@@ -88,6 +89,33 @@ or hostname. Restart your MCP client after updating its configuration.
 `--host` selects the GUI RPC host. [Headless execution](execution.md#headless-execution)
 runs on the machine hosting the MCP server, so its file paths must be accessible
 there.
+
+### 3. Require an auth token
+
+In the **FreeCAD MCP** toolbar, click **Set Auth Token** and enter a long random
+value, such as the output of
+`python -c "import secrets; print(secrets.token_urlsafe(32))"`. Restart the RPC
+server. From then on, it answers only requests that carry the token. Clear the
+field to turn authentication off again.
+
+Give the MCP server the same token in the `FREECAD_MCP_TOKEN` environment
+variable:
+
+```json
+{
+  "mcpServers": {
+    "freecad": {
+      "command": "uvx",
+      "args": ["freecad-mcp", "--host", "192.168.1.100"],
+      "env": { "FREECAD_MCP_TOKEN": "<the token set in FreeCAD>" }
+    }
+  }
+}
+```
+
+`--auth-token <token>` works too, but other users of the machine can read
+command-line arguments in the process list. The token travels unencrypted, so
+on a network you do not control, use the SSH tunnel below instead.
 
 ### Alternative: SSH tunnel
 

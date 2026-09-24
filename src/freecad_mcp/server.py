@@ -1,5 +1,6 @@
 import functools
 import logging
+import xmlrpc.client
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Callable, Dict, Literal
 
@@ -100,12 +101,21 @@ def get_freecad_connection() -> FreeCADConnection:
     before FreeCAD checks the addon version on the first call that reaches it.
     """
     if state.freecad_connection is None:
-        connection = FreeCADConnection(host=state.rpc_host, port=9875)
+        connection = FreeCADConnection(
+            host=state.rpc_host, port=9875, token=state.auth_token
+        )
         try:
             # ping() raises, rather than returning False, when nothing listens.
             reachable = connection.ping()
         except Exception as e:
             connection.disconnect()
+            if isinstance(e, xmlrpc.client.ProtocolError) and e.errcode == 401:
+                raise Exception(
+                    "FreeCAD rejected the connection: the addon requires an auth "
+                    "token, and none or a different one was given. Pass the token "
+                    "set with 'Set Auth Token' in FreeCAD through the "
+                    "FREECAD_MCP_TOKEN environment variable or --auth-token."
+                ) from e
             raise Exception(
                 f"Failed to connect to FreeCAD ({e}). Make sure the FreeCAD addon is running."
             ) from e
@@ -799,16 +809,28 @@ def _validate_host(value: str) -> str:
 def main():
     """Run the MCP server"""
     import argparse
+    import os
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--only-text-feedback", action="store_true", help="Only return text feedback")
     parser.add_argument("--host", type=_validate_host, default="localhost", help="Host address of the FreeCAD RPC server to connect to (default: localhost)")
+    parser.add_argument(
+        "--auth-token",
+        default=None,
+        help="Auth token the FreeCAD RPC server requires (falls back to the "
+        "FREECAD_MCP_TOKEN environment variable, which is preferable because "
+        "other users can read command-line arguments; omit if the addon has "
+        "no token set)",
+    )
     parser.add_argument("--freecadcmd", default=None, help="Command that starts headless FreeCAD for execute_code_headless, e.g. 'flatpak run --command=freecadcmd org.freecad.FreeCAD' (default: auto-detect PATH, then Flatpak)")
     args = parser.parse_args()
     state.only_text_feedback = args.only_text_feedback
     state.rpc_host = args.host
+    state.auth_token = args.auth_token or os.environ.get("FREECAD_MCP_TOKEN") or None
     from .headless import parse_command
     state.freecadcmd = parse_command(args.freecadcmd)
     logger.info(f"Only text feedback: {state.only_text_feedback}")
     logger.info(f"Connecting to FreeCAD RPC server at: {state.rpc_host}")
+    if state.auth_token:
+        logger.info("Auth token configured for RPC connection")
     mcp.run()

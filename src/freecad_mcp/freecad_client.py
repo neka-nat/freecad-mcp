@@ -45,8 +45,18 @@ class FreeCADConnection:
     # not hold up the session for the full connection timeout.
     VERSION_CHECK_TIMEOUT = 5
 
-    def __init__(self, host: str = "localhost", port: int = 9875, timeout: float = 150):
+    def __init__(
+        self,
+        host: str = "localhost",
+        port: int = 9875,
+        timeout: float = 150,
+        token: str | None = None,
+    ):
         self._uri = f"http://{host}:{port}"
+        # A header, not URL userinfo: xmlrpc.client repeats the URL's host part,
+        # userinfo included, in its repr and error messages, and tools return
+        # those messages to the model.
+        self._headers = [("Authorization", f"Bearer {token}")] if token else []
         self._timeout = timeout
         self.server = self._make_proxy(timeout)
 
@@ -54,7 +64,7 @@ class FreeCADConnection:
         return xmlrpc.client.ServerProxy(
             self._uri,
             allow_none=True,
-            transport=_TimeoutTransport(timeout=timeout),
+            transport=_TimeoutTransport(timeout=timeout, headers=self._headers),
         )
 
     def disconnect(self) -> None:

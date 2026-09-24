@@ -1,10 +1,12 @@
-"""IP-filtered XML-RPC server and helpers for parsing allowed IP/subnet lists.
+"""IP-filtered, optionally token-authenticated XML-RPC server and helpers.
 
 The server also refuses requests a web page could have sent. The IP allowlist
 cannot stop those: the browser runs on an allowed machine, so a malicious page
 could otherwise call execute_code (CSRF, or DNS rebinding to read the reply).
 """
 
+import base64
+import hmac
 import ipaddress
 import re
 from email.message import Message
@@ -77,8 +79,47 @@ class BrowserGuardRequestHandler(SimpleXMLRPCRequestHandler):
         self.wfile.write(body)
 
 
+def authorization_ok(header_value: str, token: str) -> bool:
+    """Check an ``Authorization`` header against the configured token.
+
+    Accepts ``Bearer <token>`` and HTTP Basic (token in the password field,
+    username ignored) so stdlib clients can use ``http://:token@host:port``
+    URIs. Comparisons are constant-time.
+    """
+    if header_value.startswith("Bearer "):
+        supplied = header_value[len("Bearer "):].strip()
+        return hmac.compare_digest(supplied, token)
+    if header_value.startswith("Basic "):
+        try:
+            decoded = base64.b64decode(header_value[len("Basic "):], validate=True).decode("utf-8")
+        except Exception:
+            return False
+        _, _, password = decoded.partition(":")
+        return hmac.compare_digest(password, token)
+    return False
+
+
+class TokenAuthRequestHandler(BrowserGuardRequestHandler):
+    """Request handler that enforces the server's auth token when one is set."""
+
+    def parse_request(self):
+        if not super().parse_request():
+            return False
+        token = getattr(self.server, "auth_token", "")
+        if not token:
+            return True  # authentication disabled
+        if authorization_ok(self.headers.get("Authorization", ""), token):
+            return True
+        FreeCAD.Console.PrintWarning(
+            f"MCP RPC: Rejected unauthenticated request from {self.client_address[0]}\n"
+        )
+        self.send_error(401, "Unauthorized: valid auth token required")
+        return False
+
+
 class FilteredXMLRPCServer(ThreadingMixIn, SimpleXMLRPCServer):
-    """XML-RPC server that filters connections by allowed IP addresses/subnets.
+    """XML-RPC server that filters connections by allowed IP addresses/subnets
+    and, when a token is configured, requires an Authorization header.
 
     Threaded so get_rpc_status stays answerable while a wedged GUI task blocks
     another request. Document queries and synchronous modelling handlers
@@ -92,12 +133,13 @@ class FilteredXMLRPCServer(ThreadingMixIn, SimpleXMLRPCServer):
 
     daemon_threads = True
 
-    def __init__(self, addr, allowed_ips_str="127.0.0.1", **kwargs):
+    def __init__(self, addr, allowed_ips_str="127.0.0.1", auth_token="", **kwargs):
         self._allowed_networks = _parse_allowed_ips(allowed_ips_str)
+        self.auth_token = auth_token or ""
         # Remote clients address the server by its LAN name or IP, so only a
         # loopback-bound server can require a localhost Host header.
         self.loopback_only = _is_loopback_name(str(addr[0]).lower())
-        kwargs.setdefault("requestHandler", BrowserGuardRequestHandler)
+        kwargs.setdefault("requestHandler", TokenAuthRequestHandler)
         super().__init__(addr, **kwargs)
 
     def verify_request(self, request, client_address):

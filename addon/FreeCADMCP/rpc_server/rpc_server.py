@@ -579,14 +579,25 @@ def start_rpc_server(port: int = 9875) -> str:
     settings = load_settings()
     remote_enabled = settings.get("remote_enabled", False)
     allowed_ips = settings.get("allowed_ips", "127.0.0.1")
+    auth_token = settings.get("auth_token", "")
 
     if remote_enabled:
         host = "0.0.0.0"
+        if not auth_token:
+            FreeCAD.Console.PrintWarning(
+                "MCP RPC: remote connections are enabled WITHOUT an auth token. "
+                "Anyone on an allowed IP can execute code in FreeCAD. "
+                "Set a token via 'Set Auth Token' in the FreeCAD MCP menu.\n"
+            )
     else:
         host = "127.0.0.1"
 
     server = FilteredXMLRPCServer(
-        (host, port), allowed_ips_str=allowed_ips, allow_none=True, logRequests=False
+        (host, port),
+        allowed_ips_str=allowed_ips,
+        auth_token=auth_token,
+        allow_none=True,
+        logRequests=False,
     )
     try:
         server.register_instance(FreeCADRPC())
@@ -608,6 +619,8 @@ def start_rpc_server(port: int = 9875) -> str:
     msg = f"RPC Server started at {bound_host}:{bound_port} (PID {os.getpid()})."
     if remote_enabled:
         msg += f" Allowed IPs: {allowed_ips}"
+    if auth_token:
+        msg += " Auth token required."
     return msg
 
 
