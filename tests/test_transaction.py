@@ -166,6 +166,23 @@ def test_a_narrowed_checkpoint_ignores_objects_it_never_saw(tx) -> None:
     assert module.audit("Doc", cp["checkpoint_id"])["verdict"] == "pass"
 
 
+def test_restore_puts_the_face_colours_back_with_the_shape(tx) -> None:
+    module, doc = tx
+    red, blue, grey = (1, 0, 0, 1), (0, 0, 1, 1), (0.5, 0.5, 0.5, 1)
+    original = [red, blue, red, blue, red, blue]     # one per face
+    view = types.SimpleNamespace(DiffuseColor=list(original), ShapeColor=grey)
+    doc.Objects[0].ViewObject = view
+    cp = module.checkpoint("Doc", "before")
+
+    # An edit renumbers the faces and repaints them; undoing only the geometry
+    # would leave that colour list over the old face order.
+    doc.Objects[0].Shape = Shape(volume=90.0)
+    view.DiffuseColor = [grey] * 6
+
+    module.restore(cp["checkpoint_id"])
+    assert view.DiffuseColor == original
+
+
 def test_restore_reports_an_object_it_could_not_put_back(tx) -> None:
     module, doc = tx
     cp = module.checkpoint("Doc", "before")

@@ -166,19 +166,28 @@ def checkpoint(doc_name: str, label: str = "", objects: list[str] | None = None)
     shapes = _shapes(doc)
     if objects:
         shapes = {n: s for n, s in shapes.items() if n in set(objects)}
-    saved, measures = {}, {}
+    saved, measures, colors = {}, {}, {}
     for name, shape in shapes.items():
         try:
             saved[name] = shape.copy()
         except Exception:  # noqa: BLE001 - a shape that cannot be copied cannot be restored
             continue
         measures[name] = _measure(shape, DEFAULT_POLICY)
+        # Face colours are indexed by face number, so putting an old shape back
+        # under the current colour list leaves them scattered across the wrong
+        # faces -- a restore that repairs the geometry and ruins the appearance.
+        view = getattr(doc.getObject(name), "ViewObject", None)
+        try:
+            colors[name] = list(view.DiffuseColor) if view is not None else None
+        except Exception:  # noqa: BLE001
+            colors[name] = None
     _checkpoints[cid] = {
         "id": cid,
         "label": label,
         "document": doc_name,
         "created": time.time(),
         "shapes": saved,
+        "colors": colors,
         "measures": measures,
     }
     return {
@@ -214,6 +223,17 @@ def restore(checkpoint_id: str) -> dict[str, Any]:
             restored.append(name)
         except Exception as e:  # noqa: BLE001
             failed.append(f"{name}: {type(e).__name__}: {e}")
+            continue
+        # Put the colours back with the shape they were recorded against: the
+        # list is indexed by face number, and the restored shape numbers its
+        # faces the old way again.
+        saved = cp.get("colors", {}).get(name)
+        view = getattr(target, "ViewObject", None)
+        if saved and view is not None and len(saved) == len(shape.Faces):
+            try:
+                view.DiffuseColor = saved
+            except Exception:  # noqa: BLE001
+                pass
     doc.recompute()
     out = {"checkpoint_id": checkpoint_id, "restored": restored}
     # A restore that silently skipped an object would leave the caller believing
