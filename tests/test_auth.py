@@ -142,6 +142,32 @@ def test_client_sends_the_token_without_exposing_it() -> None:
     assert "wrong-token" not in repr(wrong.server)
 
 
+@pytest.mark.parametrize("client_token", [None, "wrong-token"])
+def test_rejected_token_is_explained(
+    client_token: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from freecad_mcp import server
+    from freecad_mcp.server_state import ServerState
+
+    with token_server(TOKEN) as (_interface, port):
+        monkeypatch.setattr(server, "state", ServerState(auth_token=client_token))
+        # get_freecad_connection always asks for port 9875; aim it at this server.
+        monkeypatch.setattr(
+            server,
+            "FreeCADConnection",
+            lambda **kwargs: FreeCADConnection(
+                kwargs["host"], port, timeout=5, token=kwargs.get("token")
+            ),
+        )
+        with pytest.raises(Exception) as failure:
+            server.get_freecad_connection()
+    message = str(failure.value)
+    assert "auth token" in message
+    assert "FREECAD_MCP_TOKEN" in message
+    assert "Make sure the FreeCAD addon is running" not in message
+    assert server.state.freecad_connection is None
+
+
 def test_browser_requests_stay_refused_with_a_token_set() -> None:
     with token_server(TOKEN) as (interface, port):
         status = post(port, {

@@ -1,5 +1,6 @@
 import functools
 import logging
+import xmlrpc.client
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Callable, Dict, Literal
 
@@ -108,6 +109,13 @@ def get_freecad_connection() -> FreeCADConnection:
             reachable = connection.ping()
         except Exception as e:
             connection.disconnect()
+            if isinstance(e, xmlrpc.client.ProtocolError) and e.errcode == 401:
+                raise Exception(
+                    "FreeCAD rejected the connection: the addon requires an auth "
+                    "token, and none or a different one was given. Pass the token "
+                    "set with 'Set Auth Token' in FreeCAD through the "
+                    "FREECAD_MCP_TOKEN environment variable or --auth-token."
+                ) from e
             raise Exception(
                 f"Failed to connect to FreeCAD ({e}). Make sure the FreeCAD addon is running."
             ) from e
