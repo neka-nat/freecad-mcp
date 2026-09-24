@@ -3,6 +3,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import time
 import tomllib
 import types
 
@@ -172,6 +173,25 @@ def test_unreachable_addon_does_not_block_the_check() -> None:
         assert connection.check_addon_version() is None
     finally:
         connection.disconnect()
+
+
+class HungStatusAddon(VersionedAddon):
+    def get_rpc_status(self) -> dict:
+        time.sleep(1.0)
+        return super().get_rpc_status()
+
+
+def test_hung_addon_cannot_hold_up_the_check() -> None:
+    with running_server(HungStatusAddon(matching_status())) as (host, port):
+        # The connection timeout stays long; only the check is short.
+        connection = FreeCADConnection(host, port, timeout=150)
+        connection.VERSION_CHECK_TIMEOUT = 0.2
+        started = time.monotonic()
+        try:
+            assert connection.check_addon_version() is None
+        finally:
+            connection.disconnect()
+        assert time.monotonic() - started < 0.9
 
 
 def test_real_addon_reports_version_and_budgets(rpc_module: types.ModuleType) -> None:

@@ -40,6 +40,10 @@ class FreeCADConnection:
     EXECUTE_CODE_TIMEOUT = 90
     MAX_EXECUTE_CODE_TIMEOUT = 1800
     RPC_TIMEOUT_MARGIN = 30
+    # get_rpc_status never waits for the GUI thread, so a healthy addon answers
+    # at once. The check runs while the MCP server starts, so a hung addon must
+    # not hold up the session for the full connection timeout.
+    VERSION_CHECK_TIMEOUT = 5
 
     def __init__(self, host: str = "localhost", port: int = 9875, timeout: float = 150):
         self._uri = f"http://{host}:{port}"
@@ -73,7 +77,8 @@ class FreeCADConnection:
         Returns a warning for an old or mismatched addon, otherwise None.
         """
         try:
-            status = self.get_rpc_status()
+            with self._make_proxy(self.VERSION_CHECK_TIMEOUT) as proxy:
+                status = proxy.get_rpc_status()
         except Exception as e:
             if is_missing_method_fault(e):
                 # Addons older than get_rpc_status reject the method outright.
