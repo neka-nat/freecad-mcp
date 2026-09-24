@@ -1,7 +1,7 @@
 import functools
 import logging
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, Literal
+from typing import Any, AsyncIterator, Callable, Dict, Literal
 
 try:
     # mcp 1.x
@@ -79,11 +79,11 @@ mcp = FastMCP(
 )
 
 
-def tool(fn):
+def tool(fn: Callable[..., ToolResponse]) -> Callable[..., ToolResponse]:
     """Register ``fn`` as a tool whose next reply carries a pending version warning."""
 
     @functools.wraps(fn)
-    def wrapper(*args, **kwargs) -> ToolResponse:
+    def wrapper(*args: Any, **kwargs: Any) -> ToolResponse:
         response = fn(*args, **kwargs)
         notice, state.version_notice = state.version_notice, None
         if notice:
