@@ -105,6 +105,11 @@ FreeCAD UI commands:
 * **Sync Spatial Comments**
 * **Confirm Comment Resolution**
 
+Direct XML-RPC clients can also call `confirm_spatial_comment_resolution` to
+exercise the same trusted, user-confirmed final resolution path used by the
+FreeCAD UI. The MCP tool surface intentionally exposes proposal only, so an LLM
+can mark work ready for review without closing feedback on behalf of the user.
+
 ## Setting up Claude Desktop
 
 Pre-installation of the [uvx](https://docs.astral.sh/uv/guides/tools/) is required.

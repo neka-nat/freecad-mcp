@@ -49,4 +49,23 @@ comment = server.create_spatial_comment(
     },
 )
 print(comment)
+comment_id = comment["comment"]["id"]
 print(server.list_spatial_comments(DOC, {}))
+print(
+    server.update_spatial_comment(
+        DOC,
+        comment_id,
+        {
+            "status": "resolution_proposed",
+            "resolution_note": "Smoke test exercised comment proposal flow.",
+        },
+    )
+)
+print(
+    server.confirm_spatial_comment_resolution(
+        DOC,
+        comment_id,
+        "Smoke test emulates user-confirmed resolution through direct XML-RPC.",
+    )
+)
+print(server.list_spatial_comments(DOC, {"include_resolved": True}))

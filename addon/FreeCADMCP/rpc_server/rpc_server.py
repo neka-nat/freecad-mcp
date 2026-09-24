@@ -202,6 +202,27 @@ class FreeCADRPC:
         )
         return res if isinstance(res, dict) else _err(res)
 
+    def confirm_spatial_comment_resolution(
+        self,
+        doc_name: str,
+        comment_id: str,
+        resolution_note: str | None = None,
+    ) -> dict[str, Any]:
+        """Confirm final resolution of a spatial comment.
+
+        The MCP layer intentionally exposes only proposal, not final resolution.
+        This XML-RPC method exists for FreeCAD UI commands and direct smoke tests
+        that emulate a user-confirmed action.
+        """
+        res = dispatch_to_gui(
+            lambda: self._confirm_spatial_comment_resolution_gui(
+                doc_name, comment_id, resolution_note
+            ),
+            timeout=self.TIMEOUT,
+            operation_name="confirm_spatial_comment_resolution",
+        )
+        return res if isinstance(res, dict) else _err(res)
+
     def get_current_selection_anchor(self, doc_name: str) -> dict[str, Any]:
         res = dispatch_to_gui(
             lambda: self._get_current_selection_anchor_gui(doc_name),
