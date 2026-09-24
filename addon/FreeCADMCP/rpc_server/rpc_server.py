@@ -4,9 +4,12 @@ import FreeCADGui
 import contextlib
 import base64
 import io
+import math
 import os
 import tempfile
 import threading
+import time
+import uuid
 from collections.abc import Callable
 from typing import Any
 from xmlrpc.client import Fault
@@ -39,6 +42,7 @@ from rpc_server.parts_library import get_parts_list, insert_part_from_library
 from rpc_server.property_mapper import Object
 from rpc_server.serialize import serialize_object
 from rpc_server.settings import load_settings, save_settings
+from rpc_server.version import PROTOCOL_VERSION, __version__ as ADDON_VERSION
 from rpc_server.view_manager import save_active_screenshot
 
 rpc_server_thread = None
@@ -55,6 +59,28 @@ _EXEC_NAMESPACE: dict[str, Any] = {
     "FreeCADGui": FreeCADGui,
     "Gui": FreeCADGui,
 }
+_async_execution = threading.local()
+
+# Background jobs started by execute_code_async, newest last. Errors raised off
+# the GUI thread used to reach only the Report View; the registry lets the
+# client read them via get_async_status. Retain all running jobs and bound only
+# completed history, in completion order.
+_ASYNC_JOBS: dict[str, dict[str, Any]] = {}
+_ASYNC_JOBS_LOCK = threading.Lock()
+_ASYNC_JOBS_KEEP = 20
+
+
+def _record_job(job_id: str, **fields: Any) -> None:
+    with _ASYNC_JOBS_LOCK:
+        job = _ASYNC_JOBS.pop(job_id, {"id": job_id})
+        job.update(fields)
+        _ASYNC_JOBS[job_id] = job
+        finished = [
+            key for key, value in _ASYNC_JOBS.items()
+            if value.get("state") in {"done", "failed"}
+        ]
+        for key in finished[:max(0, len(finished) - _ASYNC_JOBS_KEEP)]:
+            del _ASYNC_JOBS[key]
 
 
 def _ok(res) -> bool:
@@ -67,6 +93,25 @@ def _err(res) -> dict:
     if isinstance(res, dict):
         return res
     return {"success": False, "error": str(res)}
+
+
+def _commit_async(fn: Callable[[], Any], timeout: float = 120) -> Any:
+    """Run an async script's document/view writes on the GUI thread."""
+    if not getattr(_async_execution, "active", False):
+        raise RuntimeError("commit() is only available inside execute_code_async workers")
+    res = dispatch_to_gui(
+        lambda: (fn(),), timeout=timeout, operation_name="async_commit"
+    )
+    if isinstance(res, tuple):
+        return res[0]
+    error = _err(res)
+    raise RuntimeError(f"commit() failed: {error['error']}")
+
+
+# Keep one live namespace, including the helper: saved functions retain this
+# dictionary as their globals. The thread-local guard prevents a GUI callback
+# or synchronous script from waiting on its own GUI thread through commit().
+_EXEC_NAMESPACE["commit"] = _commit_async
 
 
 def _query_on_gui(task: Callable[[], Any], operation: str) -> Any:
@@ -85,17 +130,43 @@ class FreeCADRPC:
     """RPC server for FreeCAD"""
     TIMEOUT = 60               # generous wait for GUI thread to become free
     EXECUTE_CODE_TIMEOUT = 90  # GUI-thread execution; use execute_code_async for heavy OCCT ops
+    # Ceiling for a caller-supplied execute_code timeout. A GUI task cannot be
+    # cancelled once started, so an unbounded wait would hide a wedged GUI
+    # thread from the caller indefinitely.
+    MAX_EXECUTE_CODE_TIMEOUT = 1800
 
     def ping(self):
         return True
 
     def get_rpc_status(self) -> dict[str, Any]:
         """Report server and GUI-dispatch health without using the GUI thread."""
+        with _ASYNC_JOBS_LOCK:
+            running = [j["id"] for j in _ASYNC_JOBS.values() if j.get("state") == "running"]
         return {
             "success": True,
             "rpc_server": "running",
             "gui_dispatch": get_dispatch_status(),
+            "async_jobs_running": running,
+            "addon_version": ADDON_VERSION,
+            "protocol_version": PROTOCOL_VERSION,
+            "execute_code_timeout": self.EXECUTE_CODE_TIMEOUT,
+            "max_execute_code_timeout": self.MAX_EXECUTE_CODE_TIMEOUT,
         }
+
+    def get_async_status(self, job_id: str = "") -> dict[str, Any]:
+        """Report background jobs without using the GUI thread.
+
+        With ``job_id`` returns that job (state ``running``/``done``/``failed``,
+        error and traceback when failed). Without it returns all running jobs
+        and up to 20 recently finished jobs. History resets when FreeCAD exits.
+        """
+        with _ASYNC_JOBS_LOCK:
+            if job_id:
+                job = _ASYNC_JOBS.get(job_id)
+                if job is None:
+                    return {"success": False, "error": f"unknown async job: {job_id}"}
+                return {"success": True, "job": dict(job)}
+            return {"success": True, "jobs": [dict(j) for j in _ASYNC_JOBS.values()]}
 
     def create_document(self, name="New_Document"):
         # The GUI handler reports the document's ACTUAL name — FreeCAD
@@ -249,9 +320,35 @@ class FreeCADRPC:
     def execute_code_async(self, code: str) -> dict[str, Any]:
         """Start code execution in a background thread and return immediately.
 
-        Use for long-running OCCT operations (fuse/cut/loft) that would otherwise
-        exceed the MCP timeout. The caller should poll a document object for
-        completion status (e.g. check SessionState.Label via get_object).
+        Use for long-running OCCT *geometry* work (fuse/cut/loft on shapes) that
+        would otherwise exceed the MCP timeout. The caller should poll a document
+        object for completion status (e.g. check SessionState.Label via get_object).
+
+        Thread-safety contract — read before using this method:
+
+        FreeCAD documents and the Coin3D scenegraph are NOT thread-safe. Code run
+        here executes off the GUI thread, so it must not touch them directly.
+        Assigning ``obj.Shape``, calling ``doc.recompute()``, ``doc.addObject()``,
+        ``doc.save()`` or any ``ViewObject`` from this thread races the GUI thread
+        and can wedge FreeCAD's event loop, after which the RPC server stops
+        answering entirely.
+
+        Safe pattern: build shapes in the background, then hand the document write
+        to the GUI thread via the injected ``commit`` helper::
+
+            box = Part.makeBox(10, 10, 10)          # background: fine
+            fused = base.fuse(box).removeSplitter()  # background: fine, this is the slow part
+
+            def apply():                             # runs on the GUI thread
+                obj.Shape = fused
+                doc.recompute()
+
+            commit(apply)                            # blocks until the GUI thread ran it
+
+        ``commit(fn, timeout=...)`` returns ``fn``'s value, or raises RuntimeError
+        if the GUI dispatch failed or timed out. The helper persists so saved
+        functions can reuse it in later async calls. It may only be called from
+        an async worker, not from a synchronous script or GUI callback.
         """
         def _set_status(msg):
             dispatch_to_gui(
@@ -260,39 +357,105 @@ class FreeCADRPC:
             )
 
         def _clear_status():
+            # Short timeout: this runs in the worker's finally block, so a wedged
+            # or busy GUI thread must not keep the worker alive for the full
+            # default dispatch timeout. Losing a status-bar reset is harmless.
             dispatch_to_gui(
                 lambda: FreeCADGui.getMainWindow().statusBar().clearMessage(),
+                timeout=5,
                 operation_name="clear_async_status",
             )
+
+        job_id = f"job-{uuid.uuid4().hex}"
+        code_preview = code if len(code) <= 200 else code[:200] + "…"
 
         def worker() -> None:
             # NOTE: we do NOT redirect sys.stdout here. contextlib.redirect_stdout
             # swaps stdout process-wide, not per-thread, so it would race with the
             # GUI thread and other concurrent work. Background code should report
             # via FreeCAD.Console (which is thread-safe) instead.
+            # Execute against the live dictionary. Merging a snapshot on exit
+            # would restore stale values and lose deletions/concurrent writes.
+            _async_execution.active = True
+            outcome: dict[str, Any] = {"state": "done"}
             try:
                 exec(code, _EXEC_NAMESPACE)
-                FreeCAD.Console.PrintMessage("Async code execution completed.\n")
-            except Exception as e:
+            except BaseException as e:
+                # SystemExit/KeyboardInterrupt raised by a worker script must
+                # also finish its job record rather than leave it running.
                 import traceback as _tb
-                FreeCAD.Console.PrintError(
-                    f"Async code error: {e}\n{_tb.format_exc()}"
-                )
+                outcome = {
+                    "state": "failed",
+                    "error": f"{type(e).__name__}: {e}",
+                    "traceback": _tb.format_exc().rstrip(),
+                }
             finally:
-                _clear_status()
+                del _async_execution.active
+                # Publish the result before best-effort GUI/log cleanup. A busy
+                # GUI must not prevent a client from observing script failure.
+                _record_job(job_id, finished=time.time(), **outcome)
+                try:
+                    if outcome["state"] == "done":
+                        FreeCAD.Console.PrintMessage("Async code execution completed.\n")
+                    else:
+                        FreeCAD.Console.PrintError(
+                            f"Async code error ({job_id}): {outcome['error']}\n{outcome['traceback']}\n"
+                        )
+                except Exception:
+                    pass
+                try:
+                    _clear_status()
+                except Exception:
+                    pass  # never let status cleanup mask or outlive the real work
 
-        _set_status("MCP: running background task…")
-        threading.Thread(target=worker, daemon=True).start()
-        return {"success": True, "message": "Code execution started in background."}
+        _record_job(job_id, state="running", started=time.time(), code=code_preview)
+        try:
+            _set_status("MCP: running background task…")
+            threading.Thread(target=worker, daemon=True).start()
+        except Exception as e:
+            import traceback as _tb
+            error = f"{type(e).__name__}: {e}"
+            _record_job(
+                job_id, state="failed", finished=time.time(), error=error,
+                traceback=_tb.format_exc().rstrip(),
+            )
+            return {"success": False, "job_id": job_id, "error": error}
+        return {
+            "success": True,
+            "job_id": job_id,
+            "message": (
+                "Code execution started in background. Document writes "
+                "(obj.Shape = ..., recompute, addObject, save, ViewObject) must "
+                "go through commit(fn) — direct writes from this thread can wedge "
+                "FreeCAD."
+            ),
+        }
 
-    def execute_code(self, code: str) -> dict[str, Any]:
+    def execute_code(self, code: str, timeout: Any = None) -> dict[str, Any]:
         """Execute Python code on the GUI thread and wait for the result.
 
         Runs on the GUI thread so that FreeCAD document operations
         (addObject, recompute, save) are safe and correctly ordered.
         Use execute_code_async for heavy OCCT boolean ops (fuse/cut)
         that would block the GUI thread too long.
+
+        ``timeout`` overrides EXECUTE_CODE_TIMEOUT for this call only, capped at
+        MAX_EXECUTE_CODE_TIMEOUT. Raise it for genuinely slow GUI-thread work
+        that cannot move off the GUI thread, such as importing or exporting a
+        large STEP assembly. Without it such a call reports a timeout while the
+        task keeps running, and its result is discarded even though the work
+        completes.
         """
+        timeout_s = self.EXECUTE_CODE_TIMEOUT
+        if timeout is not None:
+            try:
+                timeout_s = float(timeout)
+            except (TypeError, ValueError, OverflowError):
+                return {"success": False, "error": f"invalid timeout: {timeout!r}"}
+            if isinstance(timeout, bool) or not math.isfinite(timeout_s) or timeout_s <= 0:
+                return {"success": False, "error": f"invalid timeout: {timeout!r}"}
+            timeout_s = min(timeout_s, self.MAX_EXECUTE_CODE_TIMEOUT)
+
         output_buffer = io.StringIO()
 
         def task():
@@ -302,7 +465,7 @@ class FreeCADRPC:
 
         res = dispatch_to_gui(
             task,
-            timeout=self.EXECUTE_CODE_TIMEOUT,
+            timeout=timeout_s,
             operation_name="execute_code",
         )
         if _ok(res):
@@ -566,11 +729,12 @@ class FreeCADRPC:
         return save_active_screenshot(save_path, view_name, width, height, focus_object)
 
 
-def start_rpc_server(port=9875):
+def start_rpc_server(port: int = 9875) -> str:
     global rpc_server_thread, rpc_server_instance
 
     if rpc_server_instance:
-        return "RPC Server already running."
+        host, bound_port = rpc_server_instance.server_address
+        return f"RPC Server already running at {host}:{bound_port} (PID {os.getpid()})."
 
     # A previous stop may still be draining an in-flight request off-thread;
     # binding before its server_close() would hit the old socket.
@@ -589,24 +753,27 @@ def start_rpc_server(port=9875):
     else:
         host = "127.0.0.1"
 
-    rpc_server_instance = FilteredXMLRPCServer(
+    server = FilteredXMLRPCServer(
         (host, port), allowed_ips_str=allowed_ips, allow_none=True, logRequests=False
     )
-    rpc_server_instance.register_instance(FreeCADRPC())
+    try:
+        server.register_instance(FreeCADRPC())
+        init_waker()
+        QtCore.QTimer.singleShot(500, process_gui_tasks)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+    except Exception:
+        # A failed start must not retain a listening socket or appear running.
+        # This allows the toolbar command to be retried without restarting FreeCAD.
+        server.server_close()
+        request_shutdown()
+        cleanup_waker()
+        raise
 
-    def server_loop():
-        FreeCAD.Console.PrintMessage(f"RPC Server started at {host}:{port}\n")
-        if remote_enabled:
-            FreeCAD.Console.PrintMessage(f"Remote connections enabled. Allowed IPs: {allowed_ips}\n")
-        rpc_server_instance.serve_forever()
-
-    rpc_server_thread = threading.Thread(target=server_loop, daemon=True)
-    rpc_server_thread.start()
-
-    init_waker()
-    QtCore.QTimer.singleShot(500, process_gui_tasks)
-
-    msg = f"RPC Server started at {host}:{port}."
+    rpc_server_instance = server
+    rpc_server_thread = thread
+    bound_host, bound_port = server.server_address
+    msg = f"RPC Server started at {bound_host}:{bound_port} (PID {os.getpid()})."
     if remote_enabled:
         msg += f" Allowed IPs: {allowed_ips}"
     return msg

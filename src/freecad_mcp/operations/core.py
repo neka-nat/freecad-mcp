@@ -5,6 +5,7 @@ from mcp.types import ImageContent
 
 from ..freecad_client import FreeCADConnection
 from ..responses import ToolResponse, add_screenshot_if_available, json_response, text_response
+from ..version import addon_version_warning, is_missing_method_fault
 
 
 logger = logging.getLogger("FreeCADMCPserver")
@@ -103,9 +104,10 @@ def execute_code_operation(
     code: str,
     include_screenshot: bool = True,
     view_name: str = "Isometric",
+    timeout: float | None = None,
 ) -> ToolResponse:
     try:
-        res = freecad.execute_code(code)
+        res = freecad.execute_code(code, timeout)
         if res["success"]:
             response = text_response(f"Code executed successfully: {res['message']}")
             # Only attempt screenshot when code completed and screenshots are wanted.
@@ -127,16 +129,68 @@ def execute_code_async_operation(
     try:
         res = freecad.execute_code_async(code)
         if res["success"]:
+            job_id = res.get("job_id", "")
+            if not job_id:
+                return text_response(
+                    "Code execution started in background.\n"
+                    "This addon does not report job IDs; use get_object to poll "
+                    "a document status object and inspect FreeCAD's Report View for errors."
+                )
             return text_response(
-                "Code execution started in background.\n"
-                "Use get_object to poll a document object for completion "
-                "(e.g. check SessionState.Label). "
-                "FreeCAD's Report View will show output when done."
+                f"Code execution started in background (job_id: {job_id}).\n"
+                f"Poll get_async_status(job_id=\"{job_id}\") for state, error "
+                "and traceback. "
+                "FreeCAD's Report View shows printed output when done."
             )
         return text_response(f"Failed to start async execution: {res.get('error', 'unknown')}")
     except Exception as e:
         logger.error(f"Failed to start async code execution: {str(e)}")
         return text_response(f"Failed to start async code execution: {str(e)}")
+
+
+def format_headless_result(res: dict) -> str:
+    if res.get("success"):
+        text = "Headless FreeCAD script finished (exit 0)."
+    else:
+        text = f"Headless FreeCAD script FAILED: {res.get('error', 'unknown error')}"
+    if res.get("output"):
+        text += "\nOutput:\n" + str(res["output"]).rstrip()
+    if res.get("success"):
+        text += "\nIf the script saved a document that is open in the GUI, call reload_document to see the result."
+    return text
+
+
+def execute_code_headless_operation(
+    command: list[str] | None, code: str, timeout: float
+) -> ToolResponse:
+    from ..headless import run_headless
+
+    try:
+        return text_response(format_headless_result(run_headless(code, timeout, command)))
+    except Exception as e:
+        logger.error(f"Failed to run headless code: {str(e)}")
+        return text_response(f"Failed to run headless code: {str(e)}")
+
+
+def get_async_status_operation(
+    freecad: FreeCADConnection, job_id: str = ""
+) -> ToolResponse:
+    try:
+        res = freecad.get_async_status(job_id)
+        if not res.get("success"):
+            return text_response(f"Failed to get async status: {res.get('error', 'unknown')}")
+        job = res.get("job")
+        if job is None:
+            return json_response(res.get("jobs", []))
+        text = f"Async job {job['id']}: {job.get('state', 'unknown')}"
+        if job.get("error"):
+            text += f"\nError: {job['error']}"
+        if job.get("traceback"):
+            text += f"\n{job['traceback']}"
+        return text_response(text)
+    except Exception as e:
+        logger.error(f"Failed to get async status: {str(e)}")
+        return text_response(f"Failed to get async status: {str(e)}")
 
 
 def get_view_operation(
@@ -337,8 +391,13 @@ def get_current_selection_anchor_operation(
 def get_rpc_status_operation(freecad: FreeCADConnection) -> ToolResponse:
     """Get bridge health through the GUI-independent RPC status method."""
     try:
-        return json_response(freecad.get_rpc_status())
+        status = freecad.get_rpc_status()
+        if isinstance(status, dict):
+            status["version_check"] = addon_version_warning(status) or "ok"
+        return json_response(status)
     except Exception as e:
+        if is_missing_method_fault(e):
+            return text_response(addon_version_warning(None))
         logger.error(f"Failed to get RPC status: {str(e)}")
         return text_response(f"Failed to get RPC status: {str(e)}")
 

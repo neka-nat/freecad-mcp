@@ -2,257 +2,66 @@
 
 # FreeCAD MCP
 
-This repository is a FreeCAD MCP that allows you to control FreeCAD from Claude Desktop.
+Control FreeCAD from Claude Desktop and other MCP clients. Create and edit models,
+run Python scripts, inspect documents, and run FEM analyses.
 
 ## Demo
 
-### Design a flange
+Design a flange:
 
-![demo](./assets/freecad_mcp4.gif)
+![Designing a flange in FreeCAD](./assets/freecad_mcp4.gif)
 
-### Design a toy car
+See [more demos and examples](docs/examples.md) for a toy car, modelling from a
+2D drawing, and agent integrations.
 
-![demo](./assets/make_toycar4.gif)
+## Quick start
 
-### Design a part from 2D drawing
+You need FreeCAD and [uv / uvx](https://docs.astral.sh/uv/guides/tools/).
+FreeCAD MCP has two components: an addon running inside FreeCAD and an MCP server
+launched by your client.
 
-#### Input 2D drawing
-
-![input](./assets/b9-1.png)
-
-#### Demo
-
-![demo](./assets/from_2ddrawing.gif)
-
-This is the conversation history.
-https://claude.ai/share/7b48fd60-68ba-46fb-bb21-2fbb17399b48
-
-## Install addon
-
-FreeCAD Addon directory is
-* Windows: `%APPDATA%\FreeCAD\Mod\`
-* Mac:
-  * FreeCAD 1.1: `~/Library/Application\ Support/FreeCAD/v1-1/Mod/`
-  * FreeCAD 1.0: `~/Library/Application\ Support/FreeCAD/v1-0/Mod/`
-* Linux:
-  * Ubuntu: `~/.FreeCAD/Mod/` or `~/snap/freecad/common/Mod/` (if you install FreeCAD from snap)
-  * Debian: `~/.local/share/FreeCAD/Mod`
-  * Arch / CachyOS (FreeCAD 1.1 from `extra/freecad`): `~/.local/share/FreeCAD/v1-1/Mod/`
-  * Flatpak: `~/.var/app/org.freecad.FreeCAD/data/FreeCAD/v1-1/Mod/`
-
-Please put `addon/FreeCADMCP` directory to the addon directory.
+### 1. Install and start the FreeCAD addon
 
 ```bash
 git clone https://github.com/neka-nat/freecad-mcp.git
 cd freecad-mcp
-
-# For Linux (Ubuntu/Debian)
-mkdir -p ~/.FreeCAD/Mod/
-cp -r addon/FreeCADMCP ~/.FreeCAD/Mod/
-
-# For Linux (Arch/CachyOS, FreeCAD 1.1 from extra/freecad)
-mkdir -p ~/.local/share/FreeCAD/v1-1/Mod/
-cp -r addon/FreeCADMCP ~/.local/share/FreeCAD/v1-1/Mod/
-
-# For Linux (Flatpak)
-mkdir -p ~/.var/app/org.freecad.FreeCAD/data/FreeCAD/v1-1/Mod/
-cp -r addon/FreeCADMCP ~/.var/app/org.freecad.FreeCAD/data/FreeCAD/v1-1/Mod/
-
-# For macOS (FreeCAD 1.1)
-mkdir -p ~/Library/Application\ Support/FreeCAD/v1-1/Mod/
-cp -r addon/FreeCADMCP ~/Library/Application\ Support/FreeCAD/v1-1/Mod/
 ```
 
-When you install addon, you need to restart FreeCAD.
-You can select "MCP Addon" from Workbench list and use it.
+Copy `addon/FreeCADMCP` into your [FreeCAD addon directory](docs/installation.md#addon-directory),
+then restart FreeCAD. Select the **MCP Addon** workbench and click
+**Start RPC Server** in the **FreeCAD MCP** toolbar.
 
-![workbench_list](./assets/workbench_list.png)
+See the [installation guide](docs/installation.md) for platform-specific commands
+and screenshots.
 
-And you can start RPC server by "Start RPC Server" command in "FreeCAD MCP" toolbar.
+### 2. Connect Claude Desktop
 
-![start_rpc_server](./assets/start_rpc_server.png)
-
-### Auto-Start RPC Server
-
-By default, the RPC server must be started manually each time FreeCAD opens. To start it automatically:
-
-1. Open the **FreeCAD MCP** menu (switch to the MCP Addon workbench first)
-2. Check **Auto-Start Server**
-
-The setting is saved to `freecad_mcp_settings.json` and persists across sessions. On the next FreeCAD launch, the RPC server will start automatically once the application finishes loading.
-
-You can disable it at any time by unchecking **Auto-Start Server** in the same menu.
-
-### Spatial feedback comments
-
-Use the FreeCAD MCP toolbar command **Add Spatial Comment** to select a point,
-object, face, edge, or vertex and write feedback for the LLM. Comments are stored
-in a sidecar JSON file next to the `.FCStd` file when possible. For unsaved
-documents, sidecars are stored under FreeCAD user data in `freecad_mcp_comments/`.
-
-New MCP tools:
-
-* `create_spatial_comment`
-* `list_spatial_comments`
-* `propose_spatial_comment_resolution`
-* `delete_spatial_comment`
-* `get_current_selection_anchor`
-
-FreeCAD UI commands:
-
-* **Add Spatial Comment**
-* **Edit Spatial Comment**
-* **Sync Spatial Comments**
-* **Confirm Comment Resolution**
-
-Direct XML-RPC clients can also call `confirm_spatial_comment_resolution` to
-exercise the same trusted, user-confirmed final resolution path used by the
-FreeCAD UI. The MCP tool surface intentionally exposes proposal only, so an LLM
-can mark work ready for review without closing feedback on behalf of the user.
-
-## Setting up Claude Desktop
-
-Pre-installation of the [uvx](https://docs.astral.sh/uv/guides/tools/) is required.
-
-And you need to edit Claude Desktop config file, `claude_desktop_config.json`.
-
-For user.
+Add the following entry to `claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "freecad": {
       "command": "uvx",
-      "args": [
-        "freecad-mcp"
-      ]
+      "args": ["freecad-mcp"]
     }
   }
 }
 ```
 
-If you want to save token, you can set `only_text_feedback` to `true` and use only text feedback.
+Restart Claude Desktop to load the configuration, keep FreeCAD open with its RPC
+server running, and ask Claude to create a model. Connections use `localhost` by
+default.
 
-```json
-{
-  "mcpServers": {
-    "freecad": {
-      "command": "uvx",
-      "args": [
-        "freecad-mcp",
-        "--only-text-feedback"
-      ]
-    }
-  }
-}
-```
+## Documentation
 
-Screenshots can also be controlled per tool call instead of globally: every tool that returns a screenshot accepts an optional `include_screenshot` parameter (pass `false` to get text-only feedback, e.g. for analytical scripts or intermediate steps) and an optional `view_name` parameter to orient the screenshot ("Isometric" by default, or "Front", "Top", "Right", etc.). The `--only-text-feedback` flag always wins: when it is set, no screenshots are returned regardless of `include_screenshot`.
-
-
-For developer.
-First, you need clone this repository.
-
-```bash
-git clone https://github.com/neka-nat/freecad-mcp.git
-```
-
-```json
-{
-  "mcpServers": {
-    "freecad": {
-      "command": "uv",
-      "args": [
-        "--directory",
-        "/path/to/freecad-mcp/",
-        "run",
-        "freecad-mcp"
-      ]
-    }
-  }
-}
-```
-
-## Remote Connections
-
-By default the RPC server does not accept remote connections and listens on `localhost`. To control FreeCAD from another machine on your network:
-
-### 1. Enable remote connections in FreeCAD
-
-In the **FreeCAD MCP** toolbar:
-
-1. Check **Remote Connections** — the RPC server will bind to `0.0.0.0` (all interfaces) on the next restart. For security reasons, it only accepts connections from the IP addresses or CIDR subnets specified in the **Allowed IPs** field. By default this is `127.0.0.1`.
-2. Click **Configure Allowed IPs** and enter a comma-separated list of IP addresses or CIDR subnets that are allowed to connect, e.g.:
-
-   ```
-   192.168.1.100, 10.0.0.0/24
-   ```
-
-   `127.0.0.1` is always the default. Invalid entries are rejected with an error dialog. Restart the RPC server after changing these settings.
-
-### 2. Point the MCP server at the remote host
-
-Pass the `--host` flag with the IP address or hostname of the machine running FreeCAD:
-
-```json
-{
-  "mcpServers": {
-    "freecad": {
-      "command": "uvx",
-      "args": [
-        "freecad-mcp",
-        "--host", "192.168.1.100"
-      ]
-    }
-  }
-}
-```
-
-The `--host` value is validated on startup — it must be a valid IPv4/IPv6 address or hostname.
-
-## Tools
-
-* `create_document`: Create a new document in FreeCAD.
-* `create_object`: Create a new object in FreeCAD.
-* `edit_object`: Edit an object in FreeCAD.
-* `delete_object`: Delete an object in FreeCAD.
-* `execute_code`: Execute arbitrary Python code in FreeCAD.
-* `insert_part_from_library`: Insert a part from the [parts library](https://github.com/FreeCAD/FreeCAD-library).
-* `get_view`: Get a screenshot of the active view.
-* `get_objects`: Get all objects in a document.
-* `get_object`: Get an object in a document.
-* `get_parts_list`: Get the list of parts in the [parts library](https://github.com/FreeCAD/FreeCAD-library).
-* `get_rpc_status`: Report RPC and GUI-dispatch health without using the FreeCAD GUI thread.
-* `create_spatial_comment`: Create spatial feedback attached to a point, object, or subelement.
-* `list_spatial_comments`: List unresolved or filtered spatial comments for a document.
-* `propose_spatial_comment_resolution`: Mark a comment as ready for user confirmation after applying feedback.
-* `delete_spatial_comment`: Delete a spatial feedback comment.
-* `get_current_selection_anchor`: Return the current FreeCAD selection as a reusable spatial comment anchor.
-* `run_fem_analysis`: Run the CalculiX solver on an existing `Fem::FemAnalysis` and return summary results (max von Mises stress, max displacement, node count, working directory). Auto-creates a `SolverCcxTools` if the analysis has none. See [`examples/cantilever_fem.py`](examples/cantilever_fem.py) for an end-to-end usage example.
-
-Tools that return a screenshot (`create_object`, `edit_object`, `delete_object`, `execute_code`, `insert_part_from_library`, `get_objects`, `get_object`, `create_spatial_comment`, `run_fem_analysis`) accept optional `include_screenshot` (default `true`) and `view_name` (default `"Isometric"`) parameters to suppress or reorient the returned image per call.
-
-### GUI dispatch timeouts
-
-If a GUI-thread operation exceeds its timeout after it has started, the bridge
-returns `GUI_DISPATCH_STUCK` and rejects later GUI operations immediately. Use
-`get_rpc_status` from a separate RPC client to identify the operation that is
-still running. The RPC server handles connections concurrently, so diagnostics
-do not wait for another request to finish. Document queries (`get_object`,
-`get_objects`, and `list_documents`) run on the GUI thread alongside modelling
-operations and report an RPC fault if dispatch times out or is stuck. FreeCAD GUI
-work cannot be force-cancelled safely; if the status does not return to
-`healthy` after the operation finishes, restart FreeCAD.
-
-`execute_code` and `execute_code_async` share a persistent script namespace with
-`FreeCAD`/`App` and `FreeCADGui`/`Gui` aliases. Script variables survive between
-calls without overwriting the RPC server's own functions. This prevents accidental
-name collisions; code execution still has FreeCAD's full privileges.
-
-After an `execute_code` exception on a FreeCAD development build, inspect any
-new `FeaturePython` object before mutating or deleting it. In particular, do
-not continue with an object whose required `Proxy` was never installed, as
-touching that broken object can wedge FreeCAD's GUI thread.
+| Guide | Contents |
+| --- | --- |
+| [Installation](docs/installation.md) | Addon directories, setup screenshots, running from source |
+| [Configuration](docs/configuration.md) | Auto-start, text feedback, remote connections |
+| [Tools](docs/tools.md) | Available tools, screenshots, FEM analysis |
+| [Code execution](docs/execution.md) | GUI execution, background jobs, headless scripts, timeout troubleshooting |
+| [Demos and examples](docs/examples.md) | Design demos, FEM example, ADK and LangChain integrations |
 
 ## Contributors
 

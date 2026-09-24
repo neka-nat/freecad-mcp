@@ -1,6 +1,9 @@
 import logging
+import math
 import xmlrpc.client
-from typing import Any, cast
+from typing import Any
+
+from .version import addon_version_warning, is_missing_method_fault
 
 
 logger = logging.getLogger("FreeCADMCPserver")
@@ -12,7 +15,6 @@ class _TimeoutTransport(xmlrpc.client.Transport):
     The default Transport has no timeout, so a frozen FreeCAD GUI thread
     causes the MCP client to hang indefinitely (observed: 4+ minute waits).
     """
-
     def __init__(self, timeout: float = 30, **kwargs):
         super().__init__(**kwargs)
         self._timeout = timeout
@@ -23,7 +25,26 @@ class _TimeoutTransport(xmlrpc.client.Transport):
         return conn
 
 
+def _is_budget(value: Any, ceiling: float) -> bool:
+    """True for a number of seconds in (0, ceiling]; NaN and infinities fail."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and 0 < value <= ceiling
+    )
+
+
 class FreeCADConnection:
+    # Fallback run budgets for addons that do not report their own through
+    # get_rpc_status; check_addon_version replaces them when they do.
+    EXECUTE_CODE_TIMEOUT = 90
+    MAX_EXECUTE_CODE_TIMEOUT = 1800
+    RPC_TIMEOUT_MARGIN = 30
+    # get_rpc_status never waits for the GUI thread, so a healthy addon answers
+    # at once. The check runs while the MCP server starts, so a hung addon must
+    # not hold up the session for the full connection timeout.
+    VERSION_CHECK_TIMEOUT = 5
+
     def __init__(self, host: str = "localhost", port: int = 9875, timeout: float = 150):
         self._uri = f"http://{host}:{port}"
         self._timeout = timeout
@@ -44,38 +65,87 @@ class FreeCADConnection:
             close()
 
     def ping(self) -> bool:
-        return cast(bool, self.server.ping())
+        return self.server.ping()
 
     def get_rpc_status(self) -> dict[str, Any]:
-        return cast(dict[str, Any], self.server.get_rpc_status())
+        with self._make_proxy(self._timeout) as proxy:
+            return proxy.get_rpc_status()
+
+    def check_addon_version(self) -> str | None:
+        """Compare the addon's version with this server and adopt its budgets.
+
+        Returns a warning for an old or mismatched addon, otherwise None.
+        """
+        try:
+            with self._make_proxy(self.VERSION_CHECK_TIMEOUT) as proxy:
+                status = proxy.get_rpc_status()
+        except Exception as e:
+            if is_missing_method_fault(e):
+                # Addons older than get_rpc_status reject the method outright.
+                return addon_version_warning(None)
+            logger.warning(f"Could not check the FreeCAD addon version: {e}")
+            return None
+        if not isinstance(status, dict):
+            return addon_version_warning({})
+        for key, attr in (
+            ("execute_code_timeout", "EXECUTE_CODE_TIMEOUT"),
+            ("max_execute_code_timeout", "MAX_EXECUTE_CODE_TIMEOUT"),
+        ):
+            value = status.get(key)
+            # Socket timeouts are derived from these budgets, so this client's
+            # own ceiling bounds how long an addon's report can make it wait.
+            if _is_budget(value, FreeCADConnection.MAX_EXECUTE_CODE_TIMEOUT):
+                setattr(self, attr, value)
+        return addon_version_warning(status)
 
     def create_document(self, name: str) -> dict[str, Any]:
-        return cast(dict[str, Any], self.server.create_document(name))
+        return self.server.create_document(name)
 
     def create_object(self, doc_name: str, obj_data: dict[str, Any]) -> dict[str, Any]:
-        return cast(dict[str, Any], self.server.create_object(doc_name, obj_data))
+        return self.server.create_object(doc_name, obj_data)
 
-    def edit_object(
-        self, doc_name: str, obj_name: str, obj_data: dict[str, Any]
-    ) -> dict[str, Any]:
-        return cast(
-            dict[str, Any], self.server.edit_object(doc_name, obj_name, obj_data)
-        )
+    def edit_object(self, doc_name: str, obj_name: str, obj_data: dict[str, Any]) -> dict[str, Any]:
+        return self.server.edit_object(doc_name, obj_name, obj_data)
 
     def delete_object(self, doc_name: str, obj_name: str) -> dict[str, Any]:
-        return cast(dict[str, Any], self.server.delete_object(doc_name, obj_name))
+        return self.server.delete_object(doc_name, obj_name)
+
 
     def reload_document(self, doc_name: str) -> dict[str, Any]:
-        return cast(dict[str, Any], self.server.reload_document(doc_name))
+        return self.server.reload_document(doc_name)
 
     def insert_part_from_library(self, relative_path: str) -> dict[str, Any]:
-        return cast(dict[str, Any], self.server.insert_part_from_library(relative_path))
+        return self.server.insert_part_from_library(relative_path)
 
-    def execute_code(self, code: str) -> dict[str, Any]:
-        return cast(dict[str, Any], self.server.execute_code(code))
+    def execute_code(self, code: str, timeout: float | None = None) -> dict[str, Any]:
+        # The addon permits a full queue budget followed by a full run budget.
+        # Both default to EXECUTE_CODE_TIMEOUT, or to the caller's per-call
+        # timeout, so the socket must outlast either budget.
+        run_budget = self.EXECUTE_CODE_TIMEOUT
+        if timeout is not None:
+            try:
+                run_budget = float(timeout)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("timeout must be a positive finite number") from exc
+            if isinstance(timeout, bool) or not math.isfinite(run_budget) or run_budget <= 0:
+                raise ValueError("timeout must be a positive finite number")
+            run_budget = min(run_budget, self.MAX_EXECUTE_CODE_TIMEOUT)
+        socket_timeout = max(self._timeout, 2 * run_budget + self.RPC_TIMEOUT_MARGIN)
+        with self._make_proxy(socket_timeout) as proxy:
+            # Without an explicit timeout, call with a single argument so a
+            # newer client keeps working against an addon that predates the
+            # timeout parameter.
+            if timeout is None:
+                return proxy.execute_code(code)
+            return proxy.execute_code(code, run_budget)
 
     def execute_code_async(self, code: str) -> dict[str, Any]:
-        return cast(dict[str, Any], self.server.execute_code_async(code))
+        return self.server.execute_code_async(code)
+
+    def get_async_status(self, job_id: str = "") -> dict[str, Any]:
+        # Polling must not share an HTTP connection with a blocked GUI request.
+        with self._make_proxy(self._timeout) as proxy:
+            return proxy.get_async_status(job_id)
 
     def get_active_screenshot(
         self,
@@ -85,66 +155,46 @@ class FreeCADConnection:
         focus_object: str | None = None,
     ) -> str | None:
         try:
-            return cast(
-                str | None,
-                self.server.get_active_screenshot(
-                    view_name, width, height, focus_object
-                ),
-            )
+            return self.server.get_active_screenshot(view_name, width, height, focus_object)
         except Exception as e:
             logger.error(f"Error getting screenshot: {e}")
             return None
 
     def get_objects(self, doc_name: str) -> list[dict[str, Any]]:
-        return cast(list[dict[str, Any]], self.server.get_objects(doc_name))
+        return self.server.get_objects(doc_name)
 
     def get_object(self, doc_name: str, obj_name: str) -> dict[str, Any]:
-        return cast(dict[str, Any], self.server.get_object(doc_name, obj_name))
+        return self.server.get_object(doc_name, obj_name)
 
     def get_parts_list(self) -> list[str]:
-        return cast(list[str], self.server.get_parts_list())
+        return self.server.get_parts_list()
 
     def list_documents(self) -> list[str]:
-        return cast(list[str], self.server.list_documents())
+        return self.server.list_documents()
 
     def create_spatial_comment(
         self, doc_name: str, comment_data: dict[str, Any]
     ) -> dict[str, Any]:
-        return cast(
-            dict[str, Any], self.server.create_spatial_comment(doc_name, comment_data)
-        )
+        return self.server.create_spatial_comment(doc_name, comment_data)
 
     def list_spatial_comments(
         self, doc_name: str, filters: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        return cast(
-            dict[str, Any], self.server.list_spatial_comments(doc_name, filters or {})
-        )
+        return self.server.list_spatial_comments(doc_name, filters or {})
 
     def update_spatial_comment(
         self, doc_name: str, comment_id: str, patch: dict[str, Any]
     ) -> dict[str, Any]:
-        return cast(
-            dict[str, Any],
-            self.server.update_spatial_comment(doc_name, comment_id, patch),
-        )
+        return self.server.update_spatial_comment(doc_name, comment_id, patch)
 
     def delete_spatial_comment(self, doc_name: str, comment_id: str) -> dict[str, Any]:
-        return cast(
-            dict[str, Any], self.server.delete_spatial_comment(doc_name, comment_id)
-        )
+        return self.server.delete_spatial_comment(doc_name, comment_id)
 
     def get_current_selection_anchor(self, doc_name: str) -> dict[str, Any]:
-        return cast(dict[str, Any], self.server.get_current_selection_anchor(doc_name))
+        return self.server.get_current_selection_anchor(doc_name)
 
-    def run_fem_analysis(
-        self, doc_name: str, analysis_name: str, timeout: int = 600
-    ) -> dict[str, Any]:
-        # The solver blocks the RPC response for up to `timeout` seconds, so the
-        # socket must outlast it. The default 150 s transport timeout would abort
-        # any solve longer than that even though the addon is still working.
-        # Use a dedicated proxy whose socket timeout exceeds the solver timeout.
-        proxy = self._make_proxy(max(self._timeout, timeout + 30))
-        return cast(
-            dict[str, Any], proxy.run_fem_analysis(doc_name, analysis_name, timeout)
-        )
+    def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600) -> dict[str, Any]:
+        # Both queueing and solving can consume `timeout` seconds each.
+        socket_timeout = max(self._timeout, 2 * timeout + self.RPC_TIMEOUT_MARGIN)
+        with self._make_proxy(socket_timeout) as proxy:
+            return proxy.run_fem_analysis(doc_name, analysis_name, timeout)
