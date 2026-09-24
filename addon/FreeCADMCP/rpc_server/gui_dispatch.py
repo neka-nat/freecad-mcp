@@ -15,7 +15,9 @@ Robustness and performance guarantees:
    waiting for the next 500 ms heartbeat tick. The 500 ms heartbeat is kept
    only as a fallback.
 3. Mouse-button guard: ``process_gui_tasks`` skips the current tick while
-   mouse buttons are held so MCP tasks cannot interrupt 3D navigation drags.
+   mouse buttons are held so MCP tasks cannot interrupt 3D navigation drags,
+   for at most ``MOUSE_DEFER_MAX_S`` so a lost mouse-release cannot wedge
+   dispatch. A queued call that times out names the guard that held it.
 4. Clean shutdown: the ``_SHUTDOWN`` sentinel sets a flag that suppresses the
    ``finally`` reschedule, so ``stop_rpc_server`` actually stops the loop.
 5. Exception isolation: exceptions inside a task are caught, logged, and
@@ -51,6 +53,54 @@ _processing = False  # re-entrancy guard: True while process_gui_tasks is draini
 _processing_since: float = 0.0  # wall-clock time when _processing became True
 _task_ids = itertools.count(1)
 _dispatch_health = DispatchHealth()
+
+# Qt can miss a mouse-release when the button is released outside the FreeCAD
+# window (drag out of the viewport, release there). QApplication.mouseButtons()
+# then reports the button as held indefinitely. An unbounded mouse guard turns
+# that into a permanently wedged RPC server: every tick defers, no task ever
+# runs, and every call fails with an unexplained timeout. Cap how long we are
+# willing to believe a drag is still in progress.
+MOUSE_DEFER_MAX_S = 5.0
+# None = unarmed. Do not use 0.0 as the sentinel: time.monotonic() may legitimately
+# return 0.0, which would re-arm the timer every tick and never reach the cap.
+_mouse_defer_since: "float | None" = None
+_stale_mouse_warned = False
+
+# Why and when the last tick declined to process, recorded on the GUI thread so
+# the RPC thread can report it on timeout without touching Qt off-thread. One
+# tuple assignment keeps reason and time consistent without a lock.
+_last_defer: "tuple[str, float] | None" = None
+
+
+def _mouse_guard_should_defer(mouse_down: bool, now: float) -> bool:
+    """Whether to skip this tick because mouse buttons are held.
+
+    Defers while a genuine 3D-navigation drag is plausibly in progress, but
+    gives up after ``MOUSE_DEFER_MAX_S``: buttons reported held that long
+    across an MCP call are far more likely stale Qt state than a real drag,
+    and deferring forever is strictly worse than interrupting a drag.
+    """
+    global _mouse_defer_since, _stale_mouse_warned
+    if not mouse_down:
+        _mouse_defer_since = None
+        _stale_mouse_warned = False
+        return False
+    if _mouse_defer_since is None:
+        _mouse_defer_since = now
+        return True
+    return (now - _mouse_defer_since) < MOUSE_DEFER_MAX_S
+
+
+def _warn_stale_mouse_once() -> None:
+    """Announce the override once per stuck-button episode."""
+    global _stale_mouse_warned
+    if _stale_mouse_warned:
+        return
+    _stale_mouse_warned = True
+    FreeCAD.Console.PrintWarning(
+        f"MCP RPC: mouse buttons reported held for over {MOUSE_DEFER_MAX_S:.0f}s. "
+        "Treating as stale Qt input state and processing queued tasks anyway.\n"
+    )
 
 
 class _WakeSignal(QtCore.QObject):
@@ -117,7 +167,7 @@ def process_gui_tasks(reschedule: bool = True) -> None:
     ``reschedule=False`` is used by the immediate-wake path so it does not
     start a second heartbeat chain alongside the existing 500 ms one.
     """
-    global _processing, _processing_since
+    global _processing, _processing_since, _last_defer
     if _processing:
         return  # re-entrant call from processEvents inside a task; skip
 
@@ -125,13 +175,22 @@ def process_gui_tasks(reschedule: bool = True) -> None:
     try:
         if _rpc_request_queue.empty():
             return  # nothing queued; skip cursor/status-bar churn on idle heartbeat ticks
-        if QtWidgets.QApplication.mouseButtons() != QtCore.Qt.NoButton:
+
+        now = time.monotonic()
+        mouse_down = QtWidgets.QApplication.mouseButtons() != QtCore.Qt.NoButton
+        if _mouse_guard_should_defer(mouse_down, now):
+            _last_defer = ("mouse buttons held (3D navigation drag)", now)
             return  # user is dragging; defer to next tick
+        if mouse_down:
+            _warn_stale_mouse_once()  # stale state: fall through and process anyway
         if QtWidgets.QApplication.activePopupWidget() is not None:
+            _last_defer = ("a popup or context menu is open in FreeCAD", now)
             return  # context menu or popup open; defer to next tick
         if QtWidgets.QApplication.activeModalWidget() is not None:
+            _last_defer = ("a modal dialog is open in FreeCAD", now)
             return  # modal dialog open; defer to next tick
 
+        _last_defer = None
         _processing = True
         _processing_since = time.monotonic()
         app = QtWidgets.QApplication.instance()
@@ -263,12 +322,21 @@ def dispatch_to_gui(
             cancelled = started_at is None
     if cancelled:
         queued_for = time.monotonic() - queued_at
+        last_defer = _last_defer
         if _processing:
             busy_for = time.monotonic() - _processing_since
             hint = (
                 f" (GUI thread has been busy for {busy_for:.1f}s — for heavy OCCT"
                 " geometry consider execute_code_async, which must apply document"
                 " writes through its commit() helper)"
+            )
+        elif last_defer is not None and last_defer[1] >= queued_at:
+            # Never silently time out on a guard: name it so the next wedge
+            # diagnoses itself instead of looking like a dead server. A guard
+            # that held only an earlier task says nothing about this one.
+            hint = (
+                f" (GUI thread is not processing tasks: {last_defer[0]}; "
+                f"{_rpc_request_queue.qsize()} task(s) queued)"
             )
         else:
             hint = ""
