@@ -25,12 +25,12 @@ class _TimeoutTransport(xmlrpc.client.Transport):
         return conn
 
 
-def _is_budget(value: Any) -> bool:
+def _is_budget(value: Any, ceiling: float) -> bool:
+    """True for a number of seconds in (0, ceiling]; NaN and infinities fail."""
     return (
         isinstance(value, (int, float))
         and not isinstance(value, bool)
-        and math.isfinite(value)
-        and value > 0
+        and 0 < value <= ceiling
     )
 
 
@@ -87,7 +87,9 @@ class FreeCADConnection:
             ("max_execute_code_timeout", "MAX_EXECUTE_CODE_TIMEOUT"),
         ):
             value = status.get(key)
-            if _is_budget(value):
+            # Socket timeouts are derived from these budgets, so this client's
+            # own ceiling bounds how long an addon's report can make it wait.
+            if _is_budget(value, FreeCADConnection.MAX_EXECUTE_CODE_TIMEOUT):
                 setattr(self, attr, value)
         return addon_version_warning(status)
 

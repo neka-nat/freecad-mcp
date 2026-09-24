@@ -120,13 +120,20 @@ def test_client_adopts_the_addons_budgets() -> None:
     assert FreeCADConnection.EXECUTE_CODE_TIMEOUT == 90
 
 
-@pytest.mark.parametrize("bad", [0, -5, True, "90", float("inf"), None])
+@pytest.mark.parametrize(
+    "bad", [0, -5, True, "90", float("inf"), float("nan"), None, 1801, 1e9, 1e308]
+)
 def test_client_ignores_invalid_budgets(bad: object) -> None:
     _, connection = check(
         VersionedAddon(matching_status(execute_code_timeout=bad, max_execute_code_timeout=bad))
     )
     assert connection.EXECUTE_CODE_TIMEOUT == 90
     assert connection.MAX_EXECUTE_CODE_TIMEOUT == 1800
+
+
+def test_client_adopts_a_budget_up_to_its_own_ceiling() -> None:
+    _, connection = check(VersionedAddon(matching_status(execute_code_timeout=1800)))
+    assert connection.EXECUTE_CODE_TIMEOUT == 1800
 
 
 def test_unreachable_addon_does_not_block_the_check() -> None:
