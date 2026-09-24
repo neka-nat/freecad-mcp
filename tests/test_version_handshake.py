@@ -6,6 +6,7 @@ from pathlib import Path
 import time
 import tomllib
 import types
+import xml.etree.ElementTree as ET
 
 import pytest
 
@@ -82,6 +83,16 @@ def test_addon_and_server_share_protocol_and_package_version() -> None:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert addon.PROTOCOL_VERSION == PROTOCOL_VERSION
     assert addon.__version__ == pyproject["project"]["version"]
+
+
+def test_package_xml_version_matches_when_present() -> None:
+    # Addon Manager metadata (#94, #104) would be one more copy of the version.
+    expected = load_addon_version().__version__
+    for path in (ROOT / "package.xml", ROOT / "addon" / "FreeCADMCP" / "package.xml"):
+        if path.exists():
+            root = ET.parse(path).getroot()
+            found = root.findtext("{https://wiki.freecad.org/Package_Metadata}version")
+            assert found == expected, f"{path.relative_to(ROOT)}: {found} != {expected}"
 
 
 def test_matching_addon_gives_no_warning() -> None:
