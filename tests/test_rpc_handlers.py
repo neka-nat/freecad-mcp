@@ -39,6 +39,8 @@ def rpc_module(monkeypatch: pytest.MonkeyPatch) -> Iterator[types.ModuleType]:
 
         freecad.getDocument = get_document
         freecad.listDocuments = lambda: {"Doc": document}
+        # commands.py registers a spatial comment observer when it is imported.
+        freecad.addDocumentObserver = lambda _observer: None
         stubs = {
             "gui_dispatch": dispatch,
             "commands": types.SimpleNamespace(
@@ -306,6 +308,37 @@ def test_queries_fail_without_touching_a_wedged_document(
     rpc_module.FreeCAD.listDocuments = unexpected_read
     with pytest.raises(Fault, match="GUI_DISPATCH_STUCK.*execute_code"):
         getattr(rpc_module.FreeCADRPC(), method)(*args)
+
+
+def test_confirm_spatial_comment_resolution_uses_gui_dispatch(
+    rpc_module: types.ModuleType,
+) -> None:
+    rpc = rpc_module.FreeCADRPC()
+    dispatched: list[str] = []
+    original_dispatch = rpc_module.dispatch_to_gui
+
+    def dispatch(task, **kwargs):
+        dispatched.append(kwargs["operation_name"])
+        return original_dispatch(task, **kwargs)
+
+    def confirm(_self, doc_name: str, comment_id: str, note: str):
+        return {
+            "success": True,
+            "comment": {
+                "document": doc_name,
+                "id": comment_id,
+                "resolution_note": note,
+            },
+        }
+
+    rpc_module.dispatch_to_gui = dispatch
+    rpc_module.FreeCADRPC._confirm_spatial_comment_resolution_gui = confirm
+
+    result = rpc.confirm_spatial_comment_resolution("Doc", "comment-1", "Accepted")
+
+    assert result["success"] is True
+    assert result["comment"]["id"] == "comment-1"
+    assert dispatched == ["confirm_spatial_comment_resolution"]
 
 
 def test_status_and_document_reads_during_real_dispatch(

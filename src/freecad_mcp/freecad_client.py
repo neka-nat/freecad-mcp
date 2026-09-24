@@ -172,6 +172,27 @@ class FreeCADConnection:
     def list_documents(self) -> list[str]:
         return self.server.list_documents()
 
+    def create_spatial_comment(
+        self, doc_name: str, comment_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        return self.server.create_spatial_comment(doc_name, comment_data)
+
+    def list_spatial_comments(
+        self, doc_name: str, filters: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        return self.server.list_spatial_comments(doc_name, filters or {})
+
+    def update_spatial_comment(
+        self, doc_name: str, comment_id: str, patch: dict[str, Any]
+    ) -> dict[str, Any]:
+        return self.server.update_spatial_comment(doc_name, comment_id, patch)
+
+    def delete_spatial_comment(self, doc_name: str, comment_id: str) -> dict[str, Any]:
+        return self.server.delete_spatial_comment(doc_name, comment_id)
+
+    def get_current_selection_anchor(self, doc_name: str) -> dict[str, Any]:
+        return self.server.get_current_selection_anchor(doc_name)
+
     def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600) -> dict[str, Any]:
         # Both queueing and solving can consume `timeout` seconds each.
         socket_timeout = max(self._timeout, 2 * timeout + self.RPC_TIMEOUT_MARGIN)

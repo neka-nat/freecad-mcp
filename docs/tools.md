@@ -23,6 +23,11 @@
 | `insert_part_from_library` | Insert a part from the [FreeCAD parts library](https://github.com/FreeCAD/FreeCAD-library). |
 | `get_parts_list` | List parts in the [FreeCAD parts library](https://github.com/FreeCAD/FreeCAD-library). |
 | `run_fem_analysis` | Run CalculiX on an existing analysis and return summary results. |
+| `create_spatial_comment` | Attach feedback to a point, object, or subelement. |
+| `list_spatial_comments` | List unresolved or filtered spatial comments for a document. |
+| `propose_spatial_comment_resolution` | Mark a comment as ready for the user to confirm. |
+| `delete_spatial_comment` | Delete a spatial feedback comment. |
+| `get_current_selection_anchor` | Return the current FreeCAD selection as a reusable comment anchor. |
 
 See [code execution](execution.md) for execution modes, shared script state,
 background job tracking, and timeout handling.
@@ -31,7 +36,7 @@ background job tracking, and timeout handling.
 
 The following tools return optional screenshots: `create_object`, `edit_object`,
 `delete_object`, `execute_code`, `insert_part_from_library`, `get_objects`,
-`get_object`, and `run_fem_analysis`.
+`get_object`, `create_spatial_comment`, and `run_fem_analysis`.
 
 | Parameter | Default | Purpose |
 | --- | --- | --- |
@@ -45,6 +50,21 @@ Use `get_view` to request a screenshot explicitly; it is available even with
 `--only-text-feedback`. It takes `view_name` and optional `width`, `height`, and
 `focus_object` parameters. Supported views are `Isometric`, `Front`, `Top`,
 `Right`, `Back`, `Left`, `Bottom`, `Dimetric`, and `Trimetric`.
+
+## Spatial feedback comments
+
+The **Add Spatial Comment** command in the FreeCAD MCP workbench attaches feedback
+to a picked point, object, face, edge, or vertex. Comments are stored in a sidecar
+JSON file next to the `.FCStd` file, or under `freecad_mcp_comments/` in FreeCAD
+user data when the document is unsaved.
+
+FreeCAD UI commands: **Add Spatial Comment**, **Edit Spatial Comment**,
+**Sync Spatial Comments**, and **Confirm Comment Resolution**.
+
+Only a user can close a comment. An MCP client marks work ready for review with
+`propose_spatial_comment_resolution`; confirming the resolution requires the
+FreeCAD UI command, or a direct XML-RPC call to
+`confirm_spatial_comment_resolution`.
 
 ## FEM analysis
 

@@ -16,6 +16,16 @@ from xmlrpc.client import Fault
 
 from PySide import QtCore
 
+from rpc_server.comments import (
+    anchor_from_selection,
+    confirm_comment_resolution as comments_confirm_comment_resolution,
+    create_comment as comments_create_comment,
+    delete_comment as comments_delete_comment,
+    list_comments as comments_list_comments,
+    render_comment_markers,
+    sidecar_path_for_doc,
+    update_comment as comments_update_comment,
+)
 from rpc_server.commands import register_commands, schedule_toggle_sync
 from rpc_server.fem_executor import run_fem_analysis as _run_fem_analysis
 from rpc_server.gui_dispatch import (
@@ -224,6 +234,73 @@ class FreeCADRPC:
         if _ok(res):
             return {"success": True, "document_name": doc_name}
         return _err(res)
+
+    def create_spatial_comment(
+        self, doc_name: str, comment_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        res = dispatch_to_gui(
+            lambda: self._create_spatial_comment_gui(doc_name, comment_data),
+            timeout=self.TIMEOUT,
+            operation_name="create_spatial_comment",
+        )
+        return res if isinstance(res, dict) else _err(res)
+
+    def list_spatial_comments(
+        self, doc_name: str, filters: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        res = dispatch_to_gui(
+            lambda: self._list_spatial_comments_gui(doc_name, filters or {}),
+            timeout=self.TIMEOUT,
+            operation_name="list_spatial_comments",
+        )
+        return res if isinstance(res, dict) else _err(res)
+
+    def update_spatial_comment(
+        self, doc_name: str, comment_id: str, patch: dict[str, Any]
+    ) -> dict[str, Any]:
+        res = dispatch_to_gui(
+            lambda: self._update_spatial_comment_gui(doc_name, comment_id, patch),
+            timeout=self.TIMEOUT,
+            operation_name="update_spatial_comment",
+        )
+        return res if isinstance(res, dict) else _err(res)
+
+    def delete_spatial_comment(self, doc_name: str, comment_id: str) -> dict[str, Any]:
+        res = dispatch_to_gui(
+            lambda: self._delete_spatial_comment_gui(doc_name, comment_id),
+            timeout=self.TIMEOUT,
+            operation_name="delete_spatial_comment",
+        )
+        return res if isinstance(res, dict) else _err(res)
+
+    def confirm_spatial_comment_resolution(
+        self,
+        doc_name: str,
+        comment_id: str,
+        resolution_note: str | None = None,
+    ) -> dict[str, Any]:
+        """Confirm final resolution of a spatial comment.
+
+        The MCP layer intentionally exposes only proposal, not final resolution.
+        This XML-RPC method exists for FreeCAD UI commands and direct smoke tests
+        that emulate a user-confirmed action.
+        """
+        res = dispatch_to_gui(
+            lambda: self._confirm_spatial_comment_resolution_gui(
+                doc_name, comment_id, resolution_note
+            ),
+            timeout=self.TIMEOUT,
+            operation_name="confirm_spatial_comment_resolution",
+        )
+        return res if isinstance(res, dict) else _err(res)
+
+    def get_current_selection_anchor(self, doc_name: str) -> dict[str, Any]:
+        res = dispatch_to_gui(
+            lambda: self._get_current_selection_anchor_gui(doc_name),
+            timeout=self.TIMEOUT,
+            operation_name="get_current_selection_anchor",
+        )
+        return res if isinstance(res, dict) else _err(res)
 
     def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600) -> dict[str, Any]:
         """Run the CalculiX solver on an existing Fem::FemAnalysis and return summary results."""
@@ -495,6 +572,97 @@ class FreeCADRPC:
         doc.recompute()
         FreeCAD.Console.PrintMessage(f"Document '{doc.Name}' created via RPC.\n")
         return {"success": True, "document_name": doc.Name}
+
+    def _get_document_or_error(self, doc_name: str):
+        try:
+            return FreeCAD.getDocument(doc_name), None
+        except Exception:
+            return None, {
+                "success": False,
+                "error": f"Document '{doc_name}' not found.",
+            }
+
+    def _create_spatial_comment_gui(
+        self, doc_name: str, comment_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        doc, error = self._get_document_or_error(doc_name)
+        if error:
+            return error
+        try:
+            comment = comments_create_comment(doc, comment_data)
+            render_comment_markers(doc)
+            FreeCAD.Console.PrintMessage(
+                f"MCP spatial comment created: {comment['id']}\n"
+            )
+            return {
+                "success": True,
+                "comment": comment,
+                "sidecar_path": sidecar_path_for_doc(doc),
+            }
+        except Exception as e:
+            return {"success": False, "error": f"{type(e).__name__}: {e}"}
+
+    def _list_spatial_comments_gui(
+        self, doc_name: str, filters: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        doc, error = self._get_document_or_error(doc_name)
+        if error:
+            return error
+        return {
+            "success": True,
+            "document": doc_name,
+            "sidecar_path": sidecar_path_for_doc(doc),
+            "comments": comments_list_comments(doc, filters),
+        }
+
+    def _update_spatial_comment_gui(
+        self, doc_name: str, comment_id: str, patch: dict[str, Any]
+    ) -> dict[str, Any]:
+        doc, error = self._get_document_or_error(doc_name)
+        if error:
+            return error
+        try:
+            comment = comments_update_comment(doc, comment_id, patch)
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        if not comment:
+            return {"success": False, "error": f"Comment '{comment_id}' not found."}
+        render_comment_markers(doc)
+        return {"success": True, "comment": comment}
+
+    def _confirm_spatial_comment_resolution_gui(
+        self,
+        doc_name: str,
+        comment_id: str,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        doc, error = self._get_document_or_error(doc_name)
+        if error:
+            return error
+        comment = comments_confirm_comment_resolution(doc, comment_id, note)
+        if not comment:
+            return {"success": False, "error": f"Comment '{comment_id}' not found."}
+        render_comment_markers(doc)
+        return {"success": True, "comment": comment}
+
+    def _delete_spatial_comment_gui(
+        self, doc_name: str, comment_id: str
+    ) -> dict[str, Any]:
+        doc, error = self._get_document_or_error(doc_name)
+        if error:
+            return error
+        deleted = comments_delete_comment(doc, comment_id)
+        render_comment_markers(doc)
+        return {"success": deleted, "comment_id": comment_id}
+
+    def _get_current_selection_anchor_gui(self, doc_name: str) -> dict[str, Any]:
+        doc, error = self._get_document_or_error(doc_name)
+        if error:
+            return error
+        try:
+            return {"success": True, "anchor": anchor_from_selection(doc)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     def _create_object_gui(self, doc_name, obj: Object):
         return create_object_gui(doc_name, obj)

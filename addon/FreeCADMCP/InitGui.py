@@ -1,20 +1,33 @@
-import sys as _sys
 import os as _os
+import sys as _sys
+
+import FreeCAD
+import FreeCADGui as Gui
+from PySide import QtCore
+
 try:
     _addon_dir = _os.path.dirname(_os.path.abspath(__file__))
 except NameError:
     import inspect as _inspect
-    _addon_dir = _os.path.dirname(_os.path.abspath(_inspect.getfile(_inspect.currentframe())))
+
+    _addon_dir = _os.path.dirname(
+        _os.path.abspath(_inspect.getfile(_inspect.currentframe()))
+    )
 if _addon_dir not in _sys.path:
     _sys.path.insert(0, _addon_dir)
 
+try:
+    _WorkbenchBase = Workbench
+except NameError:
+    _WorkbenchBase = Gui.Workbench
 
-class FreeCADMCPAddonWorkbench(Workbench):
+
+class FreeCADMCPAddonWorkbench(_WorkbenchBase):
     MenuText = "MCP Addon"
     ToolTip = "Addon for MCP Communication"
 
     def Initialize(self):
-        from rpc_server import rpc_server
+        from rpc_server import rpc_server  # noqa: F401
 
         commands = [
             "Start_RPC_Server",
@@ -22,6 +35,10 @@ class FreeCADMCPAddonWorkbench(Workbench):
             "Toggle_Auto_Start",
             "Toggle_Remote_Connections",
             "Configure_Allowed_IPs",
+            "Add_Spatial_Comment",
+            "Edit_Spatial_Comment",
+            "Sync_Spatial_Comments",
+            "Confirm_Spatial_Comment_Resolution",
         ]
         self.appendToolbar("FreeCAD MCP", commands)
         self.appendMenu("FreeCAD MCP", commands)
@@ -33,7 +50,10 @@ class FreeCADMCPAddonWorkbench(Workbench):
         pass
 
     def ContextMenu(self, recipient):
-        pass
+        self.appendContextMenu(
+            "Spatial Comment",
+            ["Edit_Spatial_Comment", "Confirm_Selected_Spatial_Comment_Resolution"],
+        )
 
     def GetClassName(self):
         return "Gui::PythonWorkbench"
@@ -55,7 +75,5 @@ def _auto_start_mcp():
     except Exception as e:
         FreeCAD.Console.PrintWarning(f"[MCP] Auto-start failed: {e}\n")
 
-
-from PySide import QtCore
 
 QtCore.QTimer.singleShot(0, _auto_start_mcp)
