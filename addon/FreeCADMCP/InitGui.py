@@ -46,9 +46,10 @@ Gui.addWorkbench(FreeCADMCPAddonWorkbench())
 def _auto_start_mcp():
     try:
         from rpc_server import rpc_server
+        from rpc_server.settings import auto_start_requested
 
         settings = rpc_server.load_settings()
-        if not settings.get("auto_start_rpc", False):
+        if not auto_start_requested(settings):
             return
 
         msg = rpc_server.start_rpc_server()
