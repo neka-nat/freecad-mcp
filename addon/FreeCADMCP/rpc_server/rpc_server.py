@@ -33,7 +33,7 @@ from rpc_server.property_mapper import Object
 from rpc_server.serialize import serialize_object
 from rpc_server.settings import load_settings, save_settings
 from rpc_server.version import PROTOCOL_VERSION, __version__ as ADDON_VERSION
-from rpc_server.view_manager import save_active_screenshot
+from rpc_server.view_manager import get_displayed_3d_view, save_active_screenshot
 
 rpc_server_thread = None
 rpc_server_instance = None
@@ -465,12 +465,13 @@ class FreeCADRPC:
         os.close(fd)
 
         def task():
-            try:
-                active_view = FreeCADGui.ActiveDocument.ActiveView
-            except Exception:
-                return False
-            if active_view is None or not hasattr(active_view, "saveImage"):
-                view_type = type(active_view).__name__ if active_view is not None else "None"
+            active_view = get_displayed_3d_view()
+            if active_view is None:
+                try:
+                    shown = FreeCADGui.activeView()
+                except Exception:
+                    shown = None
+                view_type = type(shown).__name__ if shown is not None else "None"
                 FreeCAD.Console.PrintWarning(
                     f"MCP RPC: view type '{view_type}' does not support screenshots\n"
                 )

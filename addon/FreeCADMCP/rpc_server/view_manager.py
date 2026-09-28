@@ -91,6 +91,24 @@ def apply_view_orientation(view: Any, view_name: str) -> None:
             )
 
 
+def get_displayed_3d_view() -> Any:
+    """Return the 3D view currently displayed in the main window, or None.
+
+    ``FreeCADGui.ActiveDocument.ActiveView`` can still return a document's 3D
+    view while another tab (TechDraw page, Start page, spreadsheet...) is in
+    front. Capturing that hidden view, and sending ``ViewSelection`` to an
+    active MDI view that is not the one being captured, can crash FreeCAD a
+    few seconds later. Only the view actually shown is safe to capture.
+    """
+    try:
+        view = FreeCADGui.activeView()
+    except Exception:
+        return None
+    if view is None or not hasattr(view, "saveImage"):
+        return None
+    return view
+
+
 def save_active_screenshot(
     save_path: str,
     view_name: str = "Isometric",
@@ -104,9 +122,12 @@ def save_active_screenshot(
     legacy GUI-handler return contract).
     """
     try:
-        view = FreeCADGui.ActiveDocument.ActiveView
-        if not hasattr(view, "saveImage"):
-            return "Current view does not support screenshots"
+        view = get_displayed_3d_view()
+        if view is None:
+            return (
+                "The tab in front is not a 3D view (TechDraw page, Start page...); "
+                "bring the 3D view to the front"
+            )
 
         apply_view_orientation(view, view_name)
 
