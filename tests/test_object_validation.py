@@ -36,9 +36,20 @@ class FakeDocument:
         self.Name = "Doc"
         self.obj = obj
         self.recompute_count = 0
+        self.Objects: list[object] = []
 
     def addObject(self, _obj_type: str, _name: str) -> object:
+        self.Objects.append(self.obj)
         return self.obj
+
+    def openTransaction(self, _name: str) -> None:
+        pass
+
+    def commitTransaction(self) -> None:
+        pass
+
+    def abortTransaction(self) -> None:
+        pass
 
     def getObject(self, name: str) -> object | None:
         return self.obj if name == getattr(self.obj, "Name", None) else None
