@@ -746,16 +746,28 @@ def run_fem_analysis(
 ) -> list[TextContent | ImageContent]:
     """Run the CalculiX solver on an existing Fem::FemAnalysis container and return summary results.
 
-    Prerequisites in the document:
+    Prerequisites in the document, all created with `create_object`:
     - A Part-derived solid (e.g. Part::Box, PartDesign::Body) acting as the geometry.
-    - A Fem::AnalysisPython container created via `create_object`.
-    - A Fem::MaterialCommon assigned to the geometry, added to the analysis.
-    - A Fem::FemMeshGmsh referencing the geometry, added to the analysis (the
-      mesh is generated automatically when created via `create_object`).
+    - A Fem::AnalysisPython container.
+    - A material: type "Fem::MaterialCommon" with analysis_name set (built with
+      ObjectsFem.makeMaterialSolid) and its Material given as a dict with units,
+      e.g. {"Name": "Steel", "YoungsModulus": "210 GPa", "PoissonRatio": "0.3",
+      "Density": "7900 kg/m^3"}. A dict read from the material library can
+      come back empty; give the values.
+    - A mesh: type "Fem::FemMeshGmsh" with analysis_name, Shape (the geometry)
+      and CharacteristicLengthMax / CharacteristicLengthMin; it is generated
+      when created. A section needs several elements across its thickness,
+      or bending stress comes out far too low.
     - At least one Fem::ConstraintFixed and one Fem::ConstraintForce (or
-      ConstraintPressure) bound to faces of the geometry, added to the analysis.
+      ConstraintPressure) whose References are faces of the geometry.
+    - Set Force with its unit, e.g. "1000 N": a plain number is read as
+      millinewtons, so Force = 1000 applies 1 N. The force acts along the
+      normal of the loaded face unless Direction links an edge or face;
+      Reversed flips it.
 
-    A SolverCcxTools is auto-created if the analysis has none.
+    A SolverCcxTools is auto-created if the analysis has none. The reply
+    lists the loads as the solver saw them (in N and MPa, with their faces
+    and direction): check them before trusting the stress figures.
 
     The solver runs synchronously on the FreeCAD GUI thread and blocks all
     other RPC calls for its duration; do not fan out parallel requests.
