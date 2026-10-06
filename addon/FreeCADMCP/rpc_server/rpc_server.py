@@ -16,6 +16,7 @@ from xmlrpc.client import Fault
 
 from PySide import QtCore
 
+from rpc_server import face_colors
 from rpc_server.commands import register_commands, schedule_toggle_sync
 from rpc_server.fem_executor import run_fem_analysis as _run_fem_analysis
 from rpc_server.gui_dispatch import (
@@ -380,10 +381,16 @@ class FreeCADRPC:
             timeout_s = min(timeout_s, self.MAX_EXECUTE_CODE_TIMEOUT)
 
         output_buffer = io.StringIO()
+        repainted: list[str] = []
 
         def task():
+            # Face colours are stored as a list indexed by face number, so a
+            # boolean that renumbers the faces silently drops them to one flat
+            # colour, and the old order is gone by the time anyone notices.
+            colors_before = face_colors.snapshot()
             with contextlib.redirect_stdout(output_buffer):
                 exec(code, _EXEC_NAMESPACE)
+            repainted.extend(face_colors.restore(colors_before))
             return True
 
         res = dispatch_to_gui(
@@ -393,10 +400,13 @@ class FreeCADRPC:
         )
         if _ok(res):
             FreeCAD.Console.PrintMessage("Python code executed successfully.\n")
-            return {
+            result = {
                 "success": True,
                 "message": "Python code executed successfully.\nOutput: " + output_buffer.getvalue(),
             }
+            if repainted:
+                result["face_colors_restored"] = repainted
+            return result
         # Log the offending code (truncated) to make errors traceable
         code_preview = code if len(code) <= 800 else code[:800] + "\n...(truncated)"
         FreeCAD.Console.PrintError(
