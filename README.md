@@ -1,6 +1,16 @@
-[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/neka-nat-freecad-mcp-badge.png)](https://mseep.ai/app/neka-nat-freecad-mcp)
-
 # FreeCAD MCP
+
+<p align="left">
+ <a href="https://www.star-history.com/neka-nat/freecad-mcp">
+  <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=neka-nat/freecad-mcp&type=trending&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/badge?repo=neka-nat/freecad-mcp&type=trending" />
+   <img alt="GitHub Trending Repository of the Day" src="https://api.star-history.com/badge?repo=neka-nat/freecad-mcp&type=trending" />
+  </picture>
+ </a>
+</p>
+
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/neka-nat-freecad-mcp-badge.png)](https://mseep.ai/app/neka-nat-freecad-mcp)
 
 Control FreeCAD from Claude Desktop and other MCP clients. Create and edit models,
 run Python scripts, inspect documents, and run FEM analyses.
