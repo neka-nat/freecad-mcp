@@ -33,7 +33,6 @@ def connection(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(FreeCADConnection, "_make_proxy", fake_make_proxy)
     conn = FreeCADConnection()
-    socket_timeouts.clear()  # drop the proxy built in __init__
     return conn, calls, socket_timeouts
 
 

@@ -58,7 +58,6 @@ class FreeCADConnection:
         # those messages to the model.
         self._headers = [("Authorization", f"Bearer {token}")] if token else []
         self._timeout = timeout
-        self.server = self._make_proxy(timeout)
 
     def _make_proxy(self, timeout: float) -> xmlrpc.client.ServerProxy:
         return xmlrpc.client.ServerProxy(
@@ -68,14 +67,18 @@ class FreeCADConnection:
         )
 
     def disconnect(self) -> None:
-        # Transport.close() clears cached HTTP connections if one was opened.
-        transport = getattr(self.server, "_ServerProxy__transport", None)
-        close = getattr(transport, "close", None)
-        if callable(close):
-            close()
+        """No idle connection is retained; each call closes its own transport."""
+
+    def _call(self, method: str, *args: Any) -> Any:
+        # ServerProxy caches an HTTPConnection and is not thread-safe. MCP 2.x
+        # runs sync tools in worker threads, so even ordinary reads and writes
+        # need a separate transport per call. Do not lock around a GUI request:
+        # status/ping must remain usable while that request waits on FreeCAD.
+        with self._make_proxy(self._timeout) as proxy:
+            return getattr(proxy, method)(*args)
 
     def ping(self) -> bool:
-        return self.server.ping()
+        return self._call("ping")
 
     def get_rpc_status(self) -> dict[str, Any]:
         with self._make_proxy(self._timeout) as proxy:
@@ -109,23 +112,22 @@ class FreeCADConnection:
         return addon_version_warning(status)
 
     def create_document(self, name: str) -> dict[str, Any]:
-        return self.server.create_document(name)
+        return self._call("create_document", name)
 
     def create_object(self, doc_name: str, obj_data: dict[str, Any]) -> dict[str, Any]:
-        return self.server.create_object(doc_name, obj_data)
+        return self._call("create_object", doc_name, obj_data)
 
     def edit_object(self, doc_name: str, obj_name: str, obj_data: dict[str, Any]) -> dict[str, Any]:
-        return self.server.edit_object(doc_name, obj_name, obj_data)
+        return self._call("edit_object", doc_name, obj_name, obj_data)
 
     def delete_object(self, doc_name: str, obj_name: str) -> dict[str, Any]:
-        return self.server.delete_object(doc_name, obj_name)
-
+        return self._call("delete_object", doc_name, obj_name)
 
     def reload_document(self, doc_name: str) -> dict[str, Any]:
-        return self.server.reload_document(doc_name)
+        return self._call("reload_document", doc_name)
 
     def insert_part_from_library(self, relative_path: str) -> dict[str, Any]:
-        return self.server.insert_part_from_library(relative_path)
+        return self._call("insert_part_from_library", relative_path)
 
     def execute_code(self, code: str, timeout: float | None = None) -> dict[str, Any]:
         # The addon permits a full queue budget followed by a full run budget.
@@ -150,7 +152,7 @@ class FreeCADConnection:
             return proxy.execute_code(code, run_budget)
 
     def execute_code_async(self, code: str) -> dict[str, Any]:
-        return self.server.execute_code_async(code)
+        return self._call("execute_code_async", code)
 
     def get_async_status(self, job_id: str = "") -> dict[str, Any]:
         # Polling must not share an HTTP connection with a blocked GUI request.
@@ -165,22 +167,22 @@ class FreeCADConnection:
         focus_object: str | None = None,
     ) -> str | None:
         try:
-            return self.server.get_active_screenshot(view_name, width, height, focus_object)
+            return self._call("get_active_screenshot", view_name, width, height, focus_object)
         except Exception as e:
             logger.error(f"Error getting screenshot: {e}")
             return None
 
     def get_objects(self, doc_name: str) -> list[dict[str, Any]]:
-        return self.server.get_objects(doc_name)
+        return self._call("get_objects", doc_name)
 
     def get_object(self, doc_name: str, obj_name: str) -> dict[str, Any]:
-        return self.server.get_object(doc_name, obj_name)
+        return self._call("get_object", doc_name, obj_name)
 
     def get_parts_list(self) -> list[str]:
-        return self.server.get_parts_list()
+        return self._call("get_parts_list")
 
     def list_documents(self) -> list[str]:
-        return self.server.list_documents()
+        return self._call("list_documents")
 
     def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600) -> dict[str, Any]:
         # Both queueing and solving can consume `timeout` seconds each.

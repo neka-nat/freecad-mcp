@@ -139,7 +139,8 @@ def test_client_sends_the_token_without_exposing_it() -> None:
     assert rejected.value.errcode == 401
     # Tools return error text to the model, so it must not carry the token.
     assert "wrong-token" not in str(rejected.value)
-    assert "wrong-token" not in repr(wrong.server)
+    with wrong._make_proxy(5) as proxy:
+        assert "wrong-token" not in repr(proxy)
 
 
 @pytest.mark.parametrize("client_token", [None, "wrong-token"])
