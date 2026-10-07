@@ -160,7 +160,7 @@ def create_object(
     obj_type: str,
     obj_name: str,
     analysis_name: str | None = None,
-    obj_properties: dict[str, Any] = None,
+    obj_properties: dict[str, Any] | None = None,
     include_screenshot: bool = True,
     view_name: ViewName = "Isometric",
 ) -> list[TextContent | ImageContent]:
