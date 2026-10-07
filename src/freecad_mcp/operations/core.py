@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import Any
 
@@ -295,6 +296,66 @@ def get_rpc_status_operation(freecad: FreeCADConnection) -> ToolResponse:
         return text_response(f"Failed to get RPC status: {str(e)}")
 
 
+_LOADS_MARK = "__freecad_mcp_loads__"
+
+# Reads the analysis' loads as the solver will see them. A plain number in
+# ConstraintForce.Force is millinewtons (FreeCAD's force unit), so Force = 1000
+# applies 1 N and the results come out 1000 times too low without any error
+# (issue #158); the load direction comes from the face normal unless Direction
+# is set. Reporting the loads in N with their direction makes that visible.
+_LOADS_CODE = """
+import json as _json
+def _value(quantity, unit):
+    q = quantity.getValueAs(unit)
+    return float(getattr(q, "Value", q))
+def _refs(constraint):
+    return [obj.Name + ":" + sub for obj, subs in constraint.References for sub in (subs if isinstance(subs, (list, tuple)) else [subs])]
+_loads = []
+for _m in FreeCAD.getDocument({doc!r}).getObject({analysis!r}).Group:
+    if _m.TypeId == "Fem::ConstraintForce":
+        _dir = getattr(_m, "DirectionVector", None)
+        _loads.append(dict(name=_m.Name, kind="force", newtons=_value(_m.Force, "N"), references=_refs(_m),
+                           direction=[round(_dir.x, 6), round(_dir.y, 6), round(_dir.z, 6)] if _dir is not None else None,
+                           direction_from=("along " + _m.Direction[0].Name + ":" + ",".join(_m.Direction[1])) if getattr(_m, "Direction", None) else "normal of the loaded face",
+                           reversed=bool(getattr(_m, "Reversed", False))))
+    elif _m.TypeId == "Fem::ConstraintPressure":
+        _loads.append(dict(name=_m.Name, kind="pressure", megapascals=_value(_m.Pressure, "MPa"), references=_refs(_m),
+                           reversed=bool(getattr(_m, "Reversed", False))))
+    elif _m.TypeId == "Fem::ConstraintFixed":
+        _loads.append(dict(name=_m.Name, kind="fixed", references=_refs(_m)))
+print({mark!r} + _json.dumps(_loads))
+"""
+
+
+def _applied_loads(freecad: FreeCADConnection, doc_name: str, analysis_name: str) -> list[dict[str, Any]] | None:
+    """The analysis' loads in N and MPa, or None when they cannot be read."""
+    try:
+        reply = freecad.execute_code(_LOADS_CODE.format(doc=doc_name, analysis=analysis_name, mark=_LOADS_MARK))
+        for line in str(reply.get("message", "")).splitlines():
+            if _LOADS_MARK in line:
+                return json.loads(line.split(_LOADS_MARK, 1)[1])
+    except Exception as e:
+        logger.warning(f"Could not read the FEM loads: {e}")
+    return None
+
+
+def _describe_loads(loads: list[dict[str, Any]] | None) -> str:
+    if not loads:
+        return ""
+    parts = []
+    for load in loads:
+        where = ", ".join(load.get("references", [])) or "no face"
+        if load["kind"] == "force":
+            parts.append(f"{load['name']} = {load['newtons']:.6g} N on {where}, direction {load['direction']} ({load['direction_from']})")
+        elif load["kind"] == "pressure":
+            parts.append(f"{load['name']} = {load['megapascals']:.6g} MPa on {where}")
+        else:
+            parts.append(f"{load['name']} fixed on {where}")
+    note = (" Check these loads: a plain number in Force is read as millinewtons, so set Force with its unit, e.g. '1000 N'."
+            if any(load["kind"] == "force" for load in loads) else "")
+    return " Loads applied: " + "; ".join(parts) + "." + note
+
+
 def run_fem_analysis_operation(
     freecad: FreeCADConnection,
     only_text_feedback: bool,
@@ -305,6 +366,7 @@ def run_fem_analysis_operation(
     view_name: str = "Isometric",
 ) -> ToolResponse:
     try:
+        loads = _applied_loads(freecad, doc_name, analysis_name)
         res = freecad.run_fem_analysis(doc_name, analysis_name, timeout)
         if res.get("success"):
             def fmt(v, unit):
@@ -317,8 +379,10 @@ def run_fem_analysis_operation(
                     f"max von Mises = {fmt(res.get('max_von_mises_MPa'), 'MPa')}, "
                     f"max displacement = {fmt(res.get('max_displacement_mm'), 'mm')} "
                     f"({res.get('node_count')} nodes)."
+                    + _describe_loads(loads)
                 ),
                 **res,
+                "applied_loads": loads,
             })
             return add_screenshot_if_available(response, screenshot, skip_screenshot)
         return json_response({
