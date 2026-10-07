@@ -54,7 +54,10 @@ def rpc_module(monkeypatch: pytest.MonkeyPatch) -> Iterator[types.ModuleType]:
             ),
             "serialize": types.SimpleNamespace(serialize_object=lambda obj: {"Name": obj.Name}),
             "settings": types.SimpleNamespace(load_settings=lambda: {}, save_settings=lambda _: None),
-            "view_manager": types.SimpleNamespace(save_active_screenshot=lambda *_args: True),
+            "view_manager": types.SimpleNamespace(
+                get_displayed_3d_view=lambda: None,
+                save_active_screenshot=lambda *_args: True,
+            ),
         }
         with monkeypatch.context() as patch:
             for name, stub in stubs.items():

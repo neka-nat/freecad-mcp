@@ -115,7 +115,7 @@ def save_active_screenshot(
     width: int | None = None,
     height: int | None = None,
     focus_object: str | None = None,
-):
+) -> bool | str:
     """Save a PNG of the active view to ``save_path``.
 
     Returns ``True`` on success, or an error string on failure (preserves the

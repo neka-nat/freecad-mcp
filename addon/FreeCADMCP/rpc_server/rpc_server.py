@@ -455,7 +455,7 @@ class FreeCADRPC:
         width: int | None = None,
         height: int | None = None,
         focus_object: str | None = None,
-    ) -> str:
+    ) -> str | None:
         """Get a screenshot of the active view as a base64-encoded PNG string.
 
         Returns None if the active view does not support screenshots
@@ -464,7 +464,7 @@ class FreeCADRPC:
         fd, tmp_path = tempfile.mkstemp(suffix=".png")
         os.close(fd)
 
-        def task():
+        def task() -> bool | str:
             active_view = get_displayed_3d_view()
             if active_view is None:
                 try:
