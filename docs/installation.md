@@ -88,6 +88,64 @@ mkdir -p ~/Library/Application\ Support/FreeCAD/v1-1/Mod/
 cp -r addon/FreeCADMCP ~/Library/Application\ Support/FreeCAD/v1-1/Mod/
 ```
 
+### Automated install and update
+
+`scripts/install_addon.sh` (Linux) and `scripts/install_addon.bat` (Windows)
+automate the copy above. Rather than hardcoding a path from the table, they ask
+FreeCAD itself for the running installation's addon directory
+(`os.path.join(FreeCAD.getUserAppDataDir(), "Mod")`), so version-scoped layouts
+such as `v1-1` need no manual lookup.
+
+Both scripts locate headless FreeCAD, report the FreeCAD version and addon
+directory they found, refuse to run while FreeCAD is open, fetch
+`addon/FreeCADMCP` from this repository, and back up any existing install before
+replacing it. A failed or partial copy is rolled back to that backup.
+
+Linux:
+
+```bash
+./scripts/install_addon.sh
+```
+
+Windows, from Command Prompt or PowerShell:
+
+```bat
+scripts\install_addon.bat
+```
+
+Install from a specific branch or tag with `-b`, to match the `freecad-mcp`
+package you have installed:
+
+```bash
+./scripts/install_addon.sh -b v0.1.24
+```
+
+```bat
+scripts\install_addon.bat -b v0.1.24
+```
+
+Snap, AppImage, or a custom installation may not be findable automatically. On
+Linux, pass the command that starts headless FreeCAD with `-c`:
+
+```bash
+./scripts/install_addon.sh -c "snap run --command=freecadcmd freecad"
+```
+
+On Windows, pass the path to `FreeCADCmd.exe`:
+
+```bat
+scripts\install_addon.bat "C:\Program Files\FreeCAD 1.1\bin\FreeCADCmd.exe"
+```
+
+Both scripts update **only the addon**. The `freecad-mcp` package is a separate
+install and has to be kept current separately, for example with
+`uvx freecad-mcp@latest` or `pip install -U freecad-mcp`. The addon and the
+package are versioned independently, so keep both current.
+
+Installing through FreeCAD's AddOn Manager is not supported yet, because it
+needs a `package.xml`; that is tracked in
+[#104](https://github.com/neka-nat/freecad-mcp/issues/104).
+
 ## Start the RPC server
 
 Restart FreeCAD after installing the addon, then select **MCP Addon** from the
