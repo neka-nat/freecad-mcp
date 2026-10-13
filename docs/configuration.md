@@ -15,6 +15,23 @@ On the next FreeCAD launch, the RPC server starts automatically once the
 application finishes loading. Uncheck **Auto-Start Server** in the same menu to
 disable it.
 
+For a container or a provisioning script there is no one to click the toolbar, so
+the addon also reads the `FREECAD_MCP_AUTO_START` environment variable and lets it
+override the saved setting. Set it to `1`, `true`, `yes` or `on` to start the
+server on launch, or to `0`, `false`, `no` or `off` to leave it stopped. Values
+are matched case-insensitively; an unset or blank variable leaves the saved
+setting in charge, and an unrecognised value is reported in the Report View and
+ignored. FreeCAD must inherit the variable, so set it in the environment that
+launches FreeCAD itself:
+
+```bash
+FREECAD_MCP_AUTO_START=1 freecad
+```
+
+```dockerfile
+ENV FREECAD_MCP_AUTO_START=1
+```
+
 ## Text feedback and screenshots
 
 Pass `--only-text-feedback` to omit optional screenshots from tool feedback and
