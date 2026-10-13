@@ -1,10 +1,11 @@
 """Version handshake between the MCP server and the FreeCAD addon (#145)."""
 
 import importlib.util
+from importlib.metadata import version
 import json
 from pathlib import Path
+import shutil
 import time
-import tomllib
 import types
 import xml.etree.ElementTree as ET
 
@@ -23,8 +24,8 @@ ROOT = Path(__file__).resolve().parents[1]
 ADDON_VERSION_PATH = ROOT / "addon" / "FreeCADMCP" / "rpc_server" / "version.py"
 
 
-def load_addon_version() -> types.ModuleType:
-    spec = importlib.util.spec_from_file_location("_addon_version_test", ADDON_VERSION_PATH)
+def load_addon_version(path: Path = ADDON_VERSION_PATH) -> types.ModuleType:
+    spec = importlib.util.spec_from_file_location("_addon_version_test", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -80,19 +81,21 @@ def check(interface: object) -> tuple[str | None, FreeCADConnection]:
 
 def test_addon_and_server_share_protocol_and_package_version() -> None:
     addon = load_addon_version()
-    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert addon.PROTOCOL_VERSION == PROTOCOL_VERSION
-    assert addon.__version__ == pyproject["project"]["version"]
+    assert addon.__version__ == version("freecad-mcp")
 
 
-def test_package_xml_version_matches_when_present() -> None:
-    # Addon Manager metadata (#94, #104) would be one more copy of the version.
-    expected = load_addon_version().__version__
-    for path in (ROOT / "package.xml", ROOT / "addon" / "FreeCADMCP" / "package.xml"):
-        if path.exists():
-            root = ET.parse(path).getroot()
-            found = root.findtext("{https://wiki.freecad.org/Package_Metadata}version")
-            assert found == expected, f"{path.relative_to(ROOT)}: {found} != {expected}"
+def test_copied_addon_reads_its_own_metadata(tmp_path: Path) -> None:
+    # A manual Mod/ install has neither pyproject.toml nor the MCP package.
+    addon = tmp_path / "Mod" / "FreeCADMCP"
+    shutil.copytree(ROOT / "addon" / "FreeCADMCP", addon)
+    metadata = addon / "package.xml"
+    root = ET.parse(metadata)
+    node = root.find("{https://wiki.freecad.org/Package_Metadata}version")
+    assert node is not None
+    node.text = "9.8.7"
+    root.write(metadata, encoding="utf-8")
+    assert load_addon_version(addon / "rpc_server" / "version.py").__version__ == "9.8.7"
 
 
 def test_matching_addon_gives_no_warning() -> None:

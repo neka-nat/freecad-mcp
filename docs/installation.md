@@ -209,3 +209,29 @@ with its absolute path:
 Restart Claude Desktop after changing its configuration. When changing addon
 code, copy the updated `addon/FreeCADMCP` directory into FreeCAD's addon directory
 and restart FreeCAD as well.
+
+### Update the release version
+
+`addon/FreeCADMCP/package.xml` is the single source of the release version.
+The Python build reads it through Hatchling, and the addon reads the copy shipped
+in its own directory. The MCP server reports its installed package metadata.
+
+From the repository root, update the version and release date together:
+
+```bash
+uv run --no-project python scripts/bump_version.py 0.1.28
+uv run --locked python scripts/bump_version.py --check
+uv run --locked pytest -q
+uv build
+```
+
+The first command accepts increasing `X.Y.Z` versions and changes only
+`package.xml`; repeating the same version leaves the file unchanged. Replace
+`0.1.28` with the next release number. There are no version literals to update in
+`pyproject.toml`, Python modules, or `uv.lock`. uv tracks `package.xml` as a cache
+input, so the next `uv run` or `uv sync` refreshes the installed metadata.
+
+Copy the entire `addon/FreeCADMCP` directory, including `package.xml`, when
+installing the addon. `PROTOCOL_VERSION` remains separate from release numbering;
+change it on both sides only when the RPC contract changes as described in the
+version modules.

@@ -19,8 +19,15 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
       - run: uv lock --check
-      - run: uv run python -m compileall src addon
-      - run: uv run pytest -q
+      - run: uv run --locked python -m compileall src addon
+      - run: uv run --locked python scripts/bump_version.py --check
+      - run: uv run --locked pytest -q
+      # uv builds the wheel from the sdist, checking the version source is shipped.
+      - run: uv build
+      - name: Check installed wheel
+        run: |
+          uv run --isolated --no-project --with dist/*.whl python scripts/bump_version.py --check
+          uv run --isolated --no-project --with dist/*.whl freecad-mcp --help
 
   mcp-sdk-compatibility:
     runs-on: ubuntu-latest
@@ -36,5 +43,5 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv run --with '${{ matrix.mcp-requirement }}' freecad-mcp --help
-      - run: uv run --with '${{ matrix.mcp-requirement }}' pytest -q
+      - run: uv run --locked --with '${{ matrix.mcp-requirement }}' freecad-mcp --help
+      - run: uv run --locked --with '${{ matrix.mcp-requirement }}' pytest -q

@@ -1,6 +1,6 @@
 [project]
 name = "freecad-mcp"
-version = "0.1.27"
+dynamic = ["version"]
 description = "Add your description here"
 readme = "README.md"
 authors = [
@@ -23,6 +23,13 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.hatch.version]
+path = "addon/FreeCADMCP/package.xml"
+pattern = '<version>(?P<version>[^<]+)</version>'
+
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "addon/FreeCADMCP/package.xml" }]
 
 [tool.hatch.build.targets.sdist]
 exclude = ["assets", "results"]

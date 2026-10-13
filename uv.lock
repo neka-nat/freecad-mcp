@@ -204,7 +204,6 @@ wheels = [
 
 [[package]]
 name = "freecad-mcp"
-version = "0.1.27"
 source = { editable = "." }
 dependencies = [
     { name = "mcp", extra = ["cli"] },
