@@ -12,7 +12,7 @@ except ImportError:
     # FastMCP to MCPServer; the API surface used here is unchanged.
     from mcp.server.mcpserver import Context
     from mcp.server.mcpserver import MCPServer as FastMCP
-from mcp.types import ImageContent, TextContent
+from mcp.types import CallToolResult, ImageContent, TextContent
 
 from .freecad_client import FreeCADConnection
 from .operations import (
@@ -35,7 +35,7 @@ from .operations import (
     run_fem_analysis_operation,
 )
 from .prompt_text import ASSET_CREATION_STRATEGY
-from .responses import ToolResponse
+from .responses import ErrorResponse, ToolResponse
 from .server_state import ServerState
 
 
@@ -80,15 +80,21 @@ mcp = FastMCP(
 )
 
 
-def tool(fn: Callable[..., ToolResponse]) -> Callable[..., ToolResponse]:
-    """Register ``fn`` as a tool whose next reply carries a pending version warning."""
+def tool(fn: Callable[..., ToolResponse]) -> Callable[..., ToolResponse | CallToolResult]:
+    """Register ``fn`` as a tool whose next reply carries a pending version warning.
+
+    A failure returned as an ``ErrorResponse`` is sent with ``isError`` set.
+    """
 
     @functools.wraps(fn)
-    def wrapper(*args: Any, **kwargs: Any) -> ToolResponse:
+    def wrapper(*args: Any, **kwargs: Any) -> ToolResponse | CallToolResult:
         response = fn(*args, **kwargs)
+        is_error = isinstance(response, ErrorResponse)
         notice, state.version_notice = state.version_notice, None
         if notice:
-            return [TextContent(type="text", text=f"Warning: {notice}"), *response]
+            response = [TextContent(type="text", text=f"Warning: {notice}"), *response]
+        if is_error:
+            return CallToolResult(content=list(response), isError=True)
         return response
 
     return mcp.tool(structured_output=False)(wrapper)

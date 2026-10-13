@@ -4,7 +4,14 @@ from typing import Any
 from mcp.types import ImageContent
 
 from ..freecad_client import FreeCADConnection
-from ..responses import ToolResponse, add_screenshot_if_available, json_response, text_response
+from ..responses import (
+    ErrorResponse,
+    ToolResponse,
+    add_screenshot_if_available,
+    error_response,
+    json_response,
+    text_response,
+)
 from ..version import addon_version_warning, is_missing_method_fault
 
 
@@ -16,10 +23,10 @@ def create_document_operation(freecad: FreeCADConnection, name: str) -> ToolResp
         res = freecad.create_document(name)
         if res["success"]:
             return text_response(f"Document '{res['document_name']}' created successfully")
-        return text_response(f"Failed to create document: {res['error']}")
+        return error_response(f"Failed to create document: {res['error']}")
     except Exception as e:
         logger.error(f"Failed to create document: {str(e)}")
-        return text_response(f"Failed to create document: {str(e)}")
+        return error_response(f"Failed to create document: {str(e)}")
 
 
 def create_object_operation(
@@ -44,13 +51,13 @@ def create_object_operation(
         if res["success"]:
             response = text_response(f"Object '{res['object_name']}' created successfully")
         else:
-            return text_response(f"Failed to create object: {res['error']}")
+            return error_response(f"Failed to create object: {res['error']}")
         skip_screenshot = only_text_feedback or not include_screenshot
         screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
         return add_screenshot_if_available(response, screenshot, skip_screenshot)
     except Exception as e:
         logger.error(f"Failed to create object: {str(e)}")
-        return text_response(f"Failed to create object: {str(e)}")
+        return error_response(f"Failed to create object: {str(e)}")
 
 
 def edit_object_operation(
@@ -67,13 +74,13 @@ def edit_object_operation(
         if res["success"]:
             response = text_response(f"Object '{res['object_name']}' edited successfully")
         else:
-            return text_response(f"Failed to edit object: {res['error']}")
+            return error_response(f"Failed to edit object: {res['error']}")
         skip_screenshot = only_text_feedback or not include_screenshot
         screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
         return add_screenshot_if_available(response, screenshot, skip_screenshot)
     except Exception as e:
         logger.error(f"Failed to edit object: {str(e)}")
-        return text_response(f"Failed to edit object: {str(e)}")
+        return error_response(f"Failed to edit object: {str(e)}")
 
 
 def delete_object_operation(
@@ -89,13 +96,13 @@ def delete_object_operation(
         if res["success"]:
             response = text_response(f"Object '{res['object_name']}' deleted successfully")
         else:
-            return text_response(f"Failed to delete object: {res['error']}")
+            return error_response(f"Failed to delete object: {res['error']}")
         skip_screenshot = only_text_feedback or not include_screenshot
         screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
         return add_screenshot_if_available(response, screenshot, skip_screenshot)
     except Exception as e:
         logger.error(f"Failed to delete object: {str(e)}")
-        return text_response(f"Failed to delete object: {str(e)}")
+        return error_response(f"Failed to delete object: {str(e)}")
 
 
 def execute_code_operation(
@@ -116,10 +123,10 @@ def execute_code_operation(
             skip_screenshot = only_text_feedback or not include_screenshot
             screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
             return add_screenshot_if_available(response, screenshot, skip_screenshot)
-        return text_response(f"Failed to execute code: {res['error']}")
+        return error_response(f"Failed to execute code: {res['error']}")
     except Exception as e:
         logger.error(f"Failed to execute code: {str(e)}")
-        return text_response(f"Failed to execute code: {str(e)}")
+        return error_response(f"Failed to execute code: {str(e)}")
 
 
 def execute_code_async_operation(
@@ -142,10 +149,10 @@ def execute_code_async_operation(
                 "and traceback. "
                 "FreeCAD's Report View shows printed output when done."
             )
-        return text_response(f"Failed to start async execution: {res.get('error', 'unknown')}")
+        return error_response(f"Failed to start async execution: {res.get('error', 'unknown')}")
     except Exception as e:
         logger.error(f"Failed to start async code execution: {str(e)}")
-        return text_response(f"Failed to start async code execution: {str(e)}")
+        return error_response(f"Failed to start async code execution: {str(e)}")
 
 
 def format_headless_result(res: dict) -> str:
@@ -166,10 +173,12 @@ def execute_code_headless_operation(
     from ..headless import run_headless
 
     try:
-        return text_response(format_headless_result(run_headless(code, timeout, command)))
+        res = run_headless(code, timeout, command)
+        respond = text_response if res.get("success") else error_response
+        return respond(format_headless_result(res))
     except Exception as e:
         logger.error(f"Failed to run headless code: {str(e)}")
-        return text_response(f"Failed to run headless code: {str(e)}")
+        return error_response(f"Failed to run headless code: {str(e)}")
 
 
 def get_async_status_operation(
@@ -178,7 +187,7 @@ def get_async_status_operation(
     try:
         res = freecad.get_async_status(job_id)
         if not res.get("success"):
-            return text_response(f"Failed to get async status: {res.get('error', 'unknown')}")
+            return error_response(f"Failed to get async status: {res.get('error', 'unknown')}")
         job = res.get("job")
         if job is None:
             return json_response(res.get("jobs", []))
@@ -190,7 +199,7 @@ def get_async_status_operation(
         return text_response(text)
     except Exception as e:
         logger.error(f"Failed to get async status: {str(e)}")
-        return text_response(f"Failed to get async status: {str(e)}")
+        return error_response(f"Failed to get async status: {str(e)}")
 
 
 def get_view_operation(
@@ -204,10 +213,10 @@ def get_view_operation(
         screenshot = freecad.get_active_screenshot(view_name, width, height, focus_object)
         if screenshot is not None:
             return [ImageContent(type="image", data=screenshot, mimeType="image/png")]
-        return text_response("Cannot get screenshot in the current view type (such as TechDraw or Spreadsheet)")
+        return error_response("Cannot get screenshot in the current view type (such as TechDraw or Spreadsheet)")
     except Exception as e:
         logger.error(f"Failed to get view: {str(e)}")
-        return text_response(f"Failed to get view: {str(e)}")
+        return error_response(f"Failed to get view: {str(e)}")
 
 
 def insert_part_from_library_operation(
@@ -222,13 +231,13 @@ def insert_part_from_library_operation(
         if res["success"]:
             response = text_response(f"Part inserted from library: {res['message']}")
         else:
-            return text_response(f"Failed to insert part from library: {res['error']}")
+            return error_response(f"Failed to insert part from library: {res['error']}")
         skip_screenshot = only_text_feedback or not include_screenshot
         screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
         return add_screenshot_if_available(response, screenshot, skip_screenshot)
     except Exception as e:
         logger.error(f"Failed to insert part from library: {str(e)}")
-        return text_response(f"Failed to insert part from library: {str(e)}")
+        return error_response(f"Failed to insert part from library: {str(e)}")
 
 
 def get_objects_operation(
@@ -245,7 +254,7 @@ def get_objects_operation(
         return add_screenshot_if_available(response, screenshot, skip_screenshot)
     except Exception as e:
         logger.error(f"Failed to get objects: {str(e)}")
-        return text_response(f"Failed to get objects: {str(e)}")
+        return error_response(f"Failed to get objects: {str(e)}")
 
 
 def get_object_operation(
@@ -263,7 +272,7 @@ def get_object_operation(
         return add_screenshot_if_available(response, screenshot, skip_screenshot)
     except Exception as e:
         logger.error(f"Failed to get object: {str(e)}")
-        return text_response(f"Failed to get object: {str(e)}")
+        return error_response(f"Failed to get object: {str(e)}")
 
 
 def get_parts_list_operation(freecad: FreeCADConnection) -> ToolResponse:
@@ -271,7 +280,7 @@ def get_parts_list_operation(freecad: FreeCADConnection) -> ToolResponse:
         parts = freecad.get_parts_list()
     except Exception as e:
         logger.error(f"Failed to get parts list: {str(e)}")
-        return text_response(f"Failed to get parts list: {str(e)}")
+        return error_response(f"Failed to get parts list: {str(e)}")
     if parts:
         return json_response(parts)
     return text_response("No parts found in the parts library. You must add parts_library addon.")
@@ -290,9 +299,9 @@ def get_rpc_status_operation(freecad: FreeCADConnection) -> ToolResponse:
         return json_response(status)
     except Exception as e:
         if is_missing_method_fault(e):
-            return text_response(addon_version_warning(None))
+            return error_response(addon_version_warning(None))
         logger.error(f"Failed to get RPC status: {str(e)}")
-        return text_response(f"Failed to get RPC status: {str(e)}")
+        return error_response(f"Failed to get RPC status: {str(e)}")
 
 
 def run_fem_analysis_operation(
@@ -321,13 +330,13 @@ def run_fem_analysis_operation(
                 **res,
             })
             return add_screenshot_if_available(response, screenshot, skip_screenshot)
-        return json_response({
+        return ErrorResponse(json_response({
             "summary": f"FEM analysis '{analysis_name}' failed: {res.get('error')}",
             **res,
-        })
+        }))
     except Exception as e:
         logger.error(f"Failed to run FEM analysis: {str(e)}")
-        return text_response(f"Failed to run FEM analysis: {str(e)}")
+        return error_response(f"Failed to run FEM analysis: {str(e)}")
 
 
 def reload_document_operation(
@@ -343,7 +352,7 @@ def reload_document_operation(
             return text_response(
                 f"Document '{res['document_name']}' reloaded from disk."
             )
-        return text_response(f"Failed to reload document: {res.get('error')}")
+        return error_response(f"Failed to reload document: {res.get('error')}")
     except Exception as e:
         logger.error(f"Failed to reload document: {str(e)}")
-        return text_response(f"Failed to reload document: {str(e)}")
+        return error_response(f"Failed to reload document: {str(e)}")
