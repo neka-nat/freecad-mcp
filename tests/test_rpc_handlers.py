@@ -103,6 +103,37 @@ def test_script_names_cannot_replace_rpc_internals(rpc_module: types.ModuleType)
     assert rpc.get_object("Doc", "Box") == {"Name": "Box"}
 
 
+@pytest.mark.parametrize(
+    ("code", "error"),
+    [
+        ("import sys; sys.exit(3)", "SystemExit: 3"),
+        ('raise SystemExit("stop")', "SystemExit: stop"),
+        ("raise KeyboardInterrupt()", "KeyboardInterrupt:"),
+    ],
+)
+def test_script_exit_fails_the_call_and_preserves_rpc_dispatch(
+    rpc_module: types.ModuleType, code: str, error: str,
+) -> None:
+    # Run the Qt callback synchronously so an escaping BaseException fails
+    # this test instead of merely terminating a test worker thread.
+    rpc_module.test_dispatch._waker = types.SimpleNamespace(
+        wake=lambda: rpc_module.test_dispatch.process_gui_tasks(reschedule=False)
+    )
+    rpc = rpc_module.FreeCADRPC()
+    stdout = sys.stdout
+
+    result = rpc.execute_code(code)
+
+    assert result["success"] is False
+    assert error in result["error"]
+    assert sys.stdout is stdout
+    assert rpc.get_rpc_status()["gui_dispatch"]["state"] == "healthy"
+    assert rpc.get_object("Doc", "Box") == {"Name": "Box"}
+    followup = rpc.execute_code('print("still running")')
+    assert followup["success"] is True
+    assert followup["message"].endswith("still running\n")
+
+
 def test_async_scripts_share_variables_without_replacing_dispatch(
     rpc_module: types.ModuleType,
 ) -> None:
