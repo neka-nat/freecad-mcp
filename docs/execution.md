@@ -74,6 +74,20 @@ then the `org.freecad.FreeCAD` Flatpak). Override it with:
 freecad-mcp --freecadcmd "flatpak run --command=freecadcmd org.freecad.FreeCAD"
 ```
 
+An existing executable file can also be passed directly as the value of
+`--freecadcmd`, including Windows paths with spaces and backslashes. In a shell,
+quote the path so it reaches the server as one argument:
+
+```powershell
+freecad-mcp --freecadcmd "C:\Program Files\FreeCAD 1.1\bin\FreeCADCmd.exe"
+```
+
+In an MCP JSON configuration's `args` array, use
+`"C:\\Program Files\\FreeCAD 1.1\\bin\\FreeCADCmd.exe"` as the argument after
+`"--freecadcmd"`; no embedded quote characters are needed. Command lines with
+additional arguments still use shell-style splitting, so quote any executable
+path containing spaces inside that command string.
+
 ## GUI dispatch timeouts
 
 GUI-thread operations run one at a time in FIFO order. Calls have separate queue
