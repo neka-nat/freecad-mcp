@@ -5,7 +5,7 @@ from mcp.types import ImageContent, TextContent
 type ToolResponse = list[TextContent | ImageContent]
 
 
-class ErrorResponse(list):
+class ErrorResponse(list[TextContent | ImageContent]):
     """Tool content that the ``tool`` wrapper reports with ``isError`` set.
 
     Failures are still described in text, but MCP clients and agent
@@ -17,7 +17,7 @@ def text_response(message: str) -> ToolResponse:
     return [TextContent(type="text", text=message)]
 
 
-def error_response(message: str) -> ToolResponse:
+def error_response(message: str) -> ErrorResponse:
     return ErrorResponse(text_response(message))
 
 

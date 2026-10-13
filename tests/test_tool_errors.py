@@ -1,9 +1,15 @@
 """Failed tool calls reach MCP clients with isError set."""
 
+import asyncio
 import json
+from pathlib import Path
+import sys
 from typing import Any
 
+import anyio
 import pytest
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
 from mcp.types import CallToolResult
 
 from freecad_mcp import server
@@ -39,6 +45,15 @@ class _Connection:
 
     def run_fem_analysis(self, *_args: Any) -> dict[str, Any]:
         return {"success": False, "error": "no solver"}
+
+    def list_documents(self) -> list[str]:
+        raise ConnectionError("RPC unavailable")
+
+    def get_active_screenshot(self, *_args: Any) -> str:
+        return "cG5n"
+
+    def disconnect(self) -> None:
+        pass
 
 
 @pytest.fixture
@@ -114,3 +129,54 @@ def test_failed_headless_run_is_marked(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(headless, "run_headless", lambda *_args: {"success": True})
     assert not isinstance(execute_code_headless_operation(None, "", 10), ErrorResponse)
+
+
+def test_stdio_client_receives_error_flags_and_original_content() -> None:
+    """Exercise SDK serialization, including MCP 1.x and 2.x normalization."""
+    async def exercise() -> None:
+        params = StdioServerParameters(command=sys.executable, args=[str(Path(__file__))])
+        with anyio.fail_after(30):
+            async with stdio_client(params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    failed = await session.call_tool(
+                        "execute_code", {"code": "raise ValueError('boom')", "include_screenshot": False}
+                    )
+                    assert _error(failed)
+                    assert [c.text for c in failed.content] == [
+                        "Warning: addon is old",
+                        "Failed to execute code: ValueError: boom",
+                    ]
+                    invalid = await session.call_tool("create_object", {
+                        "doc_name": "Doc", "obj_type": "Part::Box", "obj_name": "Bad",
+                        "obj_properties": {"Length": "abc"}, "include_screenshot": False,
+                    })
+                    assert _error(invalid)
+                    assert len(invalid.content) == 1  # The version notice is sent once.
+                    assert "Failed to set property: Length" in invalid.content[0].text
+                    fem = await session.call_tool(
+                        "run_fem_analysis", {"doc_name": "Doc", "analysis_name": "Analysis"}
+                    )
+                    assert _error(fem)
+                    assert json.loads(fem.content[0].text)["error"] == "no solver"
+                    transport = await session.call_tool("list_documents", {})
+                    assert _error(transport)
+                    # SDK 2.x hides details of unexpected exceptions.
+                    assert "list_documents" in transport.content[0].text
+                    success = await session.call_tool("create_object", {
+                        "doc_name": "Doc", "obj_type": "Part::Box", "obj_name": "Box",
+                        "obj_properties": {"Length": 5},
+                    })
+                    assert not _error(success)
+                    assert success.content[0].text == "Object 'Box' created successfully"
+                    assert success.content[1].type == "image"
+                    assert success.content[1].data == "cG5n"
+
+    asyncio.run(exercise())
+
+
+if __name__ == "__main__":
+    # Only FreeCAD is stubbed; the real MCP server and client use stdio.
+    server.state.freecad_connection = _Connection()
+    server.state.version_notice = "addon is old"
+    server.mcp.run()

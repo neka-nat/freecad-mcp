@@ -80,7 +80,7 @@ mcp = FastMCP(
 )
 
 
-def tool(fn: Callable[..., ToolResponse]) -> Callable[..., ToolResponse]:
+def tool(fn: Callable[..., ToolResponse]) -> Callable[..., ToolResponse | CallToolResult]:
     """Register ``fn`` as a tool whose next reply carries a pending version warning.
 
     A failure returned as an ``ErrorResponse`` is sent with ``isError`` set.
