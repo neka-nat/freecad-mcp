@@ -211,7 +211,9 @@ def process_gui_tasks(reschedule: bool = True) -> None:
                     return
                 try:
                     task()
-                except Exception as e:
+                except BaseException as e:
+                    # Also SystemExit/KeyboardInterrupt: leaving this Qt slot
+                    # with one of them quits FreeCAD.
                     FreeCAD.Console.PrintError(
                         f"MCP RPC: unhandled exception in GUI task: {type(e).__name__}: {e}\n"
                         f"{traceback.format_exc()}"
@@ -295,7 +297,9 @@ def dispatch_to_gui(
         try:
             try:
                 res = task()
-            except Exception as e:
+            except BaseException as e:
+                # SystemExit/KeyboardInterrupt from a script (sys.exit() in
+                # execute_code) must fail this call rather than quit FreeCAD.
                 FreeCAD.Console.PrintError(
                     f"MCP RPC: GUI task raised {type(e).__name__}: {e}\n"
                     f"{traceback.format_exc()}"

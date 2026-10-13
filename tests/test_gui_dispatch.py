@@ -327,3 +327,35 @@ def test_queue_deadline_includes_time_spent_waking_gui() -> None:
         assert elapsed < 0.5
         dispatch.process_gui_tasks(reschedule=False)
         assert not ran.is_set()
+
+
+def test_system_exit_in_task_is_reported_instead_of_leaving_the_gui_loop() -> None:
+    # A script that calls sys.exit() must fail its call, not quit FreeCAD:
+    # SystemExit escaping the Qt slot that runs process_gui_tasks ends the app.
+    with load_gui_dispatch() as dispatch:
+        dispatch._waker = types.SimpleNamespace(
+            wake=lambda: dispatch.process_gui_tasks(reschedule=False)
+        )
+
+        def exiting_task() -> None:
+            raise SystemExit(3)
+
+        result = dispatch.dispatch_to_gui(exiting_task, timeout=1)
+
+        assert result == "SystemExit: 3"
+        assert dispatch.get_dispatch_status()["state"] == "healthy"
+        assert dispatch.dispatch_to_gui(lambda: "next", timeout=1) == "next"
+
+
+def test_system_exit_from_a_raw_queued_task_does_not_leave_the_gui_loop() -> None:
+    with load_gui_dispatch() as dispatch:
+        ran = threading.Event()
+
+        def exiting_task() -> None:
+            raise SystemExit(3)
+
+        dispatch._rpc_request_queue.put(exiting_task)
+        dispatch._rpc_request_queue.put(ran.set)
+        dispatch.process_gui_tasks(reschedule=False)
+
+        assert ran.is_set()
