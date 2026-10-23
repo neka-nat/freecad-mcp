@@ -17,6 +17,7 @@ from freecad_mcp.operations import (
     create_object_operation,
     execute_code_headless_operation,
     execute_code_operation,
+    reload_document_operation,
     run_fem_analysis_operation,
 )
 from freecad_mcp.responses import ErrorResponse
@@ -45,6 +46,13 @@ class _Connection:
 
     def run_fem_analysis(self, *_args: Any) -> dict[str, Any]:
         return {"success": False, "error": "no solver"}
+
+    def reload_document(self, doc_name: str) -> dict[str, Any]:
+        if doc_name == "Doc":
+            return {"success": True, "document_name": "Doc"}
+        if doc_name == "HandleConcept3D":
+            return {"success": True, "document_name": "handle_concept_3d"}
+        return {"success": False, "error": f"Document '{doc_name}' is not loaded."}
 
     def list_documents(self) -> list[str]:
         raise ConnectionError("RPC unavailable")
@@ -117,6 +125,23 @@ def test_operations_mark_failures() -> None:
     fem = run_fem_analysis_operation(conn, True, "Doc", "Analysis")
     assert isinstance(fem, ErrorResponse)
     assert json.loads(fem[0].text)["summary"] == "FEM analysis 'Analysis' failed: no solver"
+
+
+def test_reload_reports_the_reopened_name_and_says_to_switch() -> None:
+    conn = _Connection()
+
+    same = reload_document_operation(conn, "Doc")
+    assert same[0].text == "Document 'Doc' reloaded from disk."
+
+    renamed = reload_document_operation(conn, "HandleConcept3D")
+    assert renamed[0].text == (
+        "Document 'HandleConcept3D' was reopened by FreeCAD as 'handle_concept_3d'."
+        " Use 'handle_concept_3d' in later calls."
+    )
+
+    missing = reload_document_operation(conn, "Gone")
+    assert isinstance(missing, ErrorResponse)
+    assert missing[0].text == "Failed to reload document: Document 'Gone' is not loaded."
 
 
 def test_failed_headless_run_is_marked(monkeypatch: pytest.MonkeyPatch) -> None:

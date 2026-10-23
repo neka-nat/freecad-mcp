@@ -39,6 +39,8 @@ def rpc_module(monkeypatch: pytest.MonkeyPatch) -> Iterator[types.ModuleType]:
 
         freecad.getDocument = get_document
         freecad.listDocuments = lambda: {"Doc": document}
+        freecad.closeDocument = lambda _name: None
+        freecad.openDocument = lambda _path: document
         stubs = {
             "gui_dispatch": dispatch,
             "commands": types.SimpleNamespace(
