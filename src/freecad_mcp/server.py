@@ -707,6 +707,10 @@ def reload_document(ctx: Context, doc_name: str) -> list[TextContent]:
     Returns:
         A message confirming the document was reloaded, or describing
         the failure (document not loaded, no associated file, etc).
+        FreeCAD names the reopened document after the file stem, which
+        can differ from ``doc_name`` ("HandleConcept3D" saved as
+        handle-concept-3d.FCStd reopens as handle_concept_3d); the reply
+        names the document you should use from then on.
 
     Examples:
         ```json

@@ -215,14 +215,15 @@ class FreeCADRPC:
         """Close and re-open a document by name to pick up external file
         changes (e.g. edits made by another process such as `freecadcmd`
         running headlessly). Returns success once the new document is
-        loaded from disk.
+        loaded from disk, with the name FreeCAD gave it: reopening uses the
+        file stem, so it can differ from the requested name.
         """
         res = dispatch_to_gui(
             lambda: self._reload_document_gui(doc_name),
             operation_name="reload_document",
         )
-        if _ok(res):
-            return {"success": True, "document_name": doc_name}
+        if isinstance(res, dict) and res.get("success"):
+            return res
         return _err(res)
 
     def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600) -> dict[str, Any]:
@@ -522,7 +523,7 @@ class FreeCADRPC:
             return str(e)
 
 
-    def _reload_document_gui(self, doc_name: str):
+    def _reload_document_gui(self, doc_name: str) -> dict[str, Any] | str:
         if doc_name not in FreeCAD.listDocuments():
             return f"Document '{doc_name}' is not loaded."
         doc = FreeCAD.getDocument(doc_name)
@@ -534,15 +535,19 @@ class FreeCADRPC:
             )
         if not os.path.exists(file_path):
             return f"File for '{doc_name}' not found at {file_path!r}."
-        # Close, then reopen from the same file. Reopen preserves the
-        # original document name when the file was previously saved
-        # under that name.
+        # Close, then reopen from the same file. FreeCAD names the reopened
+        # document after the file stem, not after the name it had before
+        # ("HandleConcept3D" saved as handle-concept-3d.FCStd comes back as
+        # handle_concept_3d), so the handler reports the name FreeCAD
+        # actually used. Reporting the requested name breaks every follow-up
+        # call that still uses it.
         FreeCAD.closeDocument(doc_name)
-        FreeCAD.openDocument(file_path)
+        reopened = FreeCAD.openDocument(file_path)
         FreeCAD.Console.PrintMessage(
-            f"Document '{doc_name}' reloaded from '{file_path}' via RPC.\n"
+            f"Document '{doc_name}' reloaded from '{file_path}' via RPC "
+            f"(now '{reopened.Name}').\n"
         )
-        return True
+        return {"success": True, "document_name": reopened.Name}
 
     def _insert_part_from_library(self, relative_path):
         try:

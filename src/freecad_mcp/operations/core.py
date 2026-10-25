@@ -349,8 +349,12 @@ def reload_document_operation(
     try:
         res = freecad.reload_document(doc_name)
         if res.get("success"):
+            name = res.get("document_name", doc_name)
+            if name == doc_name:
+                return text_response(f"Document '{doc_name}' reloaded from disk.")
             return text_response(
-                f"Document '{res['document_name']}' reloaded from disk."
+                f"Document '{doc_name}' was reopened by FreeCAD as '{name}'."
+                f" Use '{name}' in later calls."
             )
         return error_response(f"Failed to reload document: {res.get('error')}")
     except Exception as e:
