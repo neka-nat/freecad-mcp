@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import Any
 
@@ -16,6 +17,30 @@ from ..version import addon_version_warning, is_missing_method_fault
 
 
 logger = logging.getLogger("FreeCADMCPserver")
+
+
+def _decode_json_values(value: Any) -> Any:
+    """Undo JSON-encoding that MCP clients apply to nested property values.
+
+    ``obj_properties`` is typed ``dict[str, Any]``, so its schema says nothing
+    about the shape of each value, and some clients send a nested value such as
+    ``Placement`` as a JSON string instead of an object. The addon only maps
+    dicts and lists onto FreeCAD types, so decode any string that holds a JSON
+    object or array. Other strings (object names, quantities like "210 GPa")
+    are left as they are.
+    """
+    if isinstance(value, dict):
+        return {key: _decode_json_values(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [_decode_json_values(val) for val in value]
+    if isinstance(value, str) and value.lstrip()[:1] in ("{", "["):
+        try:
+            decoded = json.loads(value)
+        except ValueError:
+            return value
+        if isinstance(decoded, (dict, list)):
+            return _decode_json_values(decoded)
+    return value
 
 
 def create_document_operation(freecad: FreeCADConnection, name: str) -> ToolResponse:
@@ -44,7 +69,7 @@ def create_object_operation(
         obj_data = {
             "Name": obj_name,
             "Type": obj_type,
-            "Properties": obj_properties or {},
+            "Properties": _decode_json_values(obj_properties or {}),
             "Analysis": analysis_name,
         }
         res = freecad.create_object(doc_name, obj_data)
@@ -70,7 +95,9 @@ def edit_object_operation(
     view_name: str = "Isometric",
 ) -> ToolResponse:
     try:
-        res = freecad.edit_object(doc_name, obj_name, {"Properties": obj_properties})
+        res = freecad.edit_object(
+            doc_name, obj_name, {"Properties": _decode_json_values(obj_properties)}
+        )
         if res["success"]:
             response = text_response(f"Object '{res['object_name']}' edited successfully")
         else:
