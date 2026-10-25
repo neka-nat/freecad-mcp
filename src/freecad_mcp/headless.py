@@ -44,7 +44,17 @@ def detect_freecadcmd() -> list[str] | None:
 
 
 def parse_command(value: str | None) -> list[str] | None:
-    return shlex.split(value) if value else None
+    if not value:
+        return None
+    # --freecadcmd can be an executable path already passed as one CLI argument.
+    # Shell splitting would consume Windows backslashes and split its spaces.
+    try:
+        if Path(value).is_file():
+            return [value]
+    except OSError:
+        # A command line can be an invalid/overlong filename on some platforms.
+        pass
+    return shlex.split(value)
 
 
 def _script_dir() -> Path:
