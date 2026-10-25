@@ -523,7 +523,7 @@ class FreeCADRPC:
             return str(e)
 
 
-    def _reload_document_gui(self, doc_name: str):
+    def _reload_document_gui(self, doc_name: str) -> dict[str, Any] | str:
         if doc_name not in FreeCAD.listDocuments():
             return f"Document '{doc_name}' is not loaded."
         doc = FreeCAD.getDocument(doc_name)
