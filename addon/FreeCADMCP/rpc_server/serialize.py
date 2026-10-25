@@ -41,7 +41,7 @@ def serialize_shape(shape):
     if shape is None:
         return None
     try:
-        return {
+        result = {
             "Volume": shape.Volume,
             "Area": shape.Area,
             "VertexCount": len(shape.Vertexes),
@@ -50,6 +50,22 @@ def serialize_shape(shape):
         }
     except Exception as e:
         return {"error": f"invalid shape: {str(e)}"}
+
+    # Separate try: a shape can carry measurements yet no usable bounding box,
+    # and losing the volume over a missing bbox is the worse trade.
+    try:
+        bb = shape.BoundBox
+        result["BoundBox"] = {
+            "XMin": round(bb.XMin, 4),
+            "XMax": round(bb.XMax, 4),
+            "YMin": round(bb.YMin, 4),
+            "YMax": round(bb.YMax, 4),
+            "ZMin": round(bb.ZMin, 4),
+            "ZMax": round(bb.ZMax, 4),
+        }
+    except Exception:
+        pass
+    return result
 
 
 def serialize_view_object(view):
