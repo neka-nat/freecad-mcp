@@ -21,6 +21,9 @@ Concurrent scripts share live variables and must coordinate intentional writes
 to the same data. Headless scripts run in a fresh process and do not share this
 namespace.
 
+Characters that XML-RPC cannot carry, such as ANSI colour codes or NUL bytes in
+printed output or error messages, arrive as visible escapes (`\x1b`, `\x00`).
+
 ## Background jobs
 
 `execute_code_async` returns a `job_id`. `get_async_status(job_id)` reports

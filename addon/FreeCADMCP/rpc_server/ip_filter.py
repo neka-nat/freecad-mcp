@@ -3,6 +3,10 @@
 The server also refuses requests a web page could have sent. The IP allowlist
 cannot stop those: the browser runs on an allowed machine, so a malicious page
 could otherwise call execute_code (CSRF, or DNS rebinding to read the reply).
+
+Replies are made XML-safe: xmlrpc.client writes strings unescaped, so one
+control character in script output (an ANSI colour code, a NUL) would make the
+whole response unparseable for the client.
 """
 
 import base64
@@ -11,12 +15,37 @@ import ipaddress
 import re
 from email.message import Message
 from socketserver import ThreadingMixIn
+from typing import Any
+from xmlrpc.client import Fault
 from xmlrpc.server import SimpleXMLRPCRequestHandler, SimpleXMLRPCServer
 
 import FreeCAD
 
 
 _XML_MEDIA_TYPES = frozenset({"text/xml", "application/xml"})
+
+# Characters XML 1.0 cannot represent, even as character references.
+_XML_INVALID_RE = re.compile("[^\t\n\r\x20-퟿-�\U00010000-\U0010ffff]")
+
+
+def _escape_xml_invalid(match: "re.Match[str]") -> str:
+    code = ord(match.group())
+    return f"\\x{code:02x}" if code < 0x100 else f"\\u{code:04x}"
+
+
+def xml_safe(value: Any) -> Any:
+    """Replace characters XML cannot carry with visible Python-style escapes.
+
+    Recurses into the containers xmlrpc marshals (dict keys included); other
+    values pass through unchanged.
+    """
+    if isinstance(value, str):
+        return _XML_INVALID_RE.sub(_escape_xml_invalid, value)
+    if isinstance(value, dict):
+        return {xml_safe(k): xml_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [xml_safe(v) for v in value]
+    return value
 
 
 def _host_name(host_header: str) -> str:
@@ -141,6 +170,15 @@ class FilteredXMLRPCServer(ThreadingMixIn, SimpleXMLRPCServer):
         self.loopback_only = _is_loopback_name(str(addr[0]).lower())
         kwargs.setdefault("requestHandler", TokenAuthRequestHandler)
         super().__init__(addr, **kwargs)
+
+    def _dispatch(self, method, params):
+        try:
+            return xml_safe(super()._dispatch(method, params))
+        except Fault as fault:
+            raise Fault(fault.faultCode, xml_safe(fault.faultString)) from None
+        except BaseException as exc:
+            # Same fault text SimpleXMLRPCDispatcher would build, made safe.
+            raise Fault(1, xml_safe(f"{type(exc)}:{exc}")) from None
 
     def verify_request(self, request, client_address):
         client_ip = client_address[0]
