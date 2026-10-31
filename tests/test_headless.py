@@ -113,3 +113,22 @@ def test_parse_command() -> None:
     assert parse_command("flatpak run --command=freecadcmd org.freecad.FreeCAD") == [
         "flatpak", "run", "--command=freecadcmd", "org.freecad.FreeCAD",
     ]
+
+
+@pytest.mark.parametrize(
+    ("code", "timeout"),
+    [
+        ("print('before')\nraise ValueError('x')", 30),
+        ("print('before')\nimport sys; sys.exit(0)", 30),
+        ("print('before')\nimport time; time.sleep(30)", 1),
+    ],
+)
+def test_unflushed_output_survives_abnormal_exit(code: str, timeout: float) -> None:
+    # A pipe makes Python block-buffer stdout, as freecadcmd does; nothing in
+    # these scripts flushes it.
+    assert "before" in run_headless(code, timeout, PY)["output"].splitlines()
+
+
+def test_unbuffering_prefix_leaves_no_names_in_the_script_namespace() -> None:
+    res = run_headless("print(sorted(k for k in globals() if not k.startswith('__')))", 30, PY)
+    assert res["output"] == "[]"
