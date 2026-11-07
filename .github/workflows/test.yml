@@ -45,3 +45,31 @@ jobs:
           enable-cache: true
       - run: uv run --locked --with '${{ matrix.mcp-requirement }}' freecad-mcp --help
       - run: uv run --locked --with '${{ matrix.mcp-requirement }}' pytest -q
+
+  windows-freecad:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Download verified FreeCAD 1.1.4
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'FreeCAD.7z'
+          Invoke-WebRequest 'https://github.com/FreeCAD/FreeCAD/releases/download/1.1.4/FreeCAD_1.1.4-Windows-x86_64-py311.7z' -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLower() -ne '4828741fc91ee37fafcdb97a1abacb18b04ba451ac4372d9ff7a7349b36f4d6d') { throw 'FreeCAD archive checksum mismatch' }
+          $install = Join-Path $env:RUNNER_TEMP 'FreeCAD'
+          7z x $archive "-o$install" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'FreeCAD extraction failed' }
+          $cmd = Get-ChildItem $install -Filter FreeCADCmd.exe -Recurse | Select-Object -First 1
+          $ccx = Get-ChildItem $install -Filter ccx.exe -Recurse | Select-Object -First 1
+          if (-not $cmd -or -not $ccx) { throw 'FreeCADCmd or CalculiX missing' }
+          $argvJson = ConvertTo-Json -InputObject @($cmd.FullName) -Compress
+          "FREECAD_TEST_COMMAND=$argvJson" >> $env:GITHUB_ENV
+          "FREECAD_TEST_CCX=$($ccx.FullName)" >> $env:GITHUB_ENV
+          "FREECAD_USER_HOME=$env:RUNNER_TEMP/freecad-profile" >> $env:GITHUB_ENV
+      - name: Check Windows paths, stdin and native FEM
+        run: uv run --locked pytest -q tests/test_headless.py tests/test_headless_native.py tests/test_fem_properties.py
