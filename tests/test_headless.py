@@ -132,3 +132,30 @@ def test_unflushed_output_survives_abnormal_exit(code: str, timeout: float) -> N
 def test_unbuffering_prefix_leaves_no_names_in_the_script_namespace() -> None:
     res = run_headless("print(sorted(k for k in globals() if not k.startswith('__')))", 30, PY)
     assert res["output"] == "[]"
+
+
+def test_parse_unquoted_executable_path(tmp_path: Path) -> None:
+    executable = tmp_path / "Program Files" / "FreeCAD 1.1" / "freecadcmd.exe"
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    assert parse_command(str(executable)) == [str(executable)]
+    assert parse_command(executable.as_posix()) == [executable.as_posix()]
+
+
+def test_parse_quoted_executable_with_arguments(tmp_path: Path) -> None:
+    executable = tmp_path / "FreeCAD 1.1" / "freecadcmd.exe"
+    executable.parent.mkdir()
+    executable.touch()
+    assert parse_command(f'"{executable}" --some-flag') == [
+        str(executable), "--some-flag",
+    ]
+
+
+def test_parse_command_when_filename_probe_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    def invalid_filename(_path: Path) -> bool:
+        raise OSError("not a valid filename")
+
+    monkeypatch.setattr(headless.Path, "is_file", invalid_filename)
+    assert parse_command("flatpak run --command=freecadcmd org.freecad.FreeCAD") == [
+        "flatpak", "run", "--command=freecadcmd", "org.freecad.FreeCAD",
+    ]
