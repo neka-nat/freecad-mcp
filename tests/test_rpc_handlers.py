@@ -1,6 +1,7 @@
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 import importlib.util
+import io
 from pathlib import Path
 import sys
 import threading
@@ -103,6 +104,54 @@ def test_script_names_cannot_replace_rpc_internals(rpc_module: types.ModuleType)
     assert result["success"] is True
     assert result["message"].endswith("42\n")
     assert rpc.get_object("Doc", "Box") == {"Name": "Box"}
+
+
+def test_sync_stdout_excludes_async_worker_output(
+    rpc_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    console = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", console)
+    rpc = rpc_module.FreeCADRPC()
+    rpc_module.FreeCAD.audit_go = threading.Event()
+    rpc_module.FreeCAD.audit_printed = threading.Event()
+    started = rpc.execute_code_async(
+        'assert FreeCAD.audit_go.wait(3)\n'
+        'print("background output", flush=True)\n'
+        'FreeCAD.audit_printed.set()'
+    )
+    assert started["success"] is True
+    reply = rpc.execute_code(
+        'print("request output")\n'
+        'FreeCAD.audit_go.set()\n'
+        'assert FreeCAD.audit_printed.wait(3)'
+    )
+    assert reply["success"] is True
+    assert reply["message"].endswith("request output\n")
+    assert "background output" not in reply["message"]
+    assert console.getvalue() == "background output\n"
+    assert sys.stdout is console
+
+
+def test_timed_out_script_keeps_capture_until_it_finishes(
+    rpc_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    console = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", console)
+    release = threading.Event()
+    rpc_module.FreeCAD.audit_release = release
+    rpc = rpc_module.FreeCADRPC()
+    try:
+        reply = rpc.execute_code(
+            'FreeCAD.audit_release.wait(3)\nprint("late script output")', timeout=0.02
+        )
+        assert reply["success"] is False
+        print("console while task is running")
+    finally:
+        release.set()
+        rpc_module.test_dispatch._waker.join()
+    assert sys.stdout is console
+    assert console.getvalue() == "console while task is running\n"
+    assert rpc.execute_code('print("next call")')["message"].endswith("next call\n")
 
 
 @pytest.mark.parametrize(
