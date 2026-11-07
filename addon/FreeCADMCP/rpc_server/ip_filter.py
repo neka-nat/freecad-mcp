@@ -171,7 +171,7 @@ class FilteredXMLRPCServer(ThreadingMixIn, SimpleXMLRPCServer):
         kwargs.setdefault("requestHandler", TokenAuthRequestHandler)
         super().__init__(addr, **kwargs)
 
-    def _dispatch(self, method, params):
+    def _dispatch(self, method: str, params: tuple[Any, ...]) -> Any:
         try:
             return xml_safe(super()._dispatch(method, params))
         except Fault as fault:

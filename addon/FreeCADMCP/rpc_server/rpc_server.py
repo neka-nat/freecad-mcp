@@ -281,11 +281,11 @@ class FreeCADRPC:
         # Both status updates are fire and forget, so neither this call nor the
         # worker waits behind a long GUI task. The FIFO queue runs the clear
         # after the show, and the clear leaves any newer message alone.
-        def _set_status():
+        def _set_status() -> None:
             post_to_gui(lambda: FreeCADGui.getMainWindow().statusBar().showMessage(status_message))
 
-        def _clear_status():
-            def clear():
+        def _clear_status() -> None:
+            def clear() -> None:
                 status_bar = FreeCADGui.getMainWindow().statusBar()
                 if status_bar.currentMessage() == status_message:
                     status_bar.clearMessage()
