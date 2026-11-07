@@ -21,6 +21,9 @@ Concurrent scripts share live variables and must coordinate intentional writes
 to the same data. Headless scripts run in a fresh process and do not share this
 namespace.
 
+Characters that XML-RPC cannot carry, such as ANSI colour codes or NUL bytes in
+printed output or error messages, arrive as visible escapes (`\x1b`, `\x00`).
+
 ## Background jobs
 
 `execute_code_async` returns a `job_id`. `get_async_status(job_id)` reports
@@ -73,6 +76,24 @@ then the `org.freecad.FreeCAD` Flatpak). Override it with:
 ```bash
 freecad-mcp --freecadcmd "flatpak run --command=freecadcmd org.freecad.FreeCAD"
 ```
+
+An existing executable file can also be passed directly as the value of
+`--freecadcmd`, including Windows paths with spaces and backslashes. In a shell,
+quote the path so it reaches the server as one argument:
+
+```powershell
+freecad-mcp --freecadcmd "C:\Program Files\FreeCAD 1.1\bin\FreeCADCmd.exe"
+```
+
+In an MCP JSON configuration's `args` array, use
+`"C:\\Program Files\\FreeCAD 1.1\\bin\\FreeCADCmd.exe"` as the argument after
+`"--freecadcmd"`; no embedded quote characters are needed. Command lines with
+additional arguments still use shell-style splitting, so quote any executable
+path containing spaces inside that command string.
+
+Headless scripts receive closed standard input, so they cannot consume the MCP
+protocol stream or wait for interactive input. Pass all inputs in the code or
+files. Printed lines are flushed to preserve progress output on failure or timeout.
 
 ## GUI dispatch timeouts
 

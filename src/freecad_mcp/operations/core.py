@@ -304,6 +304,25 @@ def get_rpc_status_operation(freecad: FreeCADConnection) -> ToolResponse:
         return error_response(f"Failed to get RPC status: {str(e)}")
 
 
+def _describe_loads(loads: list[dict[str, Any]] | None) -> str:
+    if loads is None:
+        return " Applied loads unavailable: update the FreeCAD addon and verify the inputs."
+    if not loads:
+        return " No force, pressure or fixed constraints were reported."
+    parts = []
+    for load in loads:
+        where = ", ".join(load.get("references", [])) or "no face"
+        if load["kind"] == "force":
+            parts.append(f"{load['name']} = {load['newtons']:.6g} N on {where}, direction {load['direction']} ({load['direction_from']})")
+        elif load["kind"] == "pressure":
+            parts.append(f"{load['name']} = {load['megapascals']:.6g} MPa on {where}")
+        else:
+            parts.append(f"{load['name']} fixed on {where}")
+    note = (" Check these loads: native FreeCAD unitless Force values use millinewtons; set Force with its unit, e.g. '1000 N'."
+            if any(load["kind"] == "force" for load in loads) else "")
+    return " Loads applied: " + "; ".join(parts) + "." + note
+
+
 def run_fem_analysis_operation(
     freecad: FreeCADConnection,
     only_text_feedback: bool,
@@ -318,6 +337,7 @@ def run_fem_analysis_operation(
         if res.get("success"):
             def fmt(v, unit):
                 return f"{v:.4g} {unit}" if isinstance(v, (int, float)) else f"unavailable ({unit})"
+            loads = res.get("applied_loads")
             skip_screenshot = only_text_feedback or not include_screenshot
             screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
             response = json_response({
@@ -326,8 +346,10 @@ def run_fem_analysis_operation(
                     f"max von Mises = {fmt(res.get('max_von_mises_MPa'), 'MPa')}, "
                     f"max displacement = {fmt(res.get('max_displacement_mm'), 'mm')} "
                     f"({res.get('node_count')} nodes)."
+                    + _describe_loads(loads)
                 ),
                 **res,
+                "applied_loads": loads,
             })
             return add_screenshot_if_available(response, screenshot, skip_screenshot)
         return ErrorResponse(json_response({

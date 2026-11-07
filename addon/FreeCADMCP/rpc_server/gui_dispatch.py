@@ -138,6 +138,22 @@ def cleanup_waker() -> None:
     _waker = None
 
 
+def log_error(message: str) -> None:
+    """Report View logging that cannot fail on unencodable text.
+
+    PrintError raises for strings holding lone surrogates (an exception text
+    built from undecodable bytes); on an error path that exception would
+    replace the error being reported.
+    """
+    try:
+        FreeCAD.Console.PrintError(message)
+    except Exception:
+        try:
+            FreeCAD.Console.PrintError(message.encode("utf-8", "backslashreplace").decode("utf-8"))
+        except Exception:
+            pass
+
+
 def _flush_gui_events(delay_ms: int = 20) -> None:
     FreeCADGui.updateGui()
     app = QtWidgets.QApplication.instance()
@@ -201,8 +217,11 @@ def process_gui_tasks(reschedule: bool = True) -> None:
 
         if app is not None:
             app.setOverrideCursor(QtCore.Qt.WaitCursor)
-        if status_bar is not None:
-            status_bar.showMessage("MCP: processing…")
+        # Show our note only on an empty bar and remove only our own note, so
+        # a message shown across calls (an async job's) is left alone.
+        busy_message = "MCP: processing…"
+        if status_bar is not None and not status_bar.currentMessage():
+            status_bar.showMessage(busy_message)
         try:
             while not _rpc_request_queue.empty():
                 task = _rpc_request_queue.get()
@@ -214,14 +233,14 @@ def process_gui_tasks(reschedule: bool = True) -> None:
                 except BaseException as e:
                     # Also SystemExit/KeyboardInterrupt: leaving this Qt slot
                     # with one of them quits FreeCAD.
-                    FreeCAD.Console.PrintError(
+                    log_error(
                         f"MCP RPC: unhandled exception in GUI task: {type(e).__name__}: {e}\n"
                         f"{traceback.format_exc()}"
                     )
         finally:
             if app is not None:
                 app.restoreOverrideCursor()
-            if status_bar is not None:
+            if status_bar is not None and status_bar.currentMessage() == busy_message:
                 status_bar.clearMessage()
     finally:
         _processing = False
@@ -237,6 +256,19 @@ def request_shutdown() -> None:
 def get_dispatch_status() -> dict[str, Any]:
     """Return GUI dispatch health without touching FreeCAD's GUI thread."""
     return _dispatch_health.snapshot()
+
+
+def post_to_gui(task: Callable[[], Any]) -> None:
+    """Queue a short best-effort GUI task without waiting for it to run.
+
+    For cosmetic updates (status-bar text) that must not make the caller wait
+    behind a long GUI task. Queued even while dispatch is stuck, so paired
+    updates (show, then clear) both run in order once the GUI thread is free.
+    Exceptions are logged by ``process_gui_tasks``.
+    """
+    _rpc_request_queue.put(task)
+    if _waker is not None:
+        _waker.wake()
 
 
 def dispatch_to_gui(
@@ -300,11 +332,8 @@ def dispatch_to_gui(
             except BaseException as e:
                 # SystemExit/KeyboardInterrupt from a script (sys.exit() in
                 # execute_code) must fail this call rather than quit FreeCAD.
-                FreeCAD.Console.PrintError(
-                    f"MCP RPC: GUI task raised {type(e).__name__}: {e}\n"
-                    f"{traceback.format_exc()}"
-                )
                 res = f"{type(e).__name__}: {e}"
+                log_error(f"MCP RPC: GUI task raised {res}\n{traceback.format_exc()}")
         finally:
             # Publish completion atomically with clearing health, so a deadline
             # racing with completion cannot report a missing successful result.

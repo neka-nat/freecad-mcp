@@ -161,10 +161,9 @@ print(f"FIXED_FACE=Face{{fixed}} LOADED_FACE=Face{{loaded}}")
         "Properties": {"References": [(BEAM, loaded_face)]},
     })
 
-    # Force-magnitude and Direction for Fem::ConstraintForce can't be set via
-    # the generic property setter: Force is a PropertyForce (needs a quantity
-    # string with units), and Direction is a PropertyLinkSub bound to an Edge.
-    # Set both via execute_code, picking a Z-tangent edge for shear loading.
+    # Force needs an explicit unit string. Direction can also be set through
+    # edit_object as {"object_name": BEAM, "edge": "EdgeN"}. Here execute_code
+    # selects a Z-tangent edge dynamically for shear loading.
     bind_load_code = f"""
 import FreeCAD
 doc = FreeCAD.getDocument({DOC!r})

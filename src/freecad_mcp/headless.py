@@ -44,7 +44,17 @@ def detect_freecadcmd() -> list[str] | None:
 
 
 def parse_command(value: str | None) -> list[str] | None:
-    return shlex.split(value) if value else None
+    if not value:
+        return None
+    # --freecadcmd can be an executable path already passed as one CLI argument.
+    # Shell splitting would consume Windows backslashes and split its spaces.
+    try:
+        if Path(value).is_file():
+            return [value]
+    except OSError:
+        # A command line can be an invalid/overlong filename on some platforms.
+        pass
+    return shlex.split(value)
 
 
 def _script_dir() -> Path:
@@ -84,11 +94,19 @@ def run_headless(code: str, timeout: float, command: list[str] | None) -> dict[s
     ) as f:
         f.write(code)
         script = f.name
-    argv = command + ["-c", f"exec(open({script!r}, encoding='utf-8').read())"]
+    # freecadcmd block-buffers stdout into a pipe and does not flush it when the
+    # script raises, exits, aborts or is killed; PYTHONUNBUFFERED has no effect.
+    # Line buffering keeps everything printed before such an exit.
+    # The comprehension keeps the script's namespace free of helper names.
+    unbuffer = (
+        "[getattr(s, 'reconfigure', lambda **k: None)(line_buffering=True) "
+        "for s in (__import__('sys').stdout, __import__('sys').stderr)]; "
+    )
+    argv = command + ["-c", unbuffer + f"exec(open({script!r}, encoding='utf-8').read())"]
     try:
         proc = subprocess.run(
             argv, capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=timeout,
+            errors="replace", timeout=timeout, stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired as e:
         out = "\n".join(part for part in (_clean(e.stdout), _clean(e.stderr)) if part)

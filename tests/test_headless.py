@@ -1,3 +1,5 @@
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -113,3 +115,73 @@ def test_parse_command() -> None:
     assert parse_command("flatpak run --command=freecadcmd org.freecad.FreeCAD") == [
         "flatpak", "run", "--command=freecadcmd", "org.freecad.FreeCAD",
     ]
+
+
+@pytest.mark.parametrize(
+    ("code", "timeout"),
+    [
+        ("print('before')\nraise ValueError('x')", 30),
+        ("print('before')\nimport sys; sys.exit(0)", 30),
+        ("print('before')\nimport time; time.sleep(30)", 1),
+    ],
+)
+def test_unflushed_output_survives_abnormal_exit(code: str, timeout: float) -> None:
+    # A pipe makes Python block-buffer stdout, as freecadcmd does; nothing in
+    # these scripts flushes it.
+    assert "before" in run_headless(code, timeout, PY)["output"].splitlines()
+
+
+def test_unbuffering_prefix_leaves_no_names_in_the_script_namespace() -> None:
+    res = run_headless("print(sorted(k for k in globals() if not k.startswith('__')))", 30, PY)
+    assert res["output"] == "[]"
+
+
+def test_parse_unquoted_executable_path(tmp_path: Path) -> None:
+    executable = tmp_path / "Program Files" / "FreeCAD 1.1" / "freecadcmd.exe"
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    assert parse_command(str(executable)) == [str(executable)]
+    assert parse_command(executable.as_posix()) == [executable.as_posix()]
+
+
+def test_parse_quoted_executable_with_arguments(tmp_path: Path) -> None:
+    executable = tmp_path / "FreeCAD 1.1" / "freecadcmd.exe"
+    executable.parent.mkdir()
+    executable.touch()
+    assert parse_command(f'"{executable}" --some-flag') == [
+        str(executable), "--some-flag",
+    ]
+
+
+def test_parse_command_when_filename_probe_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    def invalid_filename(_path: Path) -> bool:
+        raise OSError("not a valid filename")
+
+    monkeypatch.setattr(headless.Path, "is_file", invalid_filename)
+    assert parse_command("flatpak run --command=freecadcmd org.freecad.FreeCAD") == [
+        "flatpak", "run", "--command=freecadcmd", "org.freecad.FreeCAD",
+    ]
+
+
+def test_headless_cannot_read_the_open_mcp_stdin() -> None:
+    # Keep the parent's stdin open, as a stdio MCP client does. The headless
+    # child must see EOF, rather than waiting for or consuming protocol bytes.
+    launcher = (
+        "import json, sys; from freecad_mcp.headless import run_headless; "
+        "print(json.dumps(run_headless("
+        "\"import sys; print(repr(sys.stdin.read()))\", 2, [sys.executable])))"
+    )
+    with subprocess.Popen(
+        [sys.executable, "-c", launcher], stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    ) as parent:
+        try:
+            parent.wait(timeout=10)  # communicate() would close stdin too soon
+        except subprocess.TimeoutExpired:
+            parent.kill()
+            raise
+        assert parent.stdout is not None and parent.stderr is not None
+        assert parent.returncode == 0, parent.stderr.read()
+        result = json.loads(parent.stdout.read())
+    assert result["success"] is True, result
+    assert result["output"] == "''"

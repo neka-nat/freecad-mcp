@@ -27,11 +27,17 @@ class FakeSignal:
 
 
 class FakeStatusBar:
-    def showMessage(self, _message: str) -> None:
-        pass
+    def __init__(self) -> None:
+        self.message = ""
+
+    def showMessage(self, message: str, _timeout: int = 0) -> None:
+        self.message = message
 
     def clearMessage(self) -> None:
-        pass
+        self.message = ""
+
+    def currentMessage(self) -> str:
+        return self.message
 
 
 class FakeApplication:
@@ -359,3 +365,60 @@ def test_system_exit_from_a_raw_queued_task_does_not_leave_the_gui_loop() -> Non
         dispatch.process_gui_tasks(reschedule=False)
 
         assert ran.is_set()
+
+
+def test_drain_leaves_a_message_shown_across_calls_alone() -> None:
+    with load_gui_dispatch() as gui_dispatch:
+        status_bar = gui_dispatch.FreeCADGui.getMainWindow().statusBar()
+        gui_dispatch.post_to_gui(lambda: status_bar.showMessage("job running"))
+        gui_dispatch.process_gui_tasks(reschedule=False)
+        assert status_bar.currentMessage() == "job running"
+
+        # An unrelated call in between, then the job's clear in a later drain.
+        gui_dispatch.post_to_gui(lambda: None)
+        gui_dispatch.process_gui_tasks(reschedule=False)
+        assert status_bar.currentMessage() == "job running"
+        gui_dispatch.post_to_gui(status_bar.clearMessage)
+        gui_dispatch.process_gui_tasks(reschedule=False)
+        assert status_bar.currentMessage() == ""
+
+
+def test_drain_shows_and_removes_its_own_note() -> None:
+    with load_gui_dispatch() as gui_dispatch:
+        status_bar = gui_dispatch.FreeCADGui.getMainWindow().statusBar()
+        seen = []
+        gui_dispatch.post_to_gui(lambda: seen.append(status_bar.currentMessage()))
+        gui_dispatch.process_gui_tasks(reschedule=False)
+        assert seen == ["MCP: processing…"]
+        assert status_bar.currentMessage() == ""
+
+
+def test_post_to_gui_returns_without_waiting_for_a_busy_gui_thread() -> None:
+    with load_gui_dispatch() as gui_dispatch:
+        ran = threading.Event()
+        before = time.monotonic()
+        gui_dispatch.post_to_gui(ran.set)  # no waker: nothing drains the queue yet
+        assert time.monotonic() - before < 0.1
+        assert not ran.is_set()
+        gui_dispatch.process_gui_tasks(reschedule=False)
+        assert ran.is_set()
+
+
+def test_error_text_with_a_lone_surrogate_still_returns_the_error() -> None:
+    with load_gui_dispatch() as gui_dispatch:
+        logged = []
+
+        def print_error(message: str) -> None:
+            message.encode("utf-8")  # FreeCAD's PrintError fails like this
+            logged.append(message)
+
+        gui_dispatch.FreeCAD.Console.PrintError = print_error
+        gui_dispatch._waker = ThreadedWaker(gui_dispatch)
+
+        def fail() -> None:
+            raise ValueError("bad \udcff")
+
+        res = gui_dispatch.dispatch_to_gui(fail, timeout=2)
+        gui_dispatch._waker.join()
+        assert res == "ValueError: bad \udcff"
+        assert logged and "bad \\udcff" in logged[0]
