@@ -6,7 +6,10 @@ legacy parameter remapping, generic FEM-typed objects, and arbitrary
 public entry point that selects the branch.
 """
 
+from __future__ import annotations
+
 from contextlib import contextmanager
+from typing import Any
 
 import FreeCAD
 import ObjectsFem
@@ -249,7 +252,40 @@ def _create_generic_object(doc: FreeCAD.Document, obj: Object):
     return res
 
 
-def create_object_gui(doc_name: str, obj: Object):
+def _rollback_creation(
+    doc: FreeCAD.Document, existing: set[str], error: BaseException,
+) -> str | dict[str, Any]:
+    """Undo this creation and report any objects that could not be removed."""
+    cleanup_errors = []
+    try:
+        doc.abortTransaction()
+    except Exception as exc:
+        cleanup_errors.append(f"abort transaction: {exc}")
+    # With undo disabled, abortTransaction does not remove the new objects.
+    for name in reversed([o.Name for o in doc.Objects if o.Name not in existing]):
+        try:
+            doc.removeObject(name)
+        except Exception as exc:
+            cleanup_errors.append(f"remove {name}: {exc}")
+    try:
+        doc.recompute()
+    except Exception as exc:
+        cleanup_errors.append(f"recompute: {exc}")
+    remaining = [o.Name for o in doc.Objects if o.Name not in existing]
+    if remaining or cleanup_errors:
+        return {
+            "success": False,
+            "error": (
+                f"{error}. Cleanup incomplete; remaining objects: "
+                f"{', '.join(remaining) or 'none'}. Inspect the document before retrying."
+            ),
+            "remaining_objects": remaining,
+            "cleanup_errors": cleanup_errors,
+        }
+    return f"{error} (no new objects remain)"
+
+
+def create_object_gui(doc_name: str, obj: Object) -> dict[str, Any] | str:
     """Create an object in ``doc_name`` according to ``obj.type``.
 
     Returns the created object's actual ``Name`` on success (FreeCAD
@@ -257,10 +293,9 @@ def create_object_gui(doc_name: str, obj: Object):
     ``Box001`` — and every later get_object/edit_object call needs the real
     one), or an error string on failure.
 
-    Creation is all or nothing: when a property cannot be applied, the
-    objects added so far are removed, so a retry does not leave a stray
-    ``Box001`` behind (issue #159). An object that is created but invalid
-    is kept for inspection and reported with its name.
+    Failed creation rolls back the transaction and removes new objects even
+    with undo disabled. If cleanup fails, report the remaining actual names.
+    An object that is created but invalid is kept and reported for inspection.
     """
     try:
         doc = FreeCAD.getDocument(doc_name)
@@ -268,41 +303,33 @@ def create_object_gui(doc_name: str, obj: Object):
         FreeCAD.Console.PrintError(f"Document '{doc_name}' not found.\n")
         return f"Document '{doc_name}' not found.\n"
     existing = {o.Name for o in doc.Objects}
-    doc.openTransaction(f"Create {obj.name}")
+    transaction_open = False
     try:
+        doc.openTransaction(f"Create {obj.name}")
+        transaction_open = True
         created = _create_by_type(doc, obj)
-        if isinstance(created, str):
-            doc.abortTransaction()
-            return created
         doc.recompute()
-        doc.commitTransaction()
         problem = object_validity_error(created)
+        doc.commitTransaction()
+        transaction_open = False
         if problem:
-            FreeCAD.Console.PrintError(problem + "\n")
             return {
                 "success": False,
                 "object_name": created.Name,
                 "error": problem,
             }
         return {"success": True, "object_name": created.Name}
-    except Exception as e:
-        doc.abortTransaction()
-        # abortTransaction undoes nothing when the document's undo is off
-        leftovers = [o.Name for o in doc.Objects if o.Name not in existing]
-        for name in leftovers:
-            try:
-                doc.removeObject(name)
-            except Exception:
-                pass
-        doc.recompute()
-        return f"{e} (nothing was created)"
+    except BaseException as e:
+        if transaction_open:
+            return _rollback_creation(doc, existing, e)
+        return str(e)
 
 
-def _create_by_type(doc: FreeCAD.Document, obj: Object):
-    """Create ``obj`` with the factory its type needs; an error string if it cannot."""
+def _create_by_type(doc: FreeCAD.Document, obj: Object) -> FreeCAD.DocumentObject:
+    """Create ``obj`` with the factory its type needs."""
     if obj.type == "Fem::FemMeshGmsh":
         if not obj.analysis:
-            return (
+            raise ValueError(
                 "Fem::FemMeshGmsh requires an 'analysis_name' naming the "
                 "Fem::AnalysisPython container to add the mesh to."
             )
