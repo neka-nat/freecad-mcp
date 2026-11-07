@@ -1,7 +1,6 @@
 import FreeCAD
 import FreeCADGui
 
-import contextlib
 import base64
 import io
 import math
@@ -34,6 +33,7 @@ from rpc_server.parts_library import get_parts_list, insert_part_from_library
 from rpc_server.property_mapper import Object
 from rpc_server.serialize import serialize_object
 from rpc_server.settings import load_settings, save_settings
+from rpc_server.stdout_capture import capture_stdout
 from rpc_server.version import PROTOCOL_VERSION, __version__ as ADDON_VERSION
 from rpc_server.view_manager import get_displayed_3d_view, save_active_screenshot
 
@@ -296,10 +296,8 @@ class FreeCADRPC:
         code_preview = code if len(code) <= 200 else code[:200] + "…"
 
         def worker() -> None:
-            # NOTE: we do NOT redirect sys.stdout here. contextlib.redirect_stdout
-            # swaps stdout process-wide, not per-thread, so it would race with the
-            # GUI thread and other concurrent work. Background code should report
-            # via FreeCAD.Console (which is thread-safe) instead.
+            # Synchronous capture routes only the GUI thread, so this worker's
+            # prints stay on the console rather than entering another RPC reply.
             # Execute against the live dictionary. Merging a snapshot on exit
             # would restore stale values and lose deletions/concurrent writes.
             _async_execution.active = True
@@ -385,7 +383,7 @@ class FreeCADRPC:
         output_buffer = io.StringIO()
 
         def task():
-            with contextlib.redirect_stdout(output_buffer):
+            with capture_stdout(output_buffer):
                 exec(code, _EXEC_NAMESPACE)
             return True
 
