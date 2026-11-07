@@ -53,6 +53,13 @@ container. It auto-creates a `SolverCcxTools` if the analysis has none and retur
 max von Mises stress, max/min displacement, node count, and the solver's working
 directory. The default `timeout` is 600 seconds.
 
+The reply also lists the loads as the solver saw them (`applied_loads`: forces
+in N with their faces and direction, pressures in MPa, fixed faces). Check them:
+a plain number in `ConstraintForce.Force` is read as millinewtons, so
+`Force = 1000` applies 1 N and the results come out 1000 times too low without
+any error (#158); set it with its unit, e.g. `"1000 N"`. The force follows the
+loaded face's normal unless `Direction` links an edge or face.
+
 See [`examples/cantilever_fem.py`](../examples/cantilever_fem.py) for an end-to-end
 example, including geometry, material, mesh, constraints, and an analytical
 comparison. For long analyses, configure the client to allow the
