@@ -305,8 +305,8 @@ def create_object(
                 "Material": {
                     "Name": "MyMaterial",
                     "Density": "7900 kg/m^3",
-                    "YoungModulus": "210 GPa",
-                    "PoissonRatio": 0.3
+                    "YoungsModulus": "210 GPa",
+                    "PoissonRatio": "0.3"
                 }
             }
         }
@@ -770,14 +770,16 @@ def run_fem_analysis(
       or bending stress comes out far too low.
     - At least one Fem::ConstraintFixed and one Fem::ConstraintForce (or
       ConstraintPressure) whose References are faces of the geometry.
-    - Set Force with its unit, e.g. "1000 N": a plain number is read as
-      millinewtons, so Force = 1000 applies 1 N. The force acts along the
+    - Set Force with its unit, e.g. "1000 N": create_object/edit_object reject
+      unitless values. In existing documents and execute_code, a plain number
+      uses millinewtons, so Force = 1000 applies 1 N. The force acts along the
       normal of the loaded face unless Direction links an edge or face;
       Reversed flips it.
 
     A SolverCcxTools is auto-created if the analysis has none. The reply
-    lists the loads as the solver saw them (in N and MPa, with their faces
-    and direction): check them before trusting the stress figures.
+    lists mechanical loads captured in the same GUI operation as the solve
+    (in N and MPa, with faces and direction). A failed load read stops the solve.
+    Direction can be set to {"object_name": "Beam", "edge": "Edge1"}.
 
     The solver runs synchronously on the FreeCAD GUI thread and blocks all
     other RPC calls for its duration; do not fan out parallel requests.

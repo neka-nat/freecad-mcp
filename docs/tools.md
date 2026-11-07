@@ -53,12 +53,22 @@ container. It auto-creates a `SolverCcxTools` if the analysis has none and retur
 max von Mises stress, max/min displacement, node count, and the solver's working
 directory. The default `timeout` is 600 seconds.
 
-The reply also lists the loads as the solver saw them (`applied_loads`: forces
-in N with their faces and direction, pressures in MPa, fixed faces). Check them:
-a plain number in `ConstraintForce.Force` is read as millinewtons, so
-`Force = 1000` applies 1 N and the results come out 1000 times too low without
-any error (#158); set it with its unit, e.g. `"1000 N"`. The force follows the
-loaded face's normal unless `Direction` links an edge or face.
+The reply includes `solver_object`, the new `result_objects`, and
+`applied_loads` (forces in N with faces and direction, pressures in MPa, fixed
+faces). Loads are captured inside the same GUI operation as the solve, after
+recomputation. If a supported load cannot be read, the solve stops with an error.
+
+Set `ConstraintForce.Force` with an explicit unit, e.g. `"1000 N"`.
+`create_object` and `edit_object` reject unitless force values. Existing documents
+and `execute_code` retain FreeCAD's native units: `Force = 1000` means **1 N**, not
+1000 N. Always check the returned loads when interpreting stress and displacement.
+This summary covers force, pressure and fixed constraints, not every FEM load type.
+The force follows the loaded face's normal unless `Direction` links an edge or
+face, e.g. `{"object_name": "Beam", "edge": "Edge3"}`. `Reversed` flips it.
+
+The addon reuses the existing CalculiX solver and imports each solve's results
+once. Its working directory is isolated per call; only new mechanical results
+are returned. Existing results in the selected analysis are purged before solving.
 
 See [`examples/cantilever_fem.py`](../examples/cantilever_fem.py) for an end-to-end
 example, including geometry, material, mesh, constraints, and an analytical

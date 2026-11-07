@@ -1,6 +1,7 @@
 """Property assignment from JSON-friendly dicts onto FreeCAD document objects."""
 
 from dataclasses import dataclass, field
+import math
 from typing import Any
 
 import FreeCAD
@@ -66,7 +67,7 @@ def resolve_references(doc: FreeCAD.Document, val: Any) -> list[tuple[Any, Any]]
 
 def set_object_property(
     doc: FreeCAD.Document, obj: FreeCAD.DocumentObject, properties: dict[str, Any]
-):
+) -> None:
     failures = []
     for prop, val in properties.items():
         try:
@@ -95,6 +96,33 @@ def set_object_property(
                         ),
                     )
                     setattr(obj, prop, placement)
+
+                elif prop == "Force" and obj.TypeId == "Fem::ConstraintForce":
+                    if not isinstance(val, str):
+                        raise ValueError("Force requires an explicit unit, e.g. '100 N'; bare numbers are ambiguous")
+                    try:
+                        newtons = FreeCAD.Units.Quantity(val).getValueAs("N")
+                        if not math.isfinite(float(newtons.Value)):
+                            raise ValueError("non-finite force")
+                    except Exception as exc:
+                        raise ValueError("Force requires a finite quantity with force units, e.g. '100 N'") from exc
+                    setattr(obj, prop, val)
+
+                elif prop == "Direction" and obj.TypeId == "Fem::ConstraintForce" and isinstance(val, (dict, list, tuple)):
+                    if isinstance(val, dict):
+                        name = val.get("object_name")
+                        subs = val.get("edge", val.get("face"))
+                    elif len(val) == 2:
+                        name, subs = val
+                    else:
+                        raise ValueError("Direction needs [object_name, edge_or_face]")
+                    subs = [subs] if isinstance(subs, str) else subs
+                    if not isinstance(subs, (list, tuple)) or len(subs) != 1 or not isinstance(subs[0], str):
+                        raise ValueError("Direction needs exactly one edge or face")
+                    target = doc.getObject(name) if isinstance(name, str) else None
+                    if target is None or target.getSubObject(subs[0]) is None:
+                        raise ValueError(f"Direction reference {name!r}:{subs[0]} not found")
+                    setattr(obj, prop, (target, list(subs)))
 
                 elif isinstance(getattr(obj, prop), FreeCAD.Vector) and isinstance(
                     val, dict
