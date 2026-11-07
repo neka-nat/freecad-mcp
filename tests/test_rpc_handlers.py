@@ -168,7 +168,7 @@ def test_script_exit_fails_the_call_and_preserves_rpc_dispatch(
     # Run the Qt callback synchronously so an escaping BaseException fails
     # this test instead of merely terminating a test worker thread.
     rpc_module.test_dispatch._waker = types.SimpleNamespace(
-        wake=lambda: rpc_module.test_dispatch.process_gui_tasks(reschedule=False)
+        wake=lambda: rpc_module.test_dispatch.process_gui_tasks()
     )
     rpc = rpc_module.FreeCADRPC()
     stdout = sys.stdout
@@ -620,7 +620,7 @@ def test_status_message_is_cleared_after_a_job_that_ran_behind_a_busy_gui(
     assert wait_for_job(rpc, job_id)["state"] == "done"
     release.set()
     busy.join(timeout=5)
-    rpc_module.test_dispatch.process_gui_tasks(reschedule=False)
+    rpc_module.test_dispatch.process_gui_tasks()
     assert status_bar.currentMessage() == ""
 
 

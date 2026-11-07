@@ -45,15 +45,15 @@ def test_stale_mouse_state_cannot_wedge_dispatch() -> None:
         ran: list[int] = []
 
         gui_dispatch._rpc_request_queue.put(lambda: ran.append(1))
-        gui_dispatch.process_gui_tasks(reschedule=False)
+        gui_dispatch.process_gui_tasks()
         assert ran == []  # a fresh press is treated as a drag
 
         gui_dispatch._mouse_defer_since -= gui_dispatch.MOUSE_DEFER_MAX_S
-        gui_dispatch.process_gui_tasks(reschedule=False)
+        gui_dispatch.process_gui_tasks()
         assert ran == [1]
 
         gui_dispatch._rpc_request_queue.put(lambda: ran.append(2))
-        gui_dispatch.process_gui_tasks(reschedule=False)
+        gui_dispatch.process_gui_tasks()
         assert ran == [1, 2]
         assert len(warnings) == 1  # once per stuck-button episode
 
@@ -80,7 +80,7 @@ def test_queue_timeout_ignores_a_guard_that_only_held_an_earlier_call() -> None:
     with load_gui_dispatch() as gui_dispatch:
         gui_dispatch.QtWidgets.QApplication = PopupOpen
         gui_dispatch._rpc_request_queue.put(lambda: None)
-        gui_dispatch.process_gui_tasks(reschedule=False)
+        gui_dispatch.process_gui_tasks()
         time.sleep(0.01)  # the popup was seen strictly before the next call
 
         # No tick runs for this call (no waker), so nothing is known about
