@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from test_rpc_handlers import rpc_module
+from test_heartbeat import PendingTimers
 
 
 def test_thread_start_failure_releases_port_and_allows_retry(
@@ -30,12 +31,15 @@ def test_thread_start_failure_releases_port_and_allows_retry(
     monkeypatch.setattr(rpc_module, "init_waker", lambda: None)
     monkeypatch.setattr(rpc_module, "cleanup_waker", lambda: None)
     monkeypatch.setattr(rpc_module.threading, "Thread", lambda **kwargs: CannotStart())
+    timers = PendingTimers(rpc_module.test_dispatch)
     try:
         with pytest.raises(RuntimeError, match="cannot start server thread"):
             rpc_module.start_rpc_server(port=0)
         assert rpc_module.rpc_server_instance is None
         assert rpc_module.rpc_server_thread is None
         assert servers[0].socket.fileno() == -1
+        timers.tick()
+        assert not timers.pending
 
         monkeypatch.setattr(rpc_module.threading, "Thread", real_thread)
         port = servers[0].server_address[1]
@@ -43,6 +47,8 @@ def test_thread_start_failure_releases_port_and_allows_retry(
         assert f"127.0.0.1:{port}" in message
         assert "PID" in message
         assert rpc_module.rpc_server_thread.is_alive()
+        timers.tick()
+        assert len(timers.pending) == 1
     finally:
         monkeypatch.setattr(rpc_module.threading, "Thread", real_thread)
         if rpc_module.rpc_server_instance is not None and rpc_module.rpc_server_thread is not None:
