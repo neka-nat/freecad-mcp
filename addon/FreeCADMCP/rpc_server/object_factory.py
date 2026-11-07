@@ -256,28 +256,26 @@ def create_object_gui(doc_name: str, obj: Object):
     sanitises and de-duplicates requested names — ``Box`` may come back as
     ``Box001`` — and every later get_object/edit_object call needs the real
     one), or an error string on failure.
+
+    Creation is all or nothing: when a property cannot be applied, the
+    objects added so far are removed, so a retry does not leave a stray
+    ``Box001`` behind (issue #159). An object that is created but invalid
+    is kept for inspection and reported with its name.
     """
     try:
         doc = FreeCAD.getDocument(doc_name)
     except Exception:
         FreeCAD.Console.PrintError(f"Document '{doc_name}' not found.\n")
         return f"Document '{doc_name}' not found.\n"
+    existing = {o.Name for o in doc.Objects}
+    doc.openTransaction(f"Create {obj.name}")
     try:
-        if obj.type == "Fem::FemMeshGmsh":
-            if not obj.analysis:
-                return (
-                    "Fem::FemMeshGmsh requires an 'analysis_name' naming the "
-                    "Fem::AnalysisPython container to add the mesh to."
-                )
-            created = _create_fem_mesh(doc, obj)
-        elif obj.type.startswith("Fem::"):
-            created = _create_fem_object(doc, obj)
-        elif obj.type in _PYTHON_FACTORIES:
-            created = _create_python_object(doc, obj)
-        else:
-            created = _create_generic_object(doc, obj)
-
+        created = _create_by_type(doc, obj)
+        if isinstance(created, str):
+            doc.abortTransaction()
+            return created
         doc.recompute()
+        doc.commitTransaction()
         problem = object_validity_error(created)
         if problem:
             FreeCAD.Console.PrintError(problem + "\n")
@@ -288,7 +286,32 @@ def create_object_gui(doc_name: str, obj: Object):
             }
         return {"success": True, "object_name": created.Name}
     except Exception as e:
-        return str(e)
+        doc.abortTransaction()
+        # abortTransaction undoes nothing when the document's undo is off
+        leftovers = [o.Name for o in doc.Objects if o.Name not in existing]
+        for name in leftovers:
+            try:
+                doc.removeObject(name)
+            except Exception:
+                pass
+        doc.recompute()
+        return f"{e} (nothing was created)"
+
+
+def _create_by_type(doc: FreeCAD.Document, obj: Object):
+    """Create ``obj`` with the factory its type needs; an error string if it cannot."""
+    if obj.type == "Fem::FemMeshGmsh":
+        if not obj.analysis:
+            return (
+                "Fem::FemMeshGmsh requires an 'analysis_name' naming the "
+                "Fem::AnalysisPython container to add the mesh to."
+            )
+        return _create_fem_mesh(doc, obj)
+    if obj.type.startswith("Fem::"):
+        return _create_fem_object(doc, obj)
+    if obj.type in _PYTHON_FACTORIES:
+        return _create_python_object(doc, obj)
+    return _create_generic_object(doc, obj)
 
 
 def edit_object_gui(doc_name: str, obj: Object):
