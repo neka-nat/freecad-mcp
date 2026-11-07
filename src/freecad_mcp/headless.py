@@ -106,7 +106,7 @@ def run_headless(code: str, timeout: float, command: list[str] | None) -> dict[s
     try:
         proc = subprocess.run(
             argv, capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=timeout,
+            errors="replace", timeout=timeout, stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired as e:
         out = "\n".join(part for part in (_clean(e.stdout), _clean(e.stderr)) if part)

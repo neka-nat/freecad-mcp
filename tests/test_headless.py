@@ -1,3 +1,5 @@
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -159,3 +161,27 @@ def test_parse_command_when_filename_probe_fails(monkeypatch: pytest.MonkeyPatch
     assert parse_command("flatpak run --command=freecadcmd org.freecad.FreeCAD") == [
         "flatpak", "run", "--command=freecadcmd", "org.freecad.FreeCAD",
     ]
+
+
+def test_headless_cannot_read_the_open_mcp_stdin() -> None:
+    # Keep the parent's stdin open, as a stdio MCP client does. The headless
+    # child must see EOF, rather than waiting for or consuming protocol bytes.
+    launcher = (
+        "import json, sys; from freecad_mcp.headless import run_headless; "
+        "print(json.dumps(run_headless("
+        "\"import sys; print(repr(sys.stdin.read()))\", 2, [sys.executable])))"
+    )
+    with subprocess.Popen(
+        [sys.executable, "-c", launcher], stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    ) as parent:
+        try:
+            parent.wait(timeout=10)  # communicate() would close stdin too soon
+        except subprocess.TimeoutExpired:
+            parent.kill()
+            raise
+        assert parent.stdout is not None and parent.stderr is not None
+        assert parent.returncode == 0, parent.stderr.read()
+        result = json.loads(parent.stdout.read())
+    assert result["success"] is True, result
+    assert result["output"] == "''"

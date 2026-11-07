@@ -91,6 +91,10 @@ In an MCP JSON configuration's `args` array, use
 additional arguments still use shell-style splitting, so quote any executable
 path containing spaces inside that command string.
 
+Headless scripts receive closed standard input, so they cannot consume the MCP
+protocol stream or wait for interactive input. Pass all inputs in the code or
+files. Printed lines are flushed to preserve progress output on failure or timeout.
+
 ## GUI dispatch timeouts
 
 GUI-thread operations run one at a time in FIFO order. Calls have separate queue
