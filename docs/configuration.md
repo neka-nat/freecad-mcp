@@ -130,3 +130,37 @@ ssh -N -L 9875:localhost:9875 user@freecad-host
 Keep the MCP server on its default `--host localhost`. With remote connections
 off, the RPC server only answers requests addressed to `localhost` or a
 loopback address such as `127.0.0.1`.
+
+## HTTP and SSE transports
+
+By default the MCP server speaks stdio and the MCP client launches it. To run it
+as a long-lived HTTP service instead (for example in a container):
+
+```bash
+freecad-mcp --transport streamable-http          # http://127.0.0.1:8000/mcp
+freecad-mcp --transport sse                      # http://127.0.0.1:8000/sse
+```
+
+`streamable-http` is preferred; `sse` is deprecated in the MCP specification.
+Use `--listen-host` and `--listen-port` to change the address. These options are
+separate from `--host`, which is the FreeCAD RPC server the MCP server connects to.
+
+The MCP server can call `execute_code`, so exposure is guarded:
+
+- It listens on `127.0.0.1` by default.
+- Listening on any non-loopback address (such as `0.0.0.0`) is refused unless a
+  bearer token is set with the `FREECAD_MCP_LISTEN_TOKEN` environment variable
+  (preferred) or `--listen-token`. Clients send `Authorization: Bearer <token>`.
+  This token is separate from `FREECAD_MCP_TOKEN`, which authenticates to the
+  FreeCAD RPC server.
+- A token can also be set on loopback to require it from local clients.
+- DNS-rebinding protection is always on: requests whose `Host` header is not a
+  loopback name are rejected with 421. Add names with `--allowed-host HOST[:PORT]`.
+
+### Running in a container
+
+See the [Docker guide](docker.md) for build and run commands. With `--network host` the defaults need no extra flags. With bridge networking the server has to bind `0.0.0.0`, so
+it requires `FREECAD_MCP_LISTEN_TOKEN` by default. `--allow-insecure-remote` (or
+`FREECAD_MCP_ALLOW_INSECURE_REMOTE=1`) skips that requirement. Only use it when the
+published port is restricted to the host's loopback (`-p 127.0.0.1:8000:8000`).
+`execute_code_headless` is unavailable in the image because it has no FreeCAD.
