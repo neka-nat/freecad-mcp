@@ -1,0 +1,8 @@
+.git
+.venv
+.devcontainer
+__pycache__/
+dist/
+results/
+assets/
+tests/

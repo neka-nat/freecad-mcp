@@ -63,12 +63,27 @@ Restart Claude Desktop to load the configuration, keep FreeCAD open with its RPC
 server running, and ask Claude to create a model. Connections use `localhost` by
 default.
 
+### Alternative: run the MCP server in Docker
+
+To keep Python and uv off your host, build the image and run it with host networking
+(Linux):
+
+```bash
+docker build -t freecad-mcp .
+docker run --rm --init --network host freecad-mcp
+```
+
+Then point your MCP client at `http://localhost:8000/mcp`. See the
+[Docker guide](docs/docker.md) for client setup, Claude Desktop, and Docker Desktop
+or bridge networking.
+
 ## Documentation
 
 | Guide | Contents |
 | --- | --- |
 | [Installation](docs/installation.md) | Addon directories, setup screenshots, running from source |
-| [Configuration](docs/configuration.md) | Auto-start, text feedback, remote connections |
+| [Configuration](docs/configuration.md) | Auto-start, text feedback, remote connections, HTTP transport |
+| [Docker](docs/docker.md) | Running the MCP server in a container, client setup, networking |
 | [Tools](docs/tools.md) | Available tools, screenshots, FEM analysis |
 | [Code execution](docs/execution.md) | GUI execution, background jobs, headless scripts, timeout troubleshooting |
 | [Demos and examples](docs/examples.md) | Design demos, FEM example, ADK and LangChain integrations |
