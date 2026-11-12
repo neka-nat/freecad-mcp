@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.neka-nat/freecad-mcp",
+  "title": "FreeCAD MCP",
+  "description": "Control FreeCAD from MCP clients: create and edit models, run Python and FEM analyses.",
+  "repository": {
+    "url": "https://github.com/neka-nat/freecad-mcp",
+    "source": "github"
+  },
+  "version": "0.1.31",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "freecad-mcp",
+      "version": "0.1.31",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
