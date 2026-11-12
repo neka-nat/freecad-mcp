@@ -115,6 +115,37 @@ def _image_is_flat_color(path: str, threshold: int = 4) -> bool:
         return False
 
 
+def _find_active_gl_widget():
+    """Return the QOpenGLWidget of the ACTIVE 3D view, or None.
+
+    mdi.findChild(QOpenGLWidget) returns the FIRST widget in the child tree,
+    which may belong to a hidden/secondary MDI subwindow (e.g. an old empty
+    document tab still sitting at its default 400x300 size). Grbbing that
+    widget's rect produces a screenshot of the wrong region (or a flat color).
+    """
+    from PySide6 import QtOpenGLWidgets, QtWidgets
+
+    win = FreeCADGui.getMainWindow()
+    mdi = win.findChild(QtWidgets.QMdiArea)
+    if mdi is None:
+        return None
+    # Prefer the GL widget belonging to the active MDI subwindow.
+    active_sub = mdi.activeSubWindow() or mdi.currentSubWindow()
+    if active_sub is not None:
+        gl = active_sub.findChild(QtOpenGLWidgets.QOpenGLWidget)
+        if gl is not None:
+            return gl
+    # Fallback: the largest visible GL widget (the active 3D view is
+    # virtually always the biggest one on screen).
+    candidates = [
+        g for g in mdi.findChildren(QtOpenGLWidgets.QOpenGLWidget)
+        if g.isVisible() and g.width() > 1 and g.height() > 1
+    ]
+    if candidates:
+        return max(candidates, key=lambda g: g.width() * g.height())
+    return None
+
+
 def _grab_compositor_viewport(save_path: str, width: int, height: int) -> bool:
     """Capture the 3D viewport via the Wayland compositor (grim).
 
@@ -131,7 +162,7 @@ def _grab_compositor_viewport(save_path: str, width: int, height: int) -> bool:
         mdi = win.findChild(QtWidgets.QMdiArea)
         if mdi is None:
             return False
-        gl = mdi.findChild(QtOpenGLWidgets.QOpenGLWidget)
+        gl = _find_active_gl_widget()
         if gl is None:
             return False
 
@@ -164,6 +195,31 @@ def _grab_compositor_viewport(save_path: str, width: int, height: int) -> bool:
             )
             wx, wy = me["at"][0], me["at"][1]
             ww, wh = me["size"][0], me["size"][1]
+
+            # grim captures what is VISIBLE on screen. If any other window
+            # (terminal, editor...) overlaps the FreeCAD view rect, the crop
+            # would contain that window instead. Raise FreeCAD to the top
+            # first and give the compositor a moment to re-composite.
+            #
+            # NOTE: on this system `hyprctl dispatch focuswindow <addr>` is
+            # broken (omarchy's hyprctl routes dispatch args through a lua
+            # eval that chokes on the `address:...` argument). The working
+            # call is the lua API: hyprctl eval 'hl.dsp.window.bring_to_top(...)'.
+            focus_cmds = [
+                ["hyprctl", "eval",
+                 f'hl.dsp.window.bring_to_top("class:org.freecad.FreeCAD")'],
+                ["hyprctl", "eval",
+                 f'hl.dsp.window.bring_to_top("address:{me["address"]}")'],
+                ["hyprctl", "dispatch", "focuswindow",
+                 f"address:{me['address']}"],
+            ]
+            for cmd in focus_cmds:
+                try:
+                    subprocess.run(cmd, capture_output=True, timeout=5)
+                except Exception:
+                    pass
+            QtWidgets.QApplication.processEvents()
+            QtCore.QThread.msleep(200)
         except Exception:
             return False
 
@@ -217,7 +273,7 @@ def _grab_opengl_widget_fallback(save_path: str, width: int, height: int) -> boo
         mdi = win.findChild(QtWidgets.QMdiArea)
         if mdi is None:
             return False
-        gl = mdi.findChild(QtOpenGLWidgets.QOpenGLWidget)
+        gl = _find_active_gl_widget()
         if gl is None:
             return False
         img = gl.grabFramebuffer()
