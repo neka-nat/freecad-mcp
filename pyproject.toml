@@ -1,7 +1,8 @@
 [project]
 name = "freecad-mcp"
 dynamic = ["version"]
-description = "Add your description here"
+description = "MCP server for FreeCAD: create and edit models, run Python scripts, inspect documents and run FEM analyses from Claude and other MCP clients"
+keywords = ["freecad", "mcp", "model-context-protocol", "cad", "3d-modeling", "fem", "claude"]
 readme = "README.md"
 authors = [
     { name = "neka-nat", email = "nekanat.stock@gmail.com" }
@@ -16,6 +17,11 @@ dependencies = [
     "pyjwt>=2.15.0",
     "validators>=0.34.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/neka-nat/freecad-mcp"
+Documentation = "https://github.com/neka-nat/freecad-mcp/tree/main/docs"
+Issues = "https://github.com/neka-nat/freecad-mcp/issues"
 
 [project.scripts]
 freecad-mcp = "freecad_mcp.server:main"

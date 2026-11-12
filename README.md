@@ -1,5 +1,7 @@
 # FreeCAD MCP
 
+<!-- mcp-name: io.github.neka-nat/freecad-mcp -->
+
 <p align="left">
  <a href="https://www.star-history.com/neka-nat/freecad-mcp">
   <picture>
