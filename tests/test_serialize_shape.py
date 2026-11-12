@@ -42,6 +42,20 @@ class _GoodShape:
     Faces = [object() for _ in range(4)]
 
 
+class _BoxedShape(_GoodShape):
+    BoundBox = types.SimpleNamespace(
+        XMin=-1.5, XMax=8.5, YMin=0.0, YMax=4.0, ZMin=2.25, ZMax=6.75
+    )
+
+
+class _NoBoundBoxShape(_GoodShape):
+    """Measurable, but its bounding box cannot be read."""
+
+    @property
+    def BoundBox(self):
+        raise RuntimeError("no bounding box")
+
+
 freecad_stub.Vector = _StubVector
 freecad_stub.Rotation = _StubRotation
 freecad_stub.Placement = _StubPlacement
@@ -66,6 +80,26 @@ def test_good_shape_serializes():
     result = serialize.serialize_shape(_GoodShape())
     assert result["Volume"] == 42.0
     assert result["VertexCount"] == 8
+
+
+def test_bounding_box_comes_back_with_the_measurements():
+    # Where the shape sits, which otherwise takes a separate scripted query to
+    # find out: the counts alone do not say whether a part is even the right
+    # way up.
+    result = serialize.serialize_shape(_BoxedShape())
+    assert result["BoundBox"] == {
+        "XMin": -1.5, "XMax": 8.5,
+        "YMin": 0.0, "YMax": 4.0,
+        "ZMin": 2.25, "ZMax": 6.75,
+    }
+
+
+def test_a_shape_without_a_bounding_box_keeps_its_measurements():
+    # Losing the volume over a missing bounding box is the worse trade, so the
+    # two are read separately.
+    result = serialize.serialize_shape(_NoBoundBoxShape())
+    assert result["Volume"] == 42.0
+    assert "BoundBox" not in result
 
 
 def test_broken_shape_returns_error_dict_instead_of_raising():
