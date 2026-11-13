@@ -15,6 +15,13 @@ except ImportError:
 from mcp.types import CallToolResult, ImageContent, TextContent
 
 from .freecad_client import FreeCADConnection
+from .http_transport import (
+    DEFAULT_LISTEN_HOST,
+    DEFAULT_LISTEN_PORT,
+    UnsafeListenConfigError,
+    run_http,
+    validate_listen_config,
+)
 from .operations import (
     create_document_operation,
     create_object_operation,
@@ -847,7 +854,62 @@ def main():
         "no token set)",
     )
     parser.add_argument("--freecadcmd", default=None, help="Command that starts headless FreeCAD for execute_code_headless, e.g. 'flatpak run --command=freecadcmd org.freecad.FreeCAD' (default: auto-detect PATH, then Flatpak)")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "streamable-http", "sse"],
+        default="stdio",
+        help="How MCP clients connect to this server (default: stdio). HTTP modes "
+        "listen on loopback only unless --listen-host says otherwise.",
+    )
+    parser.add_argument("--listen-host", type=_validate_host, default=None, help=f"Address to listen on for HTTP transports (default: {DEFAULT_LISTEN_HOST}). A non-loopback address requires a listen token.")
+    parser.add_argument("--listen-port", type=int, default=None, help=f"Port to listen on for HTTP transports (default: {DEFAULT_LISTEN_PORT})")
+    parser.add_argument(
+        "--listen-token",
+        default=None,
+        help="Bearer token HTTP clients must send (falls back to the "
+        "FREECAD_MCP_LISTEN_TOKEN environment variable, which is preferable "
+        "because other users can read command-line arguments). Required when "
+        "listening on a non-loopback address.",
+    )
+    parser.add_argument(
+        "--allowed-host",
+        action="append",
+        default=[],
+        metavar="HOST[:PORT]",
+        help="Extra Host header value to accept for HTTP transports (repeatable). "
+        "Loopback names are always accepted.",
+    )
+    parser.add_argument(
+        "--allow-insecure-remote",
+        action="store_true",
+        default=os.environ.get("FREECAD_MCP_ALLOW_INSECURE_REMOTE") == "1",
+        help="Allow listening on a non-loopback address without a token. Intended "
+        "for containers whose published port is restricted to the host's loopback "
+        "(-p 127.0.0.1:PORT:PORT). Also enabled by FREECAD_MCP_ALLOW_INSECURE_REMOTE=1.",
+    )
     args = parser.parse_args()
+    listen_token = args.listen_token or os.environ.get("FREECAD_MCP_LISTEN_TOKEN") or None
+    if args.transport == "stdio":
+        given = [
+            flag
+            for flag, value in (
+                ("--listen-host", args.listen_host),
+                ("--listen-port", args.listen_port),
+                ("--listen-token", args.listen_token),
+                ("--allowed-host", args.allowed_host),
+                ("--allow-insecure-remote", args.allow_insecure_remote),
+            )
+            if value
+        ]
+        if given:
+            parser.error(f"{', '.join(given)} only apply to --transport streamable-http or sse")
+    listen_host = args.listen_host or DEFAULT_LISTEN_HOST
+    listen_port = args.listen_port or DEFAULT_LISTEN_PORT
+    if args.transport != "stdio":
+        try:
+            validate_listen_config(listen_host, listen_token, args.allow_insecure_remote)
+        except UnsafeListenConfigError as e:
+            parser.error(str(e))
     state.only_text_feedback = args.only_text_feedback
     state.rpc_host = args.host
     state.auth_token = args.auth_token or os.environ.get("FREECAD_MCP_TOKEN") or None
@@ -857,4 +919,7 @@ def main():
     logger.info(f"Connecting to FreeCAD RPC server at: {state.rpc_host}")
     if state.auth_token:
         logger.info("Auth token configured for RPC connection")
-    mcp.run()
+    if args.transport == "stdio":
+        mcp.run()
+    else:
+        run_http(mcp, args.transport, listen_host, listen_port, listen_token, args.allowed_host, args.allow_insecure_remote)
