@@ -36,6 +36,24 @@ and `view_name`. The global flag takes precedence over `include_screenshot`.
 See [screenshot options](tools.md#screenshot-options) for the applicable tools
 and the explicit `get_view` tool.
 
+### NVIDIA / Hyprland screenshot fallback
+
+Screenshots normally use FreeCAD's renderer, with a fallback to the active
+OpenGL viewport when the rendered image is flat. Other desktop windows are
+not captured by default.
+
+If those paths produce black or corrupted images under NVIDIA + Hyprland,
+start **FreeCAD itself** with `FREECAD_MCP_ALLOW_SCREEN_CAPTURE=1` to opt into
+the `hyprctl` / `grim` screen-capture fallback. This requires Qt 6/PySide6 and
+both commands on PATH. Bring FreeCAD's 3D view to the front and keep its viewport
+unobscured. The fallback requires a unique window matching FreeCAD's PID and
+application class, verifies the active window and capture bounds, rejects
+overlapping windows/top-layer surfaces, and checks again after capture. It does
+not raise or focus another window automatically; failed checks use the renderer.
+
+This opt-in captures composited desktop pixels. A transient overlay can race
+the checks, so leave it disabled when screen contents must remain private.
+
 ## Remote connections
 
 By default, the RPC server listens on `localhost` and does not accept remote
