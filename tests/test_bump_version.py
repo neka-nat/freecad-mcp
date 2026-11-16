@@ -2,6 +2,7 @@
 
 from datetime import date
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -98,9 +99,40 @@ def test_bump_cli_works_outside_checkout(tmp_path: Path) -> None:
     metadata = tmp_path / "addon" / "FreeCADMCP" / "package.xml"
     metadata.parent.mkdir(parents=True)
     metadata.write_text(XML, encoding="utf-8")
+    registry = tmp_path / "server.json"
+    registry.write_text(json.dumps({"version": "1.2.3", "packages": [{"identifier": "freecad-mcp", "version": "1.2.3"}]}))
     result = subprocess.run(
         [sys.executable, str(script), "1.2.4"],
         cwd=tmp_path.parent, capture_output=True, text=True, check=True,
     )
     assert "1.2.3 -> 1.2.4" in result.stdout
     assert bump.read_version(metadata) == "1.2.4"
+
+
+def test_release_updates_registry_and_detects_drift(metadata: Path, tmp_path: Path) -> None:
+    registry = tmp_path / "server.json"
+    registry.write_text(json.dumps({"version": "1.2.3", "packages": [{"identifier": "freecad-mcp", "version": "1.2.3"}]}))
+    bump.bump_release(metadata, registry, "1.2.4", date(2026, 11, 16))
+    bump.check_registry(registry, "1.2.4")
+    assert bump.read_version(metadata) == "1.2.4"
+    data = json.loads(registry.read_text())
+    data["packages"][0]["version"] = "1.2.3"
+    registry.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="Registry versions"):
+        bump.check_registry(registry, "1.2.4")
+
+
+def test_registry_write_failure_restores_xml(metadata: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    registry = tmp_path / "server.json"
+    registry.write_text(json.dumps({"version": "1.2.3", "packages": [{"identifier": "freecad-mcp", "version": "1.2.3"}]}))
+    original_registry = registry.read_bytes()
+    real_write = bump.atomic_write
+    def fail_registry(path: Path, text: str) -> None:
+        if path == registry:
+            raise OSError("cannot replace registry")
+        real_write(path, text)
+    monkeypatch.setattr(bump, "atomic_write", fail_registry)
+    with pytest.raises(OSError):
+        bump.bump_release(metadata, registry, "1.2.4", date(2026, 11, 16))
+    assert metadata.read_text() == XML
+    assert registry.read_bytes() == original_registry

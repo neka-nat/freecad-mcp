@@ -57,3 +57,15 @@ def test_native_fem_repeated_solve_and_atomic_creation() -> None:
     reply = run_headless(code, 120, COMMAND)
     assert reply["success"], reply
     assert "NATIVE_FEM_OK" in reply["output"], reply
+
+
+def test_native_property_contracts() -> None:
+    root = Path(__file__).resolve().parents[1]
+    scenario = root / "tests/native/property_scenario.py"
+    code = (
+        f"import runpy; runpy.run_path({str(scenario)!r}, init_globals="
+        f"{{'ADDON_PATH': {str(root / 'addon/FreeCADMCP')!r}}})"
+    )
+    reply = run_headless(code, 60, COMMAND)
+    assert reply["success"], reply
+    assert "NATIVE_PROPERTY_CONTRACTS_OK" in reply["output"], reply

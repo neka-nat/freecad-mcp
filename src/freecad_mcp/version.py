@@ -6,11 +6,12 @@ get_rpc_status; this module turns that report into a warning the user sees.
 """
 
 import xmlrpc.client
+import re
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
 # Must match PROTOCOL_VERSION in addon/FreeCADMCP/rpc_server/version.py.
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 3
 
 try:
     __version__ = version("freecad-mcp")
@@ -30,9 +31,10 @@ def is_missing_method_fault(error: BaseException) -> bool:
     SimpleXMLRPCServer reports an unknown method as 'method "x" is not
     supported'. Any other Fault is a failure inside a method the addon has.
     """
-    return isinstance(error, xmlrpc.client.Fault) and "is not supported" in str(
-        error.faultString
-    )
+    return isinstance(error, xmlrpc.client.Fault) and re.fullmatch(
+        r'(?:<class \'Exception\'>:)?method "[^"\n]+" is not supported',
+        str(error.faultString),
+    ) is not None
 
 
 def addon_version_warning(status: dict[str, Any] | None) -> str | None:

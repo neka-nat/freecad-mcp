@@ -18,12 +18,42 @@ from ..version import addon_version_warning, is_missing_method_fault
 logger = logging.getLogger("FreeCADMCPserver")
 
 
+def _failure(message: str, details: dict[str, Any]) -> ErrorResponse:
+    """Preserve task IDs and mutation outcomes across the MCP boundary."""
+    if not any(key in details for key in ("task_id", "mutation_outcome", "code", "remaining_objects")):
+        return error_response(message)
+    return ErrorResponse([*error_response(message), *json_response(details)])
+
+
+def get_task_status_operation(freecad: FreeCADConnection, task_id: str | None = None) -> ToolResponse:
+    try:
+        result = freecad.get_task_status(task_id)
+        if not result.get("success"):
+            return _failure(result.get("error", "Task status unavailable"), result)
+        return json_response(result)
+    except Exception as exc:
+        return error_response(f"Failed to get GUI task status: {exc}")
+
+
+def _optional_screenshot(
+    freecad: FreeCADConnection, view_name: str, doc_name: str | None = None,
+) -> str | None:
+    """A failed optional image must not turn a completed edit into a failure."""
+    try:
+        if doc_name is None:
+            return freecad.get_active_screenshot(view_name)
+        return freecad.get_active_screenshot(view_name, doc_name=doc_name)
+    except Exception as exc:
+        logger.warning("Optional screenshot unavailable: %s", exc)
+        return None
+
+
 def create_document_operation(freecad: FreeCADConnection, name: str) -> ToolResponse:
     try:
         res = freecad.create_document(name)
         if res["success"]:
             return text_response(f"Document '{res['document_name']}' created successfully")
-        return error_response(f"Failed to create document: {res['error']}")
+        return _failure(f"Failed to create document: {res['error']}", res)
     except Exception as e:
         logger.error(f"Failed to create document: {str(e)}")
         return error_response(f"Failed to create document: {str(e)}")
@@ -51,9 +81,9 @@ def create_object_operation(
         if res["success"]:
             response = text_response(f"Object '{res['object_name']}' created successfully")
         else:
-            return error_response(f"Failed to create object: {res['error']}")
+            return _failure(f"Failed to create object: {res['error']}", res)
         skip_screenshot = only_text_feedback or not include_screenshot
-        screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
+        screenshot = None if skip_screenshot else _optional_screenshot(freecad, view_name, doc_name)
         return add_screenshot_if_available(response, screenshot, skip_screenshot)
     except Exception as e:
         logger.error(f"Failed to create object: {str(e)}")
@@ -74,9 +104,9 @@ def edit_object_operation(
         if res["success"]:
             response = text_response(f"Object '{res['object_name']}' edited successfully")
         else:
-            return error_response(f"Failed to edit object: {res['error']}")
+            return _failure(f"Failed to edit object: {res['error']}", res)
         skip_screenshot = only_text_feedback or not include_screenshot
-        screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
+        screenshot = None if skip_screenshot else _optional_screenshot(freecad, view_name, doc_name)
         return add_screenshot_if_available(response, screenshot, skip_screenshot)
     except Exception as e:
         logger.error(f"Failed to edit object: {str(e)}")
@@ -96,9 +126,9 @@ def delete_object_operation(
         if res["success"]:
             response = text_response(f"Object '{res['object_name']}' deleted successfully")
         else:
-            return error_response(f"Failed to delete object: {res['error']}")
+            return _failure(f"Failed to delete object: {res['error']}", res)
         skip_screenshot = only_text_feedback or not include_screenshot
-        screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
+        screenshot = None if skip_screenshot else _optional_screenshot(freecad, view_name, doc_name)
         return add_screenshot_if_available(response, screenshot, skip_screenshot)
     except Exception as e:
         logger.error(f"Failed to delete object: {str(e)}")
@@ -121,9 +151,12 @@ def execute_code_operation(
             # Skipping on failure avoids a second hanging call while the worker thread
             # may still be running.
             skip_screenshot = only_text_feedback or not include_screenshot
-            screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
+            screenshot = None if skip_screenshot else _optional_screenshot(freecad, view_name)
             return add_screenshot_if_available(response, screenshot, skip_screenshot)
-        return error_response(f"Failed to execute code: {res['error']}")
+        message = f"Failed to execute code: {res['error']}"
+        if res.get("output"):
+            message += "\nOutput before failure:\n" + res["output"]
+        return _failure(message, res)
     except Exception as e:
         logger.error(f"Failed to execute code: {str(e)}")
         return error_response(f"Failed to execute code: {str(e)}")
@@ -149,7 +182,7 @@ def execute_code_async_operation(
                 "and traceback. "
                 "FreeCAD's Report View shows printed output when done."
             )
-        return error_response(f"Failed to start async execution: {res.get('error', 'unknown')}")
+        return _failure(f"Failed to start async execution: {res.get('error', 'unknown')}", res)
     except Exception as e:
         logger.error(f"Failed to start async code execution: {str(e)}")
         return error_response(f"Failed to start async code execution: {str(e)}")
@@ -174,8 +207,9 @@ def execute_code_headless_operation(
 
     try:
         res = run_headless(code, timeout, command)
-        respond = text_response if res.get("success") else error_response
-        return respond(format_headless_result(res))
+        if not res.get("success"):
+            return _failure(format_headless_result(res), res)
+        return text_response(format_headless_result(res))
     except Exception as e:
         logger.error(f"Failed to run headless code: {str(e)}")
         return error_response(f"Failed to run headless code: {str(e)}")
@@ -187,7 +221,7 @@ def get_async_status_operation(
     try:
         res = freecad.get_async_status(job_id)
         if not res.get("success"):
-            return error_response(f"Failed to get async status: {res.get('error', 'unknown')}")
+            return _failure(f"Failed to get async status: {res.get('error', 'unknown')}", res)
         job = res.get("job")
         if job is None:
             return json_response(res.get("jobs", []))
@@ -196,6 +230,8 @@ def get_async_status_operation(
             text += f"\nError: {job['error']}"
         if job.get("traceback"):
             text += f"\n{job['traceback']}"
+        if job.get("mutation_outcome"):
+            text += f"\nMutation outcome: {job['mutation_outcome']}"
         return text_response(text)
     except Exception as e:
         logger.error(f"Failed to get async status: {str(e)}")
@@ -231,9 +267,9 @@ def insert_part_from_library_operation(
         if res["success"]:
             response = text_response(f"Part inserted from library: {res['message']}")
         else:
-            return error_response(f"Failed to insert part from library: {res['error']}")
+            return _failure(f"Failed to insert part from library: {res['error']}", res)
         skip_screenshot = only_text_feedback or not include_screenshot
-        screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
+        screenshot = None if skip_screenshot else _optional_screenshot(freecad, view_name)
         return add_screenshot_if_available(response, screenshot, skip_screenshot)
     except Exception as e:
         logger.error(f"Failed to insert part from library: {str(e)}")
@@ -250,7 +286,7 @@ def get_objects_operation(
     try:
         response = json_response(freecad.get_objects(doc_name))
         skip_screenshot = only_text_feedback or not include_screenshot
-        screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
+        screenshot = None if skip_screenshot else _optional_screenshot(freecad, view_name, doc_name)
         return add_screenshot_if_available(response, screenshot, skip_screenshot)
     except Exception as e:
         logger.error(f"Failed to get objects: {str(e)}")
@@ -268,7 +304,7 @@ def get_object_operation(
     try:
         response = json_response(freecad.get_object(doc_name, obj_name))
         skip_screenshot = only_text_feedback or not include_screenshot
-        screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
+        screenshot = None if skip_screenshot else _optional_screenshot(freecad, view_name, doc_name)
         return add_screenshot_if_available(response, screenshot, skip_screenshot)
     except Exception as e:
         logger.error(f"Failed to get object: {str(e)}")
@@ -339,7 +375,7 @@ def run_fem_analysis_operation(
                 return f"{v:.4g} {unit}" if isinstance(v, (int, float)) else f"unavailable ({unit})"
             loads = res.get("applied_loads")
             skip_screenshot = only_text_feedback or not include_screenshot
-            screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
+            screenshot = None if skip_screenshot else _optional_screenshot(freecad, view_name, doc_name)
             response = json_response({
                 "summary": (
                     f"FEM analysis '{analysis_name}' solved. "
@@ -378,7 +414,7 @@ def reload_document_operation(
                 f"Document '{doc_name}' was reopened by FreeCAD as '{name}'."
                 f" Use '{name}' in later calls."
             )
-        return error_response(f"Failed to reload document: {res.get('error')}")
+        return _failure(f"Failed to reload document: {res.get('error')}", res)
     except Exception as e:
         logger.error(f"Failed to reload document: {str(e)}")
         return error_response(f"Failed to reload document: {str(e)}")

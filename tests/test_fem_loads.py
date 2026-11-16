@@ -17,7 +17,7 @@ class FakeFreeCAD:
     def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600) -> dict[str, Any]:
         return {**self.solved, "applied_loads": self.loads}
 
-    def get_active_screenshot(self, view_name: str = "Isometric") -> None:
+    def get_active_screenshot(self, view_name: str = "Isometric", doc_name: str | None = None) -> None:
         return None
 
 

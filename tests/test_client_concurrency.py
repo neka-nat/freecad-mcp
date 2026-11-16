@@ -74,6 +74,10 @@ def test_registered_tools_create_both_objects_and_preserve_nested_properties(
     created: dict[str, dict[str, Any]] = {}
 
     class Interface:
+        def get_rpc_status(self):
+            from freecad_mcp.version import PROTOCOL_VERSION
+            return {"protocol_version": PROTOCOL_VERSION}
+
         def create_object(self, doc: str, data: dict[str, Any]) -> dict[str, Any]:
             created[data["Name"]] = data["Properties"]
             time.sleep(0.1)

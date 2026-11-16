@@ -43,7 +43,12 @@ suppresses these optional screenshots regardless of `include_screenshot`.
 
 Use `get_view` to request a screenshot explicitly; it is available even with
 `--only-text-feedback`. It takes `view_name` and optional `width`, `height`, and
-`focus_object` parameters. Supported views are `Isometric`, `Front`, `Top`,
+`focus_object` parameters. With both dimensions omitted, images retain the viewport aspect ratio with a
+maximum edge of 1024 pixels. With only one dimension supplied, the other uses
+the viewport dimension. Optional screenshots are omitted when the requested
+document is not the displayed document; they never show another document.
+
+Supported views are `Isometric`, `Front`, `Top`,
 `Right`, `Back`, `Left`, `Bottom`, `Dimetric`, and `Trimetric`.
 
 ## FEM analysis
@@ -74,3 +79,23 @@ See [`examples/cantilever_fem.py`](../examples/cantilever_fem.py) for an end-to-
 example, including geometry, material, mesh, constraints, and an analytical
 comparison. For long analyses, configure the client to allow the
 [queue and execution timeout budgets](execution.md#gui-dispatch-timeouts).
+
+## Property and error contracts
+
+Rotation angles in property input and output are in degrees (protocol 2).
+Dictionaries and null values retain their JSON types. Object links use internal
+object names; subelement links use `[object_name, [subelement, ...]]`.
+
+Missing documents and objects are errors, not empty query results. Failed edits
+roll back their transaction, including when undo was initially disabled. A failed
+rollback explicitly reports that changes may remain. Creation failures remove
+new objects; objects created successfully but invalid after recompute remain
+available for inspection as reported in the error.
+
+Mesh creation rejects unknown properties and requires a successful mesher run
+with nonempty elements. Mesh `Shape` links and legacy `Part`/`ElementSizeMax/Min`
+aliases are accepted by both creation and editing.
+
+`get_task_status(task_id)` retrieves a GUI operation after a timeout without
+waiting for the GUI. Omit the ID to list pending and recently completed tasks.
+See [execution lifecycle and outcomes](execution.md#listener-readiness-and-operation-outcomes).

@@ -219,19 +219,25 @@ in its own directory. The MCP server reports its installed package metadata.
 From the repository root, update the version and release date together:
 
 ```bash
-uv run --no-project python scripts/bump_version.py 0.1.28
+uv run --no-project python scripts/bump_version.py 0.1.32
 uv run --locked python scripts/bump_version.py --check
 uv run --locked pytest -q
 uv build
 ```
 
-The first command accepts increasing `X.Y.Z` versions and changes only
-`package.xml`; repeating the same version leaves the file unchanged. Replace
-`0.1.28` with the next release number. There are no version literals to update in
+The first command accepts increasing `X.Y.Z` versions and updates
+`package.xml` and the release/package versions in `server.json`; repeating the same version leaves matching files unchanged. Replace
+`0.1.32` with the next release number. There are no version literals to update in
 `pyproject.toml`, Python modules, or `uv.lock`. uv tracks `package.xml` as a cache
 input, so the next `uv run` or `uv sync` refreshes the installed metadata.
 
 Copy the entire `addon/FreeCADMCP` directory, including `package.xml`, when
 installing the addon. `PROTOCOL_VERSION` remains separate from release numbering;
-change it on both sides only when the RPC contract changes as described in the
-version modules.
+change it on both sides when the RPC contract changes as described in the
+version modules. Protocol 2 uses degrees for serialized rotations, preserves JSON
+property types, and adds document-scoped screenshots. Update both components
+together; protocol 1 and 2 serialize rotations differently.
+
+Protocol 3 adds generation-scoped dispatch, GUI task history, explicit mutation
+outcomes and exclusive shared-script admission. Update the server and addon
+together; overlapping scripts now return `SCRIPT_BUSY` instead of racing.

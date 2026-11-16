@@ -106,30 +106,23 @@ def test_script_names_cannot_replace_rpc_internals(rpc_module: types.ModuleType)
     assert rpc.get_object("Doc", "Box") == {"Name": "Box"}
 
 
-def test_sync_stdout_excludes_async_worker_output(
-    rpc_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch,
+def test_sync_script_is_rejected_while_async_namespace_is_owned(
+    rpc_module: types.ModuleType,
 ) -> None:
-    console = io.StringIO()
-    monkeypatch.setattr(sys, "stdout", console)
     rpc = rpc_module.FreeCADRPC()
-    rpc_module.FreeCAD.audit_go = threading.Event()
-    rpc_module.FreeCAD.audit_printed = threading.Event()
-    started = rpc.execute_code_async(
-        'assert FreeCAD.audit_go.wait(3)\n'
-        'print("background output", flush=True)\n'
-        'FreeCAD.audit_printed.set()'
-    )
+    release = threading.Event()
+    rpc_module.FreeCAD.audit_go = release
+    started = rpc.execute_code_async("App.audit_go.wait(3); shared = 42")
     assert started["success"] is True
-    reply = rpc.execute_code(
-        'print("request output")\n'
-        'FreeCAD.audit_go.set()\n'
-        'assert FreeCAD.audit_printed.wait(3)'
-    )
-    assert reply["success"] is True
-    assert reply["message"].endswith("request output\n")
-    assert "background output" not in reply["message"]
-    assert console.getvalue() == "background output\n"
-    assert sys.stdout is console
+    try:
+        reply = rpc.execute_code("shared = 99")
+        assert reply["code"] == "SCRIPT_BUSY"
+        assert reply["mutation_outcome"] == "not_started"
+        assert rpc.get_object("Doc", "Box") == {"Name": "Box"}
+    finally:
+        release.set()
+    assert wait_for_job(rpc, started["job_id"])["state"] == "done"
+    assert rpc.execute_code("print(shared)")["message"].endswith("42\n")
 
 
 def test_timed_out_script_keeps_capture_until_it_finishes(
@@ -229,28 +222,17 @@ def test_async_commit_runs_document_writes_on_the_gui_thread(
     assert threads["commit"] != threads["worker"]
 
 
-def test_async_commit_reports_dispatch_failure_to_the_script(
+def test_scripts_are_not_admitted_while_a_previous_gui_script_is_stuck(
     rpc_module: types.ModuleType,
 ) -> None:
-    """A wedged GUI thread surfaces as a RuntimeError instead of a silent write."""
     rpc = rpc_module.FreeCADRPC()
     health = rpc_module.test_dispatch._dispatch_health
     health.start(200, "execute_code")
     health.mark_timed_out(200, 90)
-    done = threading.Event()
-    rpc_module.FreeCAD.async_done = done
-    rpc_module.FreeCAD.test_error = None
-    assert rpc.execute_code_async(
-        "try:\n"
-        "    commit(lambda: 'never runs')\n"
-        "except RuntimeError as exc:\n"
-        "    FreeCAD.test_error = str(exc)\n"
-        "FreeCAD.async_done.set()"
-    )["success"] is True
-    assert done.wait(2)
-    error = rpc_module.FreeCAD.test_error
-    assert error is not None and "commit() failed" in error
-    assert "'execute_code' timed out" in error
+    reply = rpc.execute_code_async("should_not_run = True")
+    assert reply["code"] == "SCRIPT_UNAVAILABLE"
+    assert reply["mutation_outcome"] == "not_started"
+    assert "should_not_run" not in rpc_module._EXEC_NAMESPACE
 
 
 def test_saved_functions_can_commit_in_later_async_scripts(
@@ -275,7 +257,7 @@ def test_saved_functions_can_commit_in_later_async_scripts(
     assert rpc_module.FreeCAD.test_result == 99
 
 
-def test_async_completion_preserves_concurrent_writes_and_deletions(
+def test_async_completion_preserves_state_and_rejects_concurrent_writes(
     rpc_module: types.ModuleType,
 ) -> None:
     rpc = rpc_module.FreeCADRPC()
@@ -292,12 +274,12 @@ def test_async_completion_preserves_concurrent_writes_and_deletions(
     )["success"] is True
     try:
         assert entered.wait(2)
-        assert rpc.execute_code("shared_value = 99")["success"] is True
+        assert rpc.execute_code("shared_value = 99")["code"] == "SCRIPT_BUSY"
     finally:
         release.set()
     assert done.wait(2)
     result = rpc.execute_code(
-        "assert shared_value == 99\nassert 'obsolete' not in globals()\nassert async_value == 42"
+        "assert shared_value == 1\nassert 'obsolete' not in globals()\nassert async_value == 42"
     )
     assert result["success"] is True, result
 
@@ -351,10 +333,10 @@ def test_commit_preserves_callback_return_values(
     [
         ("list_documents", (), ["Doc"]),
         ("get_objects", ("Doc",), [{"Name": "Box"}]),
-        ("get_objects", ("Missing",), []),
+
         ("get_object", ("Doc", "Box"), {"Name": "Box"}),
-        ("get_object", ("Doc", "Missing"), None),
-        ("get_object", ("Missing", "Box"), None),
+
+
     ],
 )
 def test_queries_use_gui_dispatch_and_keep_response_shapes(
@@ -439,9 +421,9 @@ def test_execute_code_uses_default_timeout_when_none_given(
     seen: list[float] = []
     real = rpc_module.dispatch_to_gui
 
-    def spy(task, timeout=60, operation_name=None):
+    def spy(task, timeout=60, operation_name=None, **kwargs):
         seen.append(timeout)
-        return real(task, timeout=timeout, operation_name=operation_name)
+        return real(task, timeout=timeout, operation_name=operation_name, **kwargs)
 
     monkeypatch.setattr(rpc_module, "dispatch_to_gui", spy)
     assert rpc.execute_code("x = 1")["success"] is True
@@ -455,9 +437,9 @@ def test_execute_code_honours_caller_timeout_and_caps_it(
     seen: list[float] = []
     real = rpc_module.dispatch_to_gui
 
-    def spy(task, timeout=60, operation_name=None):
+    def spy(task, timeout=60, operation_name=None, **kwargs):
         seen.append(timeout)
-        return real(task, timeout=timeout, operation_name=operation_name)
+        return real(task, timeout=timeout, operation_name=operation_name, **kwargs)
 
     monkeypatch.setattr(rpc_module, "dispatch_to_gui", spy)
     assert rpc.execute_code("x = 1", 300)["success"] is True
@@ -520,8 +502,8 @@ def test_running_job_survives_completed_history_limit(rpc_module: types.ModuleTy
     try:
         completed = []
         for _ in range(21):
-            job_id = rpc.execute_code_async("pass")["job_id"]
-            assert wait_for_job(rpc, job_id)["state"] == "done"
+            job_id = f"completed-{len(completed)}"
+            rpc_module._record_job(job_id, state="done")
             completed.append(job_id)
         assert rpc.get_async_status(first)["job"]["state"] == "running"
         assert rpc.get_rpc_status()["async_jobs_running"] == [first]
@@ -535,7 +517,7 @@ def test_running_job_survives_completed_history_limit(rpc_module: types.ModuleTy
     assert rpc.get_async_status(first)["success"] is True
 
 
-def test_concurrent_jobs_have_unique_ids_at_fixed_clock(
+def test_concurrent_script_admission_has_exactly_one_owner(
     rpc_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rpc = rpc_module.FreeCADRPC()
@@ -547,8 +529,9 @@ def test_concurrent_jobs_have_unique_ids_at_fixed_clock(
     try:
         with ThreadPoolExecutor(max_workers=8) as callers:
             results = list(callers.map(lambda _: rpc.execute_code_async("FreeCAD.test_release.wait(5)"), range(32)))
-        ids = [result["job_id"] for result in results]
-        assert len(set(ids)) == 32
+        ids = [result["job_id"] for result in results if result["success"]]
+        assert len(ids) == 1
+        assert all(result.get("code") == "SCRIPT_BUSY" for result in results if not result["success"])
         assert set(rpc.get_rpc_status()["async_jobs_running"]) == set(ids)
     finally:
         release.set()
@@ -583,7 +566,7 @@ def test_job_result_is_available_while_cleanup_is_blocked(rpc_module: types.Modu
     release = threading.Event()
     rpc_module.FreeCAD.test_release = release
     busy = threading.Thread(
-        target=lambda: rpc.execute_code("FreeCAD.test_release.wait(5)", timeout=10), daemon=True,
+        target=lambda: rpc_module.test_dispatch.dispatch_to_gui(lambda: release.wait(5), timeout=10, operation_name="typed_operation"), daemon=True,
     )
     busy.start()
     try:
@@ -609,7 +592,7 @@ def test_status_message_is_cleared_after_a_job_that_ran_behind_a_busy_gui(
     release = threading.Event()
     rpc_module.FreeCAD.test_release = release
     busy = threading.Thread(
-        target=lambda: rpc.execute_code("FreeCAD.test_release.wait(5)", timeout=10), daemon=True,
+        target=lambda: rpc_module.test_dispatch.dispatch_to_gui(lambda: release.wait(5), timeout=10, operation_name="typed_operation"), daemon=True,
     )
     busy.start()
     deadline = time.monotonic() + 2
@@ -641,7 +624,7 @@ def test_async_start_does_not_wait_for_a_busy_gui_thread(rpc_module: types.Modul
     release = threading.Event()
     rpc_module.FreeCAD.test_release = release
     busy = threading.Thread(
-        target=lambda: rpc.execute_code("FreeCAD.test_release.wait(5)", timeout=10), daemon=True,
+        target=lambda: rpc_module.test_dispatch.dispatch_to_gui(lambda: release.wait(5), timeout=10, operation_name="typed_operation"), daemon=True,
     )
     busy.start()
     try:

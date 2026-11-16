@@ -34,6 +34,7 @@ class FakeConsole:
 class FakeDocument:
     def __init__(self, obj: object):
         self.Name = "Doc"
+        self.UndoMode = 1
         self.obj = obj
         self.recompute_count = 0
         self.Objects: list[object] = []
@@ -115,6 +116,53 @@ def test_valid_shapeless_object_is_not_rejected() -> None:
     obj = FakeObject(Name="Body", Shape=None)
 
     assert object_validity_error(obj) is None
+
+
+def test_logging_failure_does_not_report_committed_edit_as_rolled_back() -> None:
+    obj = FakeObject()
+    obj.PropertiesList = []
+    doc = FakeDocument(obj)
+    with load_object_factory(doc) as module:
+        def broken_log(_message: str) -> None:
+            raise RuntimeError("console closed")
+        module.FreeCAD.Console = types.SimpleNamespace(PrintMessage=broken_log)
+        assert module.edit_object_gui("Doc", module.Object(name=obj.Name)) is True
+
+
+def test_edit_open_failure_reports_not_started() -> None:
+    obj = FakeObject()
+    doc = FakeDocument(obj)
+    def fail_open(_name: str) -> None:
+        raise RuntimeError("cannot open transaction")
+    doc.openTransaction = fail_open
+    with load_object_factory(doc) as module:
+        result = module.edit_object_gui("Doc", module.Object(name=obj.Name))
+    assert result["mutation_outcome"] == "not_started"
+    assert "rolled back" not in result["error"]
+
+
+def test_undo_restore_failure_preserves_committed_outcome() -> None:
+    obj = FakeObject()
+    obj.PropertiesList = []
+    class Document(FakeDocument):
+        _undo = 0
+        @property
+        def UndoMode(self):
+            return self._undo
+        @UndoMode.setter
+        def UndoMode(self, value):
+            if getattr(self, "restoring", False) and value == 0:
+                raise RuntimeError("cannot restore undo")
+            self._undo = value
+        def commitTransaction(self):
+            self.restoring = True
+    doc = Document(obj)
+    doc.UndoMode = 0
+    with load_object_factory(doc) as module:
+        result = module.edit_object_gui("Doc", module.Object(name=obj.Name))
+    assert result["success"] is False
+    assert result["mutation_outcome"] == "completed"
+    assert result["undo_mode_restored"] is False
 
 
 def test_invalid_object_reports_name_state_and_freecad_reason() -> None:
@@ -210,7 +258,7 @@ def test_create_object_accepts_valid_shapeless_object() -> None:
         )
         result = object_factory.create_object_gui("Doc", request)
 
-    assert result == {"success": True, "object_name": "Body"}
+    assert result == {"success": True, "object_name": "Body", "mutation_outcome": "completed"}
 
 
 def test_edit_object_returns_failure_with_existing_object_name() -> None:
@@ -229,4 +277,4 @@ def test_edit_object_returns_failure_with_existing_object_name() -> None:
     assert result["success"] is False
     assert result["object_name"] == "Cut"
     assert "Base or Tool is not set" in result["error"]
-    assert doc.recompute_count == 1
+    assert doc.recompute_count == 2

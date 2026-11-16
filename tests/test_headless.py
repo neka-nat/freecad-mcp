@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -21,7 +22,7 @@ def temporary_scripts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 def test_success_returns_output() -> None:
     res = run_headless("print('built'); print('  (50 %)')", 30, PY)
     assert res["success"] is True and res["returncode"] == 0
-    assert res["output"] == "built"  # progress noise filtered
+    assert res["output"] == "built\n  (50 %)"  # preserve script output
     text = format_headless_result(res)
     assert text.startswith("Headless FreeCAD script finished") and "reload_document" in text
 
@@ -46,6 +47,32 @@ def test_timeout_kills_the_process() -> None:
     res = run_headless("import time; time.sleep(30)", 1, PY)
     assert res["success"] is False and res["timed_out"] is True
     assert "did not finish within 1 s" in res["error"]
+
+
+def test_timeout_stops_child_before_it_can_write(tmp_path: Path) -> None:
+    marker = tmp_path / "late-child-write"
+    ready = tmp_path / "child-ready"
+    release = tmp_path / "release-child"
+    child = (
+        "import time; from pathlib import Path; "
+        f"Path({str(ready)!r}).touch(); "
+        f"release=Path({str(release)!r}); deadline=time.monotonic()+10\n"
+        "while not release.exists() and time.monotonic()<deadline: time.sleep(.02)\n"
+        f"if release.exists(): Path({str(marker)!r}).write_text('late write')\n"
+    )
+    parent = (
+        "import subprocess, sys, time; from pathlib import Path\n"
+        f"subprocess.Popen([sys.executable, '-c', {child!r}], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        f"while not Path({str(ready)!r}).exists(): time.sleep(.02)\n"
+        "print('child started', flush=True); time.sleep(30)"
+    )
+    result = run_headless(parent, 2, PY)
+    assert result["timed_out"] and "child started" in result["output"]
+    release.touch()
+    # Give a surviving child time to observe the release; the unfixed runner
+    # reliably writes the marker here after returning its timeout response.
+    time.sleep(.5)
+    assert not marker.exists()
 
 
 @pytest.mark.parametrize("exit_code", [0, 1])

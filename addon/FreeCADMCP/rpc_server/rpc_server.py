@@ -3,6 +3,7 @@ import FreeCADGui
 
 import base64
 import io
+import json
 import math
 import os
 import tempfile
@@ -18,7 +19,9 @@ from rpc_server.fem_executor import run_fem_analysis as _run_fem_analysis
 from rpc_server.gui_dispatch import (
     cleanup_waker,
     dispatch_to_gui,
+    dispatch_generation,
     get_dispatch_status,
+    get_task_status,
     init_waker,
     log_error,
     post_to_gui,
@@ -32,12 +35,18 @@ from rpc_server.property_mapper import Object
 from rpc_server.serialize import serialize_object
 from rpc_server.settings import load_settings, save_settings
 from rpc_server.stdout_capture import capture_stdout
+from rpc_server.script_state import ScriptState
 from rpc_server.version import PROTOCOL_VERSION, __version__ as ADDON_VERSION
 from rpc_server.view_manager import get_displayed_3d_view, save_active_screenshot
 
 rpc_server_thread = None
 rpc_server_instance = None
 _stop_thread = None  # drains shutdown off the GUI thread; see stop_rpc_server
+_listener_state = "stopped"
+_server_id = uuid.uuid4().hex
+_applied_settings: dict[str, Any] | None = None
+_scripts = ScriptState()
+_job_status_message = ""
 
 # Persistent namespace for execute_code / execute_code_async. A dedicated dict
 # (instead of this module's globals()) keeps user code from shadowing server
@@ -81,8 +90,38 @@ def _ok(res) -> bool:
 def _err(res) -> dict:
     """Convert any non-True result (error string or timeout dict) to a failure dict."""
     if isinstance(res, dict):
-        return res
-    return {"success": False, "error": str(res)}
+        return {"mutation_outcome": "partial_or_unknown", **res}
+    return {"success": False, "error": str(res), "mutation_outcome": "partial_or_unknown"}
+
+
+def _claim_script(owner: str, generation: int) -> dict[str, Any] | None:
+    dispatch = get_dispatch_status()
+    if not dispatch["accepting"] or generation != dispatch_generation() or dispatch["state"] == "stuck":
+        return {"success": False, "code": "SCRIPT_UNAVAILABLE", "mutation_outcome": "not_started",
+                "error": "Script execution unavailable while dispatch is stopped or stuck."}
+    if not _scripts.claim(owner):
+        return {"success": False, "code": "SCRIPT_BUSY", "mutation_outcome": "not_started",
+                "error": "Another script owns the shared namespace; wait for it to finish before retrying.",
+                "script_execution": _scripts.snapshot()}
+    return None
+
+
+def _refresh_job_status() -> None:
+    """Reconcile the GUI indicator with live jobs instead of clearing by job."""
+    def update() -> None:
+        global _job_status_message
+        with _ASYNC_JOBS_LOCK:
+            count = sum(job.get("state") == "running" for job in _ASYNC_JOBS.values())
+        bar = FreeCADGui.getMainWindow().statusBar()
+        current = bar.currentMessage()
+        if count:
+            if current in ("", "MCP: processing…", _job_status_message):
+                _job_status_message = f"MCP: {count} background task(s) running…"
+                bar.showMessage(_job_status_message)
+        elif _job_status_message and current == _job_status_message:
+            bar.clearMessage()
+            _job_status_message = ""
+    post_to_gui(update)
 
 
 def _commit_async(fn: Callable[[], Any], timeout: float = 120) -> Any:
@@ -90,12 +129,13 @@ def _commit_async(fn: Callable[[], Any], timeout: float = 120) -> Any:
     if not getattr(_async_execution, "active", False):
         raise RuntimeError("commit() is only available inside execute_code_async workers")
     res = dispatch_to_gui(
-        lambda: (fn(),), timeout=timeout, operation_name="async_commit"
+        lambda: (fn(),), timeout=timeout, operation_name="async_commit",
+        expected_generation=_async_execution.generation,
     )
     if isinstance(res, tuple):
         return res[0]
     error = _err(res)
-    raise RuntimeError(f"commit() failed: {error['error']}")
+    raise RuntimeError(f"commit() failed: {json.dumps(error, default=str)}")
 
 
 # Keep one live namespace, including the helper: saved functions retain this
@@ -104,16 +144,16 @@ def _commit_async(fn: Callable[[], Any], timeout: float = 120) -> Any:
 _EXEC_NAMESPACE["commit"] = _commit_async
 
 
-def _query_on_gui(task: Callable[[], Any], operation: str) -> Any:
+def _query_on_gui(task: Callable[[], Any], operation: str, generation: int | None = None) -> Any:
     """Preserve query results while reporting dispatch failures as RPC faults."""
     # A tuple distinguishes valid results (including None and empty lists)
     # from the dispatcher's error strings and failure dictionaries.
-    res = dispatch_to_gui(lambda: (task(),), operation_name=operation)
+    res = dispatch_to_gui(lambda: (task(),), operation_name=operation, expected_generation=generation)
     if isinstance(res, tuple):
         return res[0]
     error = _err(res)
     code = error.get("code", "GUI_DISPATCH_FAILED")
-    raise Fault(1, f"{code}: {error['error']}")
+    raise Fault(1, f"{code}: {json.dumps(error, default=str)}")
 
 
 class FreeCADRPC:
@@ -125,23 +165,53 @@ class FreeCADRPC:
     # thread from the caller indefinitely.
     MAX_EXECUTE_CODE_TIMEOUT = 1800
 
+    def __init__(self) -> None:
+        self._generation = dispatch_generation()
+
+    def _dispatch_gui(self, task: Callable[[], Any], **kwargs: Any) -> Any:
+        return dispatch_to_gui(task, expected_generation=self._generation, **kwargs)
+
     def ping(self):
         return True
 
     def get_rpc_status(self) -> dict[str, Any]:
         """Report server and GUI-dispatch health without using the GUI thread."""
+        dispatch = get_dispatch_status()
+        scripts = _scripts.snapshot()
         with _ASYNC_JOBS_LOCK:
             running = [j["id"] for j in _ASYNC_JOBS.values() if j.get("state") == "running"]
         return {
             "success": True,
-            "rpc_server": "running",
-            "gui_dispatch": get_dispatch_status(),
+            "rpc_server": _listener_state,
+            "server_id": _server_id,
+            "gui_dispatch": dispatch,
             "async_jobs_running": running,
+            "script_execution": scripts,
+            "configuration": self._configuration_status(),
+            "quiescent": not running and scripts["state"] == "idle"
+                         and dispatch["state"] not in {"busy", "stuck"}
+                         and dispatch["queued_tasks"] == 0,
             "addon_version": ADDON_VERSION,
             "protocol_version": PROTOCOL_VERSION,
             "execute_code_timeout": self.EXECUTE_CODE_TIMEOUT,
             "max_execute_code_timeout": self.MAX_EXECUTE_CODE_TIMEOUT,
         }
+
+    def _configuration_status(self) -> dict[str, Any]:
+        desired = load_settings()
+        keys = ("remote_enabled", "allowed_ips", "auth_token")
+        changed = [key for key in keys if _applied_settings is not None
+                   and desired.get(key) != _applied_settings.get(key)]
+        return {"restart_required": bool(changed), "changed_fields": changed,
+                "applied": None if _applied_settings is None else {
+                    "remote_enabled": bool(_applied_settings.get("remote_enabled")),
+                    "allowed_ips": _applied_settings.get("allowed_ips", "127.0.0.1"),
+                    "authentication_required": bool(_applied_settings.get("auth_token")),
+                }}
+
+    def get_task_status(self, task_id: str | None = None) -> dict[str, Any]:
+        """Read pending/late GUI results without dispatching to the GUI thread."""
+        return get_task_status(task_id)
 
     def get_async_status(self, job_id: str = "") -> dict[str, Any]:
         """Report background jobs without using the GUI thread.
@@ -163,7 +233,7 @@ class FreeCADRPC:
         # sanitises requested names ("My Doc" -> "My_Doc") and de-duplicates
         # ("Doc" -> "Doc001"); reporting the requested name breaks every
         # follow-up call that uses it.
-        res = dispatch_to_gui(
+        res = self._dispatch_gui(
             lambda: self._create_document_gui(name),
             operation_name="create_document",
         )
@@ -180,7 +250,7 @@ class FreeCADRPC:
         )
         # create_object_gui reports the created object's actual Name (see
         # its docstring) — same sanitise/de-duplicate concern as documents.
-        res = dispatch_to_gui(
+        res = self._dispatch_gui(
             lambda: self._create_object_gui(doc_name, obj),
             operation_name="create_object",
         )
@@ -193,7 +263,7 @@ class FreeCADRPC:
             name=obj_name,
             properties=properties.get("Properties", {}),
         )
-        res = dispatch_to_gui(
+        res = self._dispatch_gui(
             lambda: self._edit_object_gui(doc_name, obj),
             operation_name="edit_object",
         )
@@ -202,7 +272,7 @@ class FreeCADRPC:
         return _err(res)
 
     def delete_object(self, doc_name: str, obj_name: str):
-        res = dispatch_to_gui(
+        res = self._dispatch_gui(
             lambda: self._delete_object_gui(doc_name, obj_name),
             operation_name="delete_object",
         )
@@ -218,7 +288,7 @@ class FreeCADRPC:
         loaded from disk, with the name FreeCAD gave it: reopening uses the
         file stem, so it can differ from the requested name.
         """
-        res = dispatch_to_gui(
+        res = self._dispatch_gui(
             lambda: self._reload_document_gui(doc_name),
             operation_name="reload_document",
         )
@@ -228,11 +298,11 @@ class FreeCADRPC:
 
     def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600) -> dict[str, Any]:
         """Run the CalculiX solver on an existing Fem::FemAnalysis and return summary results."""
-        try:
-            timeout_s = int(timeout)
-        except (TypeError, ValueError):
-            return {"success": False, "error": f"invalid timeout: {timeout!r}"}
-        res = dispatch_to_gui(
+        if isinstance(timeout, bool) or not isinstance(timeout, int) or not 0 < timeout <= 2**31 - 1:
+            return {"success": False, "mutation_outcome": "not_started",
+                    "error": "timeout must be an integer between 1 and 2147483647 seconds"}
+        timeout_s = timeout
+        res = self._dispatch_gui(
             lambda: self._run_fem_analysis_gui(doc_name, analysis_name),
             timeout=timeout_s,
             operation_name="run_fem_analysis",
@@ -274,24 +344,15 @@ class FreeCADRPC:
         functions can reuse it in later async calls. It may only be called from
         an async worker, not from a synchronous script or GUI callback.
         """
-        status_message = "MCP: running background task…"
-
-        # Both status updates are fire and forget, so neither this call nor the
-        # worker waits behind a long GUI task. The FIFO queue runs the clear
-        # after the show, and the clear leaves any newer message alone.
-        def _set_status() -> None:
-            post_to_gui(lambda: FreeCADGui.getMainWindow().statusBar().showMessage(status_message))
-
-        def _clear_status() -> None:
-            def clear() -> None:
-                status_bar = FreeCADGui.getMainWindow().statusBar()
-                if status_bar.currentMessage() == status_message:
-                    status_bar.clearMessage()
-
-            post_to_gui(clear)
-
-        job_id = f"job-{uuid.uuid4().hex}"
+        if not isinstance(code, str):
+            return {"success": False, "code": "INVALID_CODE", "mutation_outcome": "not_started",
+                    "error": "code must be a string"}
         code_preview = code if len(code) <= 200 else code[:200] + "…"
+        job_id = f"job-{uuid.uuid4().hex}"
+        rejection = _claim_script(job_id, self._generation)
+        if rejection:
+            return rejection
+        generation = self._generation
 
         def worker() -> None:
             # Synchronous capture routes only the GUI thread, so this worker's
@@ -299,8 +360,13 @@ class FreeCADRPC:
             # Execute against the live dictionary. Merging a snapshot on exit
             # would restore stale values and lose deletions/concurrent writes.
             _async_execution.active = True
-            outcome: dict[str, Any] = {"state": "done"}
+            _async_execution.generation = generation
+            outcome: dict[str, Any] = {"state": "done", "mutation_outcome": "completed"}
             try:
+                if generation != dispatch_generation() or not get_dispatch_status()["accepting"]:
+                    outcome = {"state": "failed", "mutation_outcome": "not_started",
+                               "error": "RPC stopped before the worker started"}
+                    return
                 exec(code, _EXEC_NAMESPACE)
             except BaseException as e:
                 # SystemExit/KeyboardInterrupt raised by a worker script must
@@ -308,11 +374,14 @@ class FreeCADRPC:
                 import traceback as _tb
                 outcome = {
                     "state": "failed",
+                    "mutation_outcome": "partial_or_unknown",
                     "error": f"{type(e).__name__}: {e}",
                     "traceback": _tb.format_exc().rstrip(),
                 }
             finally:
                 del _async_execution.active
+                del _async_execution.generation
+                _scripts.release(job_id)
                 # Publish the result before best-effort GUI/log cleanup. A busy
                 # GUI must not prevent a client from observing script failure.
                 _record_job(job_id, finished=time.time(), **outcome)
@@ -326,22 +395,24 @@ class FreeCADRPC:
                 except Exception:
                     pass
                 try:
-                    _clear_status()
+                    _refresh_job_status()
                 except Exception:
                     pass  # never let status cleanup mask or outlive the real work
 
-        _record_job(job_id, state="running", started=time.time(), code=code_preview)
         try:
-            _set_status()
+            _record_job(job_id, state="running", started=time.time(), code=code_preview)
+            _refresh_job_status()
             threading.Thread(target=worker, daemon=True).start()
         except Exception as e:
             import traceback as _tb
             error = f"{type(e).__name__}: {e}"
+            _scripts.release(job_id)
             _record_job(
-                job_id, state="failed", finished=time.time(), error=error,
+                job_id, state="failed", finished=time.time(), error=error, mutation_outcome="not_started",
                 traceback=_tb.format_exc().rstrip(),
             )
-            return {"success": False, "job_id": job_id, "error": error}
+            _refresh_job_status()
+            return {"success": False, "job_id": job_id, "error": error, "mutation_outcome": "not_started"}
         return {
             "success": True,
             "job_id": job_id,
@@ -365,74 +436,85 @@ class FreeCADRPC:
         MAX_EXECUTE_CODE_TIMEOUT. Raise it for genuinely slow GUI-thread work
         that cannot move off the GUI thread, such as importing or exporting a
         large STEP assembly. Without it such a call reports a timeout while the
-        task keeps running, and its result is discarded even though the work
-        completes.
+        task keeps running. Poll get_task_status with the returned task_id for
+        the eventual result before retrying.
         """
         timeout_s = self.EXECUTE_CODE_TIMEOUT
         if timeout is not None:
             try:
                 timeout_s = float(timeout)
             except (TypeError, ValueError, OverflowError):
-                return {"success": False, "error": f"invalid timeout: {timeout!r}"}
+                return {"success": False, "mutation_outcome": "not_started", "error": f"invalid timeout: {timeout!r}"}
             if isinstance(timeout, bool) or not math.isfinite(timeout_s) or timeout_s <= 0:
-                return {"success": False, "error": f"invalid timeout: {timeout!r}"}
+                return {"success": False, "mutation_outcome": "not_started", "error": f"invalid timeout: {timeout!r}"}
             timeout_s = min(timeout_s, self.MAX_EXECUTE_CODE_TIMEOUT)
 
+        owner = f"sync-{uuid.uuid4().hex}"
+        rejection = _claim_script(owner, self._generation)
+        if rejection:
+            return rejection
         output_buffer = io.StringIO()
 
-        def task():
-            with capture_stdout(output_buffer):
-                exec(code, _EXEC_NAMESPACE)
-            return True
+        def task() -> dict[str, Any]:
+            try:
+                with capture_stdout(output_buffer):
+                    exec(code, _EXEC_NAMESPACE)
+                return {"success": True, "mutation_outcome": "completed",
+                        "message": "Python code executed successfully.\nOutput: " + output_buffer.getvalue()}
+            except BaseException as exc:
+                return {"success": False, "mutation_outcome": "partial_or_unknown",
+                        "error": f"{type(exc).__name__}: {exc}", "output": output_buffer.getvalue()}
+            finally:
+                _scripts.release(owner)
 
-        res = dispatch_to_gui(
+        res = self._dispatch_gui(
             task,
             timeout=timeout_s,
             operation_name="execute_code",
+            on_cancel=lambda: _scripts.release(owner),
         )
-        if _ok(res):
+        if isinstance(res, dict) and res.get("success"):
             FreeCAD.Console.PrintMessage("Python code executed successfully.\n")
-            return {
-                "success": True,
-                "message": "Python code executed successfully.\nOutput: " + output_buffer.getvalue(),
-            }
+            return res
         # Log the offending code (truncated) to make errors traceable
         code_preview = code if len(code) <= 800 else code[:800] + "\n...(truncated)"
         log_error(
             f"Error executing Python code: {res}\n"
             f"--- code ---\n{code_preview}\n--- end ---\n"
         )
-        return _err(res)
+        failure = _err(res)
+        failure["output"] = output_buffer.getvalue()
+        return failure
 
     def get_objects(self, doc_name: str) -> list[dict[str, Any]]:
-        return _query_on_gui(lambda: self._get_objects_gui(doc_name), "get_objects")
+        return _query_on_gui(lambda: self._get_objects_gui(doc_name), "get_objects", self._generation)
 
     def _get_objects_gui(self, doc_name: str) -> list[dict[str, Any]]:
         # FreeCAD.getDocument raises (not returns None) for an unknown name.
         try:
             doc = FreeCAD.getDocument(doc_name)
-        except Exception:
-            return []
+        except Exception as exc:
+            raise ValueError(f"Document '{doc_name}' not found.") from exc
         return [serialize_object(obj) for obj in doc.Objects]
 
-    def get_object(self, doc_name: str, obj_name: str) -> dict[str, Any] | None:
+    def get_object(self, doc_name: str, obj_name: str) -> dict[str, Any]:
         return _query_on_gui(
-            lambda: self._get_object_gui(doc_name, obj_name), "get_object"
+            lambda: self._get_object_gui(doc_name, obj_name), "get_object", self._generation
         )
 
-    def _get_object_gui(self, doc_name: str, obj_name: str) -> dict[str, Any] | None:
+    def _get_object_gui(self, doc_name: str, obj_name: str) -> dict[str, Any]:
         # FreeCAD.getDocument raises (not returns None) for an unknown name.
         try:
             doc = FreeCAD.getDocument(doc_name)
-        except Exception:
-            return None
+        except Exception as exc:
+            raise ValueError(f"Document '{doc_name}' not found.") from exc
         obj = doc.getObject(obj_name)
-        if obj:
-            return serialize_object(obj)
-        return None
+        if obj is None:
+            raise ValueError(f"Object '{obj_name}' not found in document '{doc_name}'.")
+        return serialize_object(obj)
 
     def insert_part_from_library(self, relative_path):
-        res = dispatch_to_gui(
+        res = self._dispatch_gui(
             lambda: self._insert_part_from_library(relative_path),
             operation_name="insert_part_from_library",
         )
@@ -442,7 +524,7 @@ class FreeCADRPC:
 
     def list_documents(self) -> list[str]:
         return _query_on_gui(
-            lambda: list(FreeCAD.listDocuments().keys()), "list_documents"
+            lambda: list(FreeCAD.listDocuments().keys()), "list_documents", self._generation
         )
 
     def get_parts_list(self):
@@ -454,41 +536,38 @@ class FreeCADRPC:
         width: int | None = None,
         height: int | None = None,
         focus_object: str | None = None,
+        doc_name: str | None = None,
     ) -> str | None:
-        """Get a screenshot of the active view as a base64-encoded PNG string.
+        """Capture the displayed view, optionally restricted to its document.
 
-        Returns None if the active view does not support screenshots
-        (e.g., TechDraw or Spreadsheet workbench).
+        None means no matching displayed 3D view. Other failures are RPC faults.
+        The GUI task owns the file, including cleanup after a caller timeout.
         """
-        fd, tmp_path = tempfile.mkstemp(suffix=".png")
-        os.close(fd)
+        def task() -> dict[str, Any]:
+            if doc_name is not None:
+                active = FreeCAD.ActiveDocument
+                if active is None or active.Name != doc_name:
+                    return {"image": None}
+            if get_displayed_3d_view() is None:
+                return {"image": None}
+            fd, tmp_path = tempfile.mkstemp(suffix=".png")
+            os.close(fd)
+            try:
+                result = save_active_screenshot(tmp_path, view_name, width, height, focus_object)
+                if result is not True:
+                    raise RuntimeError(f"Screenshot failed: {result}")
+                with open(tmp_path, "rb") as stream:
+                    data = stream.read()
+                if not data:
+                    raise RuntimeError("Screenshot renderer produced an empty image")
+                return {"image": base64.b64encode(data).decode("utf-8")}
+            finally:
+                os.unlink(tmp_path)
 
-        def task() -> bool | str:
-            active_view = get_displayed_3d_view()
-            if active_view is None:
-                try:
-                    shown = FreeCADGui.activeView()
-                except Exception:
-                    shown = None
-                view_type = type(shown).__name__ if shown is not None else "None"
-                FreeCAD.Console.PrintWarning(
-                    f"MCP RPC: view type '{view_type}' does not support screenshots\n"
-                )
-                return False
-            return save_active_screenshot(tmp_path, view_name, width, height, focus_object)
-
-        try:
-            res = dispatch_to_gui(task, operation_name="get_active_screenshot")
-            if _ok(res):
-                with open(tmp_path, "rb") as f:
-                    return base64.b64encode(f.read()).decode("utf-8")
-            if res is False:
-                return None
-            FreeCAD.Console.PrintWarning(f"MCP RPC: screenshot failed: {res}\n")
-            return None
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+        result = self._dispatch_gui(task, operation_name="get_active_screenshot")
+        if isinstance(result, dict) and "image" in result:
+            return result["image"]
+        raise Fault(1, json.dumps(_err(result), default=str))
 
     def _create_document_gui(self, name):
         doc = FreeCAD.newDocument(name)
@@ -510,7 +589,7 @@ class FreeCADRPC:
             doc = FreeCAD.getDocument(doc_name)
         except Exception:
             FreeCAD.Console.PrintError(f"Document '{doc_name}' not found.\n")
-            return f"Document '{doc_name}' not found.\n"
+            return {"success": False, "mutation_outcome": "not_started", "error": f"Document '{doc_name}' not found."}
 
         try:
             doc.removeObject(obj_name)
@@ -523,16 +602,15 @@ class FreeCADRPC:
 
     def _reload_document_gui(self, doc_name: str) -> dict[str, Any] | str:
         if doc_name not in FreeCAD.listDocuments():
-            return f"Document '{doc_name}' is not loaded."
+            return {"success": False, "mutation_outcome": "not_started", "error": f"Document '{doc_name}' is not loaded."}
         doc = FreeCAD.getDocument(doc_name)
         file_path = doc.FileName
         if not file_path:
-            return (
+            return {"success": False, "mutation_outcome": "not_started", "error": (
                 f"Document '{doc_name}' has no file on disk "
-                "(unsaved scratch document); nothing to reload from."
-            )
+                "(unsaved scratch document); nothing to reload from.")}
         if not os.path.exists(file_path):
-            return f"File for '{doc_name}' not found at {file_path!r}."
+            return {"success": False, "mutation_outcome": "not_started", "error": f"File for '{doc_name}' not found at {file_path!r}."}
         # Close, then reopen from the same file. FreeCAD names the reopened
         # document after the file stem, not after the name it had before
         # ("HandleConcept3D" saved as handle-concept-3d.FCStd comes back as
@@ -540,7 +618,12 @@ class FreeCADRPC:
         # actually used. Reporting the requested name breaks every follow-up
         # call that still uses it.
         FreeCAD.closeDocument(doc_name)
-        reopened = FreeCAD.openDocument(file_path)
+        try:
+            reopened = FreeCAD.openDocument(file_path)
+        except Exception as exc:
+            return {"success": False, "mutation_outcome": "partial_or_unknown",
+                    "error": f"Document '{doc_name}' was closed but reopening failed: {exc}",
+                    "closed_document": doc_name, "file_path": file_path}
         FreeCAD.Console.PrintMessage(
             f"Document '{doc_name}' reloaded from '{file_path}' via RPC "
             f"(now '{reopened.Name}').\n"
@@ -566,9 +649,11 @@ class FreeCADRPC:
 
 
 def start_rpc_server(port: int = 9875) -> str:
-    global rpc_server_thread, rpc_server_instance
+    global rpc_server_thread, rpc_server_instance, _listener_state, _server_id, _applied_settings
 
     if rpc_server_instance:
+        if _listener_state == "stop_failed":
+            return "RPC Server stop failed; retry Stop before restarting."
         host, bound_port = rpc_server_instance.server_address
         return f"RPC Server already running at {host}:{bound_port} (PID {os.getpid()})."
 
@@ -579,6 +664,9 @@ def start_rpc_server(port: int = 9875) -> str:
         if _stop_thread.is_alive():
             return ("RPC Server is still stopping (a request is draining); "
                     "try again in a few seconds.")
+
+    if _scripts.snapshot()["state"] == "busy" or get_dispatch_status()["state"] in {"busy", "stuck"}:
+        return "RPC Server cannot restart while an operation is still running; wait for completion."
 
     settings = load_settings()
     remote_enabled = settings.get("remote_enabled", False)
@@ -596,17 +684,22 @@ def start_rpc_server(port: int = 9875) -> str:
     else:
         host = "127.0.0.1"
 
-    server = FilteredXMLRPCServer(
-        (host, port),
-        allowed_ips_str=allowed_ips,
-        auth_token=auth_token,
-        allow_none=True,
-        logRequests=False,
-    )
+    _listener_state = "starting"
     try:
-        server.register_instance(FreeCADRPC())
+        server = FilteredXMLRPCServer(
+            (host, port),
+            allowed_ips_str=allowed_ips,
+            auth_token=auth_token,
+            allow_none=True,
+            logRequests=False,
+        )
+    except Exception:
+        _listener_state = "stopped"
+        raise
+    try:
         init_waker()
         start_heartbeat()
+        server.register_instance(FreeCADRPC())
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
     except Exception:
@@ -615,8 +708,12 @@ def start_rpc_server(port: int = 9875) -> str:
         server.server_close()
         request_shutdown()
         cleanup_waker()
+        _listener_state = "stopped"
         raise
 
+    _server_id = uuid.uuid4().hex
+    _applied_settings = dict(settings)
+    _listener_state = "running"
     rpc_server_instance = server
     rpc_server_thread = thread
     bound_host, bound_port = server.server_address
@@ -628,21 +725,28 @@ def start_rpc_server(port: int = 9875) -> str:
     return msg
 
 
-def stop_rpc_server():
-    global rpc_server_instance, rpc_server_thread, _stop_thread
+def stop_rpc_server() -> str:
+    global rpc_server_instance, rpc_server_thread, _stop_thread, _listener_state, _job_status_message
 
     if not rpc_server_instance:
         return "RPC Server was not running."
 
     server = rpc_server_instance
     thread = rpc_server_thread
-    rpc_server_instance = None
-    rpc_server_thread = None
 
+    _listener_state = "stopping"
     request_shutdown()
     cleanup_waker()
+    try:
+        bar = FreeCADGui.getMainWindow().statusBar()
+        if _job_status_message and bar.currentMessage() == _job_status_message:
+            bar.clearMessage()
+    except Exception:
+        pass
+    _job_status_message = ""
 
-    def _shutdown_and_close():
+    def _shutdown_and_close() -> None:
+        global _listener_state
         # shutdown() only stops the accept loop; in-flight requests run in
         # their own daemon threads and are not waited for. Kept off the GUI
         # thread so a menu command cannot block the UI. server_close() must
@@ -659,11 +763,22 @@ def stop_rpc_server():
                     )
         finally:
             server.server_close()
+            _listener_state = "stopped"
         FreeCAD.Console.PrintMessage("RPC Server stopped.\n")
 
-    _stop_thread = threading.Thread(target=_shutdown_and_close, daemon=True)
-    _stop_thread.start()
-    return "RPC Server stopping…"
+    try:
+        stopper = threading.Thread(target=_shutdown_and_close, daemon=True)
+        stopper.start()
+    except Exception as exc:
+        # Keep the live listener reachable so Stop can be retried. Dispatch
+        # stays closed to new work after the failed stop attempt.
+        _stop_thread = None
+        _listener_state = "stop_failed"
+        return f"RPC Server stop failed: {exc}. Retry Stop; the listener is still open."
+    _stop_thread = stopper
+    rpc_server_instance = None
+    rpc_server_thread = None
+    return "RPC Server stopping… Queued work cancelled; running work may finish. Shared script variables are retained."
 
 
 register_commands()

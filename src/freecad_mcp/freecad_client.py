@@ -1,6 +1,8 @@
 import http.client
 import logging
+import base64
 import math
+import threading
 import xmlrpc.client
 from typing import Any
 
@@ -67,11 +69,17 @@ class FreeCADConnection:
         timeout: float = 150,
         token: str | None = None,
     ):
+        self.server_id: str | None = None
+        self.compatibility: dict[str, Any] = {"state": "unchecked"}
+        self._budget_lock = threading.Lock()
         self._uri = f"http://{host}:{port}"
         # A header, not URL userinfo: xmlrpc.client repeats the URL's host part,
         # userinfo included, in its repr and error messages, and tools return
         # those messages to the model.
         self._headers = [("Authorization", f"Bearer {token}")] if token else []
+        if token and not token.isascii():
+            encoded = base64.b64encode(f":{token}".encode("utf-8")).decode("ascii")
+            self._headers = [("Authorization", f"Basic {encoded}")]
         self._timeout = timeout
 
     def _make_proxy(self, timeout: float) -> xmlrpc.client.ServerProxy:
@@ -102,19 +110,39 @@ class FreeCADConnection:
     def check_addon_version(self) -> str | None:
         """Compare the addon's version with this server and adopt its budgets.
 
-        Returns a warning for an old or mismatched addon, otherwise None.
+        Returns a warning for an old, mismatched or unverified addon; None means compatible.
         """
+        # Refresh for every tool admission. A cached client is configuration,
+        # not proof that the listener is still the same process/generation.
         try:
             with self._make_proxy(self.VERSION_CHECK_TIMEOUT) as proxy:
                 status = proxy.get_rpc_status()
         except Exception as e:
+            self._adopt_budgets({})
+            self.server_id = None
             if is_missing_method_fault(e):
                 # Addons older than get_rpc_status reject the method outright.
+                self.compatibility = {"state": "legacy"}
+                self.server_id = None
                 return addon_version_warning(None)
             logger.warning(f"Could not check the FreeCAD addon version: {e}")
-            return None
+            self.compatibility = {"state": "unknown", "error": str(e)}
+            return f"FreeCAD addon compatibility is unknown: version check failed: {e}"
         if not isinstance(status, dict):
+            self._adopt_budgets({})
+            self.server_id = None
+            self.compatibility = {"state": "unknown", "error": "Malformed status response"}
             return addon_version_warning({})
+        self.server_id = status.get("server_id")
+        self._adopt_budgets(status)
+        notice = addon_version_warning(status)
+        self.compatibility = {"state": "mismatch" if notice else "compatible",
+                              "server_id": self.server_id,
+                              "protocol_version": status.get("protocol_version")}
+        return notice
+
+    def _adopt_budgets(self, status: dict[str, Any]) -> None:
+        budgets = {}
         for key, attr in (
             ("execute_code_timeout", "EXECUTE_CODE_TIMEOUT"),
             ("max_execute_code_timeout", "MAX_EXECUTE_CODE_TIMEOUT"),
@@ -123,8 +151,12 @@ class FreeCADConnection:
             # Socket timeouts are derived from these budgets, so this client's
             # own ceiling bounds how long an addon's report can make it wait.
             if _is_budget(value, FreeCADConnection.MAX_EXECUTE_CODE_TIMEOUT):
+                budgets[attr] = value
+            else:
+                budgets[attr] = getattr(type(self), attr)
+        with self._budget_lock:
+            for attr, value in budgets.items():
                 setattr(self, attr, value)
-        return addon_version_warning(status)
 
     def create_document(self, name: str) -> dict[str, Any]:
         return self._call("create_document", name)
@@ -148,7 +180,9 @@ class FreeCADConnection:
         # The addon permits a full queue budget followed by a full run budget.
         # Both default to EXECUTE_CODE_TIMEOUT, or to the caller's per-call
         # timeout, so the socket must outlast either budget.
-        run_budget = self.EXECUTE_CODE_TIMEOUT
+        with self._budget_lock:
+            run_budget = self.EXECUTE_CODE_TIMEOUT
+            max_budget = self.MAX_EXECUTE_CODE_TIMEOUT
         if timeout is not None:
             try:
                 run_budget = float(timeout)
@@ -156,7 +190,7 @@ class FreeCADConnection:
                 raise ValueError("timeout must be a positive finite number") from exc
             if isinstance(timeout, bool) or not math.isfinite(run_budget) or run_budget <= 0:
                 raise ValueError("timeout must be a positive finite number")
-            run_budget = min(run_budget, self.MAX_EXECUTE_CODE_TIMEOUT)
+            run_budget = min(run_budget, max_budget)
         socket_timeout = max(self._timeout, 2 * run_budget + self.RPC_TIMEOUT_MARGIN)
         with self._make_proxy(socket_timeout) as proxy:
             # Without an explicit timeout, call with a single argument so a
@@ -174,18 +208,22 @@ class FreeCADConnection:
         with self._make_proxy(self._timeout) as proxy:
             return proxy.get_async_status(job_id)
 
+    def get_task_status(self, task_id: str | None = None) -> dict[str, Any]:
+        return self._call("get_task_status", task_id)
+
     def get_active_screenshot(
         self,
         view_name: str = "Isometric",
         width: int | None = None,
         height: int | None = None,
         focus_object: str | None = None,
+        doc_name: str | None = None,
     ) -> str | None:
-        try:
-            return self._call("get_active_screenshot", view_name, width, height, focus_object)
-        except Exception as e:
-            logger.error(f"Error getting screenshot: {e}")
-            return None
+        args = (view_name, width, height, focus_object)
+        # Keep explicit active-view capture compatible with older addons.
+        if doc_name is not None:
+            args += (doc_name,)
+        return self._call("get_active_screenshot", *args)
 
     def get_objects(self, doc_name: str) -> list[dict[str, Any]]:
         return self._call("get_objects", doc_name)
@@ -200,6 +238,8 @@ class FreeCADConnection:
         return self._call("list_documents")
 
     def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600) -> dict[str, Any]:
+        if isinstance(timeout, bool) or not isinstance(timeout, int) or not 0 < timeout <= 2**31 - 1:
+            raise ValueError("timeout must be an integer between 1 and 2147483647 seconds")
         # Both queueing and solving can consume `timeout` seconds each.
         socket_timeout = max(self._timeout, 2 * timeout + self.RPC_TIMEOUT_MARGIN)
         with self._make_proxy(socket_timeout) as proxy:

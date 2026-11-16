@@ -29,6 +29,7 @@ class Document:
     Name = "Doc"
 
     def __init__(self) -> None:
+        self.UndoMode = 0
         self.Objects: list[Item] = [Item("Existing", "Part::Box")]
         self.events: list[str] = []
 
@@ -96,7 +97,8 @@ def test_a_failed_property_leaves_nothing_behind(factory: tuple[types.ModuleType
     module, doc = factory
     obj = module.TestObject(name="Hole", type="Part::Cylinder", properties={"Radius": 8, "Placement": {"Base": {"x": 1}}})
     reply = module.create_object_gui("Doc", obj)
-    assert isinstance(reply, str) and "Placement" in reply and "no new objects remain" in reply
+    assert reply["mutation_outcome"] == "rolled_back"
+    assert "Placement" in reply["error"] and "no new objects remain" in reply["error"]
     assert [o.Name for o in doc.Objects] == ["Existing"]
     assert doc.events == ["open", "abort"]
 
@@ -104,7 +106,7 @@ def test_a_failed_property_leaves_nothing_behind(factory: tuple[types.ModuleType
 def test_a_successful_create_is_one_committed_transaction(factory: tuple[types.ModuleType, Document]) -> None:
     module, doc = factory
     reply = module.create_object_gui("Doc", module.TestObject(name="Hole", type="Part::Cylinder", properties={"Radius": 8}))
-    assert reply == {"success": True, "object_name": "Hole"}
+    assert reply == {"success": True, "object_name": "Hole", "mutation_outcome": "completed"}
     assert [o.Name for o in doc.Objects] == ["Existing", "Hole"]
     assert doc.events == ["open", "commit"]
 
@@ -157,7 +159,7 @@ def test_factory_failure_removes_all_new_objects_only(
 
     monkeypatch.setattr(module, "_create_by_type", fail_after_children)
     reply = module.create_object_gui("Doc", module.TestObject(name="Material", type="Fem::MaterialCommon"))
-    assert "invalid material property" in reply
+    assert "invalid material property" in reply["error"]
     assert [o.Name for o in doc.Objects] == ["Existing"]
 
 
@@ -167,7 +169,7 @@ def test_invalid_created_object_is_kept_and_named(
     module, doc = factory
     monkeypatch.setattr(module, "object_validity_error", lambda obj: "invalid shape")
     reply = module.create_object_gui("Doc", module.TestObject(name="Hole", type="Part::Cylinder"))
-    assert reply == {"success": False, "object_name": "Hole", "error": "invalid shape"}
+    assert reply == {"success": False, "object_name": "Hole", "error": "invalid shape", "mutation_outcome": "retained_invalid"}
     assert [o.Name for o in doc.Objects] == ["Existing", "Hole"]
     assert doc.events == ["open", "commit"]
 
@@ -175,5 +177,5 @@ def test_invalid_created_object_is_kept_and_named(
 def test_missing_mesh_analysis_closes_transaction(factory: tuple[types.ModuleType, Document]) -> None:
     module, doc = factory
     reply = module.create_object_gui("Doc", module.TestObject(name="Mesh", type="Fem::FemMeshGmsh"))
-    assert "analysis_name" in reply
+    assert "analysis_name" in reply["error"]
     assert doc.events == ["open", "abort"]

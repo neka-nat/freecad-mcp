@@ -53,12 +53,12 @@ def run_fem_analysis(doc_name: str, analysis_name: str) -> dict:
         try:
             doc = FreeCAD.getDocument(doc_name)
         except Exception:
-            return {"success": False, "error": f"Document '{doc_name}' not found."}
+            return {"success": False, "mutation_outcome": "not_started", "error": f"Document '{doc_name}' not found."}
         analysis = doc.getObject(analysis_name)
         if analysis is None:
-            return {"success": False, "error": f"Analysis '{analysis_name}' not found."}
+            return {"success": False, "mutation_outcome": "not_started", "error": f"Analysis '{analysis_name}' not found."}
         if analysis.TypeId not in ("Fem::FemAnalysis", "Fem::FemAnalysisPython"):
-            return {"success": False, "error": f"'{analysis_name}' is not a FEM analysis (TypeId={analysis.TypeId})."}
+            return {"success": False, "mutation_outcome": "partial_or_unknown", "error": f"'{analysis_name}' is not a FEM analysis (TypeId={analysis.TypeId})."}
 
         stage = "solver resolution"
         solver = None
@@ -76,7 +76,7 @@ def run_fem_analysis(doc_name: str, analysis_name: str) -> dict:
                 or getattr(ObjectsFem, "makeSolverCalculixCcxTools", None)
             )
             if solver_factory is None:
-                return {"success": False, "error": "ObjectsFem has no Calculix solver factory."}
+                return {"success": False, "mutation_outcome": "partial_or_unknown", "error": "ObjectsFem has no Calculix solver factory."}
             solver = solver_factory(doc, "CalculiX")
             analysis.addObject(solver)
 
@@ -91,7 +91,7 @@ def run_fem_analysis(doc_name: str, analysis_name: str) -> dict:
         stage = "prerequisite check"
         prereq_msg = fea.check_prerequisites()
         if prereq_msg:
-            return {"success": False, "error": f"Prerequisites failed: {prereq_msg}", "working_dir": work_dir}
+            return {"success": False, "mutation_outcome": "partial_or_unknown", "error": f"Prerequisites failed: {prereq_msg}", "working_dir": work_dir}
 
         stage = "load inspection"
         doc.recompute()
@@ -105,7 +105,7 @@ def run_fem_analysis(doc_name: str, analysis_name: str) -> dict:
         # so only an explicit False is treated as a failure.
         if fea.run() is False:
             return {
-                "success": False,
+                "success": False, "mutation_outcome": "partial_or_unknown",
                 "error": "CalculiX solver run failed (fea.run() returned False); inspect the .dat/.frd output in working_dir.",
                 "working_dir": work_dir,
             }
@@ -115,7 +115,7 @@ def run_fem_analysis(doc_name: str, analysis_name: str) -> dict:
         # result sets and DAT text objects. Never report a surviving old set.
         results = [member for member in _mechanical_results(analysis) if member.Name not in old_results]
         if not results:
-            return {"success": False, "error": "Solver ran but no new mechanical result object was produced.", "working_dir": work_dir}
+            return {"success": False, "mutation_outcome": "partial_or_unknown", "error": "Solver ran but no new mechanical result object was produced.", "working_dir": work_dir}
         result_obj = results[0]
 
         stage = "result extraction"
@@ -125,7 +125,7 @@ def run_fem_analysis(doc_name: str, analysis_name: str) -> dict:
         doc.recompute()
 
         return {
-            "success": True,
+            "success": True, "mutation_outcome": "completed",
             "result_object": result_obj.Name,
             "result_objects": [member.Name for member in results],
             "solver_object": solver.Name,
@@ -134,11 +134,12 @@ def run_fem_analysis(doc_name: str, analysis_name: str) -> dict:
             "max_von_mises_MPa": max(vm) if vm else None,
             "min_von_mises_MPa": min(vm) if vm else None,
             "max_displacement_mm": max(disp) if disp else None,
+            "min_displacement_mm": min(disp) if disp else None,
             "working_dir": work_dir,
         }
     except Exception as e:
         return {
-            "success": False,
+            "success": False, "mutation_outcome": "partial_or_unknown",
             "error": f"FEM analysis failed during {stage}: {type(e).__name__}: {e}",
             "traceback": traceback.format_exc(),
             "working_dir": work_dir,

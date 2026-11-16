@@ -65,12 +65,42 @@ def resolve_references(doc: FreeCAD.Document, val: Any) -> list[tuple[Any, Any]]
     return refs
 
 
+def _resolve_link(doc: FreeCAD.Document, value: Any) -> Any:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("Object links require an object name or null")
+    linked = doc.getObject(value)
+    if linked is None:
+        raise ValueError(f"Referenced object '{value}' not found.")
+    return linked
+
+
+def _resolve_link_value(doc: FreeCAD.Document, kind: str, value: Any) -> Any:
+    if kind == "App::PropertyLink":
+        return _resolve_link(doc, value)
+    if kind == "App::PropertyLinkList":
+        return [_resolve_link(doc, item) for item in value]
+    if kind == "App::PropertyLinkSub":
+        if value is None:
+            return None
+        name, sub = parse_reference_entry(value)
+        return (_resolve_link(doc, name), sub)
+    return resolve_references(doc, value)
+
+
 def set_object_property(
     doc: FreeCAD.Document, obj: FreeCAD.DocumentObject, properties: dict[str, Any]
 ) -> None:
     failures = []
     for prop, val in properties.items():
         try:
+            # Mesh aliases must work identically when creating and editing.
+            if getattr(getattr(obj, "Proxy", None), "Type", "") == "Fem::FemMeshGmsh" or (
+                hasattr(obj, "FemMesh") and hasattr(obj, "CharacteristicLengthMax")
+            ):
+                prop = {"Part": "Shape", "ElementSizeMax": "CharacteristicLengthMax",
+                        "ElementSizeMin": "CharacteristicLengthMin"}.get(prop, prop)
             if prop in obj.PropertiesList:
                 if prop == "Placement" and isinstance(val, dict):
                     if "Base" in val:
@@ -132,7 +162,7 @@ def set_object_property(
                     )
                     setattr(obj, prop, vector)
 
-                elif prop in ["Base", "Tool", "Source", "Profile"] and isinstance(
+                elif prop in ["Base", "Tool", "Source", "Profile", "Shape", "Part"] and isinstance(
                     val, str
                 ):
                     ref_obj = doc.getObject(val)
@@ -143,6 +173,11 @@ def set_object_property(
 
                 elif prop == "References" and isinstance(val, list):
                     setattr(obj, prop, resolve_references(doc, val))
+
+                elif callable(getattr(obj, "getTypeIdOfProperty", None)) and obj.getTypeIdOfProperty(prop) in {
+                    "App::PropertyLink", "App::PropertyLinkList", "App::PropertyLinkSub", "App::PropertyLinkSubList",
+                }:
+                    setattr(obj, prop, _resolve_link_value(doc, obj.getTypeIdOfProperty(prop), val))
 
                 else:
                     setattr(obj, prop, val)

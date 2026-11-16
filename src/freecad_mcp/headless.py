@@ -21,7 +21,6 @@ from typing import Any
 logger = logging.getLogger("FreeCADMCPserver")
 
 FLATPAK_APP = "org.freecad.FreeCAD"
-_NOISE = ("%)", "Importing project files", "Postprocessing", "FreeCAD 1.", "(C) 2001", "LGPL")
 
 
 def detect_freecadcmd() -> list[str] | None:
@@ -71,22 +70,74 @@ def _clean(output: str | bytes | None) -> str:
         return ""
     if isinstance(output, bytes):
         output = output.decode("utf-8", errors="replace")
-    lines = [ln for ln in output.splitlines() if ln.strip() and not any(n in ln for n in _NOISE)]
-    return "\n".join(lines)
+    return output.rstrip("\r\n")
+
+
+def _terminate_process_tree(proc: subprocess.Popen) -> None:
+    """Stop this invocation's process group/tree, including ordinary children."""
+    if os.name == "nt":
+        # Windows has no killpg. taskkill /T includes descendants of this PID.
+        killed = subprocess.run(
+            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+            capture_output=True, timeout=10,
+        )
+        if killed.returncode and proc.poll() is None:
+            raise OSError("taskkill could not terminate the headless process tree")
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    if proc.poll() is None:
+        proc.kill()
+
+
+def _run_process(argv: list[str], timeout: float) -> subprocess.CompletedProcess:
+    with subprocess.Popen(
+        argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+        text=True, encoding="utf-8", errors="replace", start_new_session=os.name != "nt",
+    ) as proc:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            cleanup_note = ""
+            try:
+                _terminate_process_tree(proc)
+            except (OSError, subprocess.TimeoutExpired) as cleanup_error:
+                logger.warning("Headless process tree cleanup failed: %s", cleanup_error)
+                cleanup_note = f"\nProcess tree cleanup failed: {cleanup_error}"
+                if proc.poll() is None:
+                    proc.kill()
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+                exc.stdout, exc.stderr = stdout, stderr + cleanup_note
+            except subprocess.TimeoutExpired:
+                # A child that deliberately detached can retain the pipe. Do
+                # not wait indefinitely or imply that arbitrary scripts were undone.
+                exc.stderr = _clean(exc.stderr) + cleanup_note + "\nA detached child may still be running."
+            raise exc
+        except BaseException:
+            _terminate_process_tree(proc)
+            raise
+    return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
 
 
 def run_headless(code: str, timeout: float, command: list[str] | None) -> dict[str, Any]:
     """Execute ``code`` with ``command -c "exec(open(script).read())"``.
 
-    Returns ``success``, ``returncode``, ``output`` (stdout+stderr, noise
-    filtered), and flags ``crashed`` (killed by a signal) / ``timed_out``.
+    Returns ``success``, ``returncode``, ``output`` (stdout+stderr), and flags
+    ``crashed`` (killed by a signal) / ``timed_out``.
     """
-    if not math.isfinite(timeout) or timeout <= 0:
-        return {"success": False, "error": "timeout must be a positive finite number"}
+    try:
+        valid_timeout = not isinstance(timeout, bool) and math.isfinite(timeout) and timeout > 0
+    except (TypeError, ValueError, OverflowError):
+        valid_timeout = False
+    if not valid_timeout:
+        return {"success": False, "mutation_outcome": "not_started", "error": "timeout must be a positive finite number"}
     command = command or detect_freecadcmd()
     if not command:
         return {
-            "success": False,
+            "success": False, "mutation_outcome": "not_started",
             "error": "freecadcmd not found: install FreeCAD, or pass --freecadcmd to freecad-mcp",
         }
     with tempfile.NamedTemporaryFile(
@@ -104,28 +155,26 @@ def run_headless(code: str, timeout: float, command: list[str] | None) -> dict[s
     )
     argv = command + ["-c", unbuffer + f"exec(open({script!r}, encoding='utf-8').read())"]
     try:
-        proc = subprocess.run(
-            argv, capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=timeout, stdin=subprocess.DEVNULL,
-        )
+        proc = _run_process(argv, timeout)
     except subprocess.TimeoutExpired as e:
         out = "\n".join(part for part in (_clean(e.stdout), _clean(e.stderr)) if part)
         return {
-            "success": False,
+            "success": False, "mutation_outcome": "partial_or_unknown",
             "timed_out": True,
             "error": f"headless FreeCAD did not finish within {timeout:g} s",
             "output": out,
         }
     except OSError as e:
-        return {"success": False, "error": f"could not start headless FreeCAD: {e}"}
+        return {"success": False, "mutation_outcome": "not_started", "error": f"could not start headless FreeCAD: {e}"}
     finally:
         try:
             os.unlink(script)
         except OSError:
             pass
-    output = _clean(proc.stdout + "\n" + proc.stderr)
+    output = "\n".join(part for part in (_clean(proc.stdout), _clean(proc.stderr)) if part)
     result: dict[str, Any] = {
         "success": proc.returncode == 0,
+        "mutation_outcome": "completed" if proc.returncode == 0 else "partial_or_unknown",
         "returncode": proc.returncode,
         "output": output,
     }
