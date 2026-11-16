@@ -74,7 +74,11 @@ shape export). After saving an `.FCStd` file that is open in the GUI, use
 
 The executable runs on the machine hosting the MCP server; `--host` only selects
 the GUI RPC host. Use file paths accessible on the MCP server machine. The
-timeout must be positive and finite (default: 600 seconds). A timeout returns
+timeout must be positive and finite (default: 600 seconds). On timeout the runner
+terminates its POSIX process group, or the Windows process tree with `taskkill /T`,
+so ordinary child processes cannot continue writing after the timeout. Scripts
+that deliberately detach children or use an external service are outside this
+boundary; completed file writes are not rolled back. A timeout returns
 partial stdout/stderr, and temporary scripts are removed on success, failure,
 and timeout.
 

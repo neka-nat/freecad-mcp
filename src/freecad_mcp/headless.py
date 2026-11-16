@@ -73,6 +73,55 @@ def _clean(output: str | bytes | None) -> str:
     return output.rstrip("\r\n")
 
 
+def _terminate_process_tree(proc: subprocess.Popen) -> None:
+    """Stop this invocation's process group/tree, including ordinary children."""
+    if os.name == "nt":
+        # Windows has no killpg. taskkill /T includes descendants of this PID.
+        killed = subprocess.run(
+            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+            capture_output=True, timeout=10,
+        )
+        if killed.returncode and proc.poll() is None:
+            raise OSError("taskkill could not terminate the headless process tree")
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    if proc.poll() is None:
+        proc.kill()
+
+
+def _run_process(argv: list[str], timeout: float) -> subprocess.CompletedProcess:
+    with subprocess.Popen(
+        argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+        text=True, encoding="utf-8", errors="replace", start_new_session=os.name != "nt",
+    ) as proc:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            cleanup_note = ""
+            try:
+                _terminate_process_tree(proc)
+            except (OSError, subprocess.TimeoutExpired) as cleanup_error:
+                logger.warning("Headless process tree cleanup failed: %s", cleanup_error)
+                cleanup_note = f"\nProcess tree cleanup failed: {cleanup_error}"
+                if proc.poll() is None:
+                    proc.kill()
+            try:
+                stdout, stderr = proc.communicate(timeout=5)
+                exc.stdout, exc.stderr = stdout, stderr + cleanup_note
+            except subprocess.TimeoutExpired:
+                # A child that deliberately detached can retain the pipe. Do
+                # not wait indefinitely or imply that arbitrary scripts were undone.
+                exc.stderr = _clean(exc.stderr) + cleanup_note + "\nA detached child may still be running."
+            raise exc
+        except BaseException:
+            _terminate_process_tree(proc)
+            raise
+    return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
+
+
 def run_headless(code: str, timeout: float, command: list[str] | None) -> dict[str, Any]:
     """Execute ``code`` with ``command -c "exec(open(script).read())"``.
 
@@ -106,10 +155,7 @@ def run_headless(code: str, timeout: float, command: list[str] | None) -> dict[s
     )
     argv = command + ["-c", unbuffer + f"exec(open({script!r}, encoding='utf-8').read())"]
     try:
-        proc = subprocess.run(
-            argv, capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=timeout, stdin=subprocess.DEVNULL,
-        )
+        proc = _run_process(argv, timeout)
     except subprocess.TimeoutExpired as e:
         out = "\n".join(part for part in (_clean(e.stdout), _clean(e.stderr)) if part)
         return {
