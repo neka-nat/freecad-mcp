@@ -24,7 +24,7 @@ try:
             ("Fem::ConstraintForce", {"Force": 100}),
         ]:
             reply = create_object_gui(doc.Name, Object("Bad", kind, properties=props))
-            assert isinstance(reply, str) and "no new objects remain" in reply, reply
+            assert reply["mutation_outcome"] == "rolled_back" and "no new objects remain" in reply["error"], reply
             assert [o.Name for o in doc.Objects] == before
 
     from femexamples.ccx_cantilever_faceload import setup

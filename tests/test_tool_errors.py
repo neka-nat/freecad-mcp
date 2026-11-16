@@ -202,6 +202,6 @@ def test_stdio_client_receives_error_flags_and_original_content() -> None:
 
 if __name__ == "__main__":
     # Only FreeCAD is stubbed; the real MCP server and client use stdio.
-    server.state.freecad_connection = _Connection()
+    server.state.freecad_connection = _Connection("addon is old")
     server.state.version_notice = "addon is old"
     server.mcp.run()

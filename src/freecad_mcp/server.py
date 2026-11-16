@@ -30,6 +30,7 @@ from .operations import (
     get_objects_operation,
     get_parts_list_operation,
     get_async_status_operation,
+    get_task_status_operation,
     get_rpc_status_operation,
     get_view_operation,
     insert_part_from_library_operation,
@@ -95,7 +96,8 @@ def tool(fn: Callable[..., ToolResponse]) -> Callable[..., ToolResponse | CallTo
     def wrapper(*args: Any, **kwargs: Any) -> ToolResponse | CallToolResult:
         response = fn(*args, **kwargs)
         is_error = isinstance(response, ErrorResponse)
-        notice, state.version_notice = state.version_notice, None
+        with state.lock:
+            notice, state.version_notice = state.version_notice, None
         if notice:
             response = [TextContent(type="text", text=f"Warning: {notice}"), *response]
         if is_error:
@@ -113,6 +115,11 @@ def tool(fn: Callable[..., ToolResponse]) -> Callable[..., ToolResponse | CallTo
 
 
 def get_freecad_connection() -> FreeCADConnection:
+    with state.lock:
+        return _get_freecad_connection_locked()
+
+
+def _get_freecad_connection_locked() -> FreeCADConnection:
     """Get or create a persistent FreeCAD connection.
 
     The connection is cached only after FreeCAD answers, so a server started
@@ -143,10 +150,13 @@ def get_freecad_connection() -> FreeCADConnection:
             raise Exception(
                 "Failed to connect to FreeCAD. Make sure the FreeCAD addon is running."
             )
-        state.version_notice = connection.check_addon_version()
-        if state.version_notice:
-            logger.warning(state.version_notice)
         state.freecad_connection = connection
+    notice = state.freecad_connection.check_addon_version()
+    if notice != state.last_version_notice:
+        state.version_notice = notice
+        state.last_version_notice = notice
+        if notice:
+            logger.warning(notice)
     return state.freecad_connection
 
 
@@ -446,7 +456,8 @@ def execute_code_async(ctx: Context, code: str) -> list[TextContent]:
 
     Scripts share a live namespace. Saved functions can use commit() in later
     async calls; calling it from execute_code or a GUI callback raises immediately.
-    Coordinate concurrent scripts that intentionally modify the same variables.
+    Only one shared-namespace script is admitted at a time. Overlapping scripts
+    return SCRIPT_BUSY without starting; status and document tools remain usable.
 
     commit() queues fn on the GUI thread, waits for it, and raises RuntimeError if
     dispatch fails or times out. Example:
@@ -518,6 +529,19 @@ def execute_code_headless(ctx: Context, code: str, timeout: PositiveTimeout = 60
 
 
 @tool
+def get_task_status(ctx: Context, task_id: Annotated[int, Field(strict=True, gt=0)] | None = None) -> list[TextContent]:
+    """Poll a timed-out GUI operation without waiting for the GUI thread.
+
+    Omit task_id to list pending work and the last 20 completed operations.
+    A timed_out_running task can still mutate the document. Wait for its final
+    result before retrying. History is in-memory and resets when FreeCAD exits;
+    large result previews are capped at 65,536 serialized characters and marked
+    result_truncated.
+    """
+    return get_task_status_operation(get_freecad_connection(), task_id)
+
+
+@tool
 def get_async_status(ctx: Context, job_id: str = "") -> list[TextContent]:
     """Report the state of background jobs started by execute_code_async.
 
@@ -557,7 +581,7 @@ def execute_code(
             Raise it for slow work that must
             run on the GUI thread, such as importing or exporting a large STEP
             assembly. Without it the call reports a timeout while the task keeps
-            running, and the result is lost even though the work finishes. Prefer
+            running; poll get_task_status using the returned task_id for the late result. Prefer
             execute_code_async for heavy pure-geometry work that touches neither
             the document nor the GUI.
 

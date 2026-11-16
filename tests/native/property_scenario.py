@@ -66,7 +66,7 @@ try:
         if mode == "unknown":
             properties["CharacteristicLenghtMax"] = 3
         result = create_object_gui(doc.Name, Object("BadMesh", "Fem::FemMeshGmsh", analysis.Name, properties))
-        assert isinstance(result, str) and "no new objects remain" in result, result
+        assert result["mutation_outcome"] == "rolled_back" and "no new objects remain" in result["error"], result
         assert {obj.Name for obj in doc.Objects} == before
     Mesher.exit_code = 0
     Mesher.empty = False

@@ -118,7 +118,8 @@ def test_addon_without_version_fields_is_reported_as_old() -> None:
 
 def test_failing_get_rpc_status_is_not_reported_as_an_old_addon() -> None:
     warning, connection = check(BrokenStatusAddon())
-    assert warning is None
+    assert "compatibility is unknown" in warning
+    assert connection.compatibility["state"] == "unknown"
     assert connection.EXECUTE_CODE_TIMEOUT == 90
 
 
@@ -184,7 +185,7 @@ def test_client_adopts_a_budget_up_to_its_own_ceiling() -> None:
 def test_unreachable_addon_does_not_block_the_check() -> None:
     connection = FreeCADConnection("127.0.0.1", 9, timeout=0.5)
     try:
-        assert connection.check_addon_version() is None
+        assert "compatibility is unknown" in connection.check_addon_version()
     finally:
         connection.disconnect()
 
@@ -202,7 +203,7 @@ def test_hung_addon_cannot_hold_up_the_check() -> None:
         connection.VERSION_CHECK_TIMEOUT = 0.2
         started = time.monotonic()
         try:
-            assert connection.check_addon_version() is None
+            assert "compatibility is unknown" in connection.check_addon_version()
         finally:
             connection.disconnect()
         assert time.monotonic() - started < 0.9

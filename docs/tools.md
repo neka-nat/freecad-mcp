@@ -95,3 +95,7 @@ available for inspection as reported in the error.
 Mesh creation rejects unknown properties and requires a successful mesher run
 with nonempty elements. Mesh `Shape` links and legacy `Part`/`ElementSizeMax/Min`
 aliases are accepted by both creation and editing.
+
+`get_task_status(task_id)` retrieves a GUI operation after a timeout without
+waiting for the GUI. Omit the ID to list pending and recently completed tasks.
+See [execution lifecycle and outcomes](execution.md#listener-readiness-and-operation-outcomes).

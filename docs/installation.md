@@ -237,3 +237,7 @@ change it on both sides when the RPC contract changes as described in the
 version modules. Protocol 2 uses degrees for serialized rotations, preserves JSON
 property types, and adds document-scoped screenshots. Update both components
 together; protocol 1 and 2 serialize rotations differently.
+
+Protocol 3 adds generation-scoped dispatch, GUI task history, explicit mutation
+outcomes and exclusive shared-script admission. Update the server and addon
+together; overlapping scripts now return `SCRIPT_BUSY` instead of racing.

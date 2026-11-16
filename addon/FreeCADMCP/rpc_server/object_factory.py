@@ -294,8 +294,10 @@ def _rollback_creation(
             ),
             "remaining_objects": remaining,
             "cleanup_errors": cleanup_errors,
+            "mutation_outcome": "cleanup_incomplete",
         }
-    return f"{error} (no new objects remain)"
+    return {"success": False, "error": f"{error} (no new objects remain)",
+            "mutation_outcome": "rolled_back"}
 
 
 def create_object_gui(doc_name: str, obj: Object) -> dict[str, Any] | str:
@@ -314,7 +316,7 @@ def create_object_gui(doc_name: str, obj: Object) -> dict[str, Any] | str:
         doc = FreeCAD.getDocument(doc_name)
     except Exception:
         FreeCAD.Console.PrintError(f"Document '{doc_name}' not found.\n")
-        return f"Document '{doc_name}' not found.\n"
+        return {"success": False, "error": f"Document '{doc_name}' not found.", "mutation_outcome": "not_started"}
     existing = {o.Name for o in doc.Objects}
     transaction_open = False
     try:
@@ -330,8 +332,9 @@ def create_object_gui(doc_name: str, obj: Object) -> dict[str, Any] | str:
                 "success": False,
                 "object_name": created.Name,
                 "error": problem,
+                "mutation_outcome": "retained_invalid",
             }
-        return {"success": True, "object_name": created.Name}
+        return {"success": True, "object_name": created.Name, "mutation_outcome": "completed"}
     except BaseException as e:
         if transaction_open:
             return _rollback_creation(doc, existing, e)
@@ -360,23 +363,26 @@ def edit_object_gui(doc_name: str, obj: Object) -> bool | str | dict[str, Any]:
         doc = FreeCAD.getDocument(doc_name)
     except Exception:
         FreeCAD.Console.PrintError(f"Document '{doc_name}' not found.\n")
-        return f"Document '{doc_name}' not found.\n"
+        return {"success": False, "error": f"Document '{doc_name}' not found.", "mutation_outcome": "not_started"}
 
     obj_ins = doc.getObject(obj.name)
     if obj_ins is None:
         FreeCAD.Console.PrintError(
             f"Object '{obj.name}' not found in document '{doc_name}'.\n"
         )
-        return f"Object '{obj.name}' not found in document '{doc_name}'.\n"
+        return {"success": False, "error": f"Object '{obj.name}' not found in document '{doc_name}'.", "mutation_outcome": "not_started"}
 
     undo_mode = doc.UndoMode
     transaction_open = False
+    mutation_started = False
+    result: bool | dict[str, Any]
     try:
         # abortTransaction does not restore properties when undo is disabled.
         if not undo_mode:
             doc.UndoMode = 1
         doc.openTransaction(f"Edit {obj.name}")
         transaction_open = True
+        mutation_started = True
         set_object_property(doc, obj_ins, obj.properties)
         doc.recompute()
         problem = object_validity_error(obj_ins)
@@ -384,9 +390,8 @@ def edit_object_gui(doc_name: str, obj: Object) -> bool | str | dict[str, Any]:
             raise ValueError(problem)
         doc.commitTransaction()
         transaction_open = False
-        FreeCAD.Console.PrintMessage(f"Object '{obj_ins.Name}' updated via RPC.\n")
-        return True
-    except BaseException as e:
+        result = True
+    except BaseException as exc:
         rollback_errors = []
         if transaction_open:
             try:
@@ -394,11 +399,26 @@ def edit_object_gui(doc_name: str, obj: Object) -> bool | str | dict[str, Any]:
                 doc.recompute()
             except Exception as rollback_error:
                 rollback_errors.append(str(rollback_error))
+        outcome = ("cleanup_incomplete" if rollback_errors else
+                   "rolled_back" if mutation_started else "not_started")
         note = (
             "Rollback failed; changes may remain: " + "; ".join(rollback_errors)
-            if rollback_errors else "Edit rolled back."
+            if rollback_errors else "Edit rolled back." if mutation_started else "Edit did not start."
         )
-        return {"success": False, "object_name": obj.name, "error": f"{e}. {note}"}
-    finally:
-        if not undo_mode:
+        result = {"success": False, "object_name": obj.name, "error": f"{exc}. {note}",
+                  "mutation_outcome": outcome}
+    if not undo_mode:
+        try:
             doc.UndoMode = undo_mode
+        except Exception as exc:
+            if result is True:
+                result = {"success": False, "object_name": obj.name,
+                          "mutation_outcome": "completed", "error": "Edit committed."}
+            result["error"] += f" Undo mode restoration failed: {exc}"
+            result["undo_mode_restored"] = False
+    if result is True:
+        try:
+            FreeCAD.Console.PrintMessage(f"Object '{obj_ins.Name}' updated via RPC.\n")
+        except Exception:
+            pass  # cosmetic logging cannot turn a committed edit into a rollback
+    return result

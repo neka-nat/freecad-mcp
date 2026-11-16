@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import time
 import types
 from unittest.mock import MagicMock
 
@@ -11,7 +12,7 @@ from test_rpc_handlers import rpc_module
 
 
 @pytest.mark.parametrize("shared_connection", [False, True])
-def test_concurrent_execute_calls_cover_queue_and_run_time(
+def test_script_queued_behind_document_operation_covers_queue_and_run_time(
     rpc_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, shared_connection: bool,
 ) -> None:
     """Use the real client, TCP server and dispatcher with shortened budgets."""
@@ -21,14 +22,18 @@ def test_concurrent_execute_calls_cover_queue_and_run_time(
     monkeypatch.setattr(FreeCADConnection, "RPC_TIMEOUT_MARGIN", 0.3, raising=False)
     entered = threading.Event()
     rpc_module.FreeCAD.test_entered = entered
+    def blocking_delete(*_args):
+        entered.set()
+        time.sleep(0.7)
+        return True
+    monkeypatch.setattr(rpc, "_delete_object_gui", blocking_delete)
     with running_server(rpc) as (host, port):
         connection = FreeCADConnection(host, port, timeout=1)
         second_connection = connection if shared_connection else FreeCADConnection(host, port, timeout=1)
         try:
             with ThreadPoolExecutor(max_workers=2) as workers:
                 first = workers.submit(
-                    connection.execute_code,
-                    "import time\nFreeCAD.test_entered.set()\ntime.sleep(0.7)",
+                    connection.delete_object, "Doc", "Old",
                 )
                 assert entered.wait(2)
                 second = workers.submit(second_connection.execute_code, "import time\ntime.sleep(0.7)")

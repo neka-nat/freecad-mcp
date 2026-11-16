@@ -45,6 +45,7 @@ import FreeCADGui
 from PySide import QtCore, QtWidgets
 
 from rpc_server.dispatch_health import DispatchHealth, stuck_failure
+from rpc_server.task_history import TaskHistory
 
 
 _rpc_request_queue: "queue.Queue[Any]" = queue.Queue()
@@ -55,6 +56,10 @@ _heartbeat_generation = 0
 _shutdown_requested = False
 _task_ids = itertools.count(1)
 _dispatch_health = DispatchHealth()
+_lifecycle_lock = threading.RLock()
+_pending: dict[int, Callable[[], None]] = {}
+_task_history = TaskHistory()
+_last_tick: float | None = None
 
 # Qt can miss a mouse-release when the button is released outside the FreeCAD
 # window (drag out of the viewport, release there). QApplication.mouseButtons()
@@ -140,6 +145,16 @@ def cleanup_waker() -> None:
     _waker = None
 
 
+def _wake(waker: Any) -> None:
+    if waker is not None:
+        try:
+            waker.wake()
+        except Exception as exc:
+            # A disposed Qt signal must not leak admission ownership or lose
+            # the queued task. The heartbeat remains the fallback.
+            log_error(f"MCP RPC: immediate wake failed: {exc}\n")
+
+
 def log_error(message: str) -> None:
     """Report View logging that cannot fail on unencodable text.
 
@@ -185,7 +200,8 @@ def process_gui_tasks() -> None:
     Both immediate wakes and heartbeat ticks use this drain. Only the heartbeat
     callback owns rescheduling, so immediate wakes cannot create another chain.
     """
-    global _processing, _processing_since, _last_defer
+    global _processing, _processing_since, _last_defer, _last_tick
+    _last_tick = time.monotonic()
     if _processing:
         return  # re-entrant call from processEvents inside a task; skip
 
@@ -265,22 +281,63 @@ def _heartbeat_tick(generation: int) -> None:
 def start_heartbeat() -> None:
     """Start one fallback timer chain, invalidating old ticks on the GUI thread."""
     global _heartbeat_generation, _shutdown_requested
-    _heartbeat_generation += 1
-    _shutdown_requested = False
-    generation = _heartbeat_generation
+    with _lifecycle_lock:
+        _heartbeat_generation += 1
+        _shutdown_requested = False
+        generation = _heartbeat_generation
     QtCore.QTimer.singleShot(500, lambda: _heartbeat_tick(generation))
 
 
 def request_shutdown() -> None:
     """Invalidate pending heartbeat ticks and ask the current drain to stop."""
-    global _shutdown_requested
-    _shutdown_requested = True
-    _rpc_request_queue.put(_SHUTDOWN)
+    global _shutdown_requested, _heartbeat_generation, _last_defer
+    with _lifecycle_lock:
+        _shutdown_requested = True
+        _heartbeat_generation += 1
+        for cancel in list(_pending.values()):
+            cancel()
+        _pending.clear()
+        while True:
+            try:
+                _rpc_request_queue.get_nowait()
+            except queue.Empty:
+                break
+        _last_defer = None
+        _rpc_request_queue.put(_SHUTDOWN)
 
 
 def get_dispatch_status() -> dict[str, Any]:
     """Return GUI dispatch health without touching FreeCAD's GUI thread."""
-    return _dispatch_health.snapshot()
+    snapshot = _dispatch_health.snapshot()
+    with _lifecycle_lock:
+        snapshot.update(generation=_heartbeat_generation, accepting=not _shutdown_requested,
+                        queued_tasks=len(_pending), queue_depth=_rpc_request_queue.qsize())
+        blocked = _last_defer if not _rpc_request_queue.empty() else None
+        snapshot["blocked_reason"] = blocked[0] if blocked else None
+        snapshot["heartbeat_age_seconds"] = (
+            None if _last_tick is None else max(0, time.monotonic() - _last_tick)
+        )
+        if snapshot["state"] == "healthy":
+            if _shutdown_requested:
+                snapshot["state"] = "stopped"
+            elif blocked:
+                snapshot["state"] = "blocked"
+            elif _pending:
+                snapshot["state"] = "queued"
+        age = snapshot["heartbeat_age_seconds"]
+        snapshot["heartbeat_stale"] = age is None or age > 2.0
+        snapshot["ready"] = (snapshot["state"] == "healthy" and not _processing
+                             and not snapshot["heartbeat_stale"])
+    return snapshot
+
+
+def get_task_status(task_id: int | None = None) -> dict[str, Any]:
+    return _task_history.snapshot(task_id)
+
+
+def dispatch_generation() -> int:
+    with _lifecycle_lock:
+        return _heartbeat_generation
 
 
 def post_to_gui(task: Callable[[], Any]) -> None:
@@ -291,9 +348,18 @@ def post_to_gui(task: Callable[[], Any]) -> None:
     updates (show, then clear) both run in order once the GUI thread is free.
     Exceptions are logged by ``process_gui_tasks``.
     """
-    _rpc_request_queue.put(task)
-    if _waker is not None:
-        _waker.wake()
+    with _lifecycle_lock:
+        if _shutdown_requested:
+            return
+        generation = _heartbeat_generation
+
+        def guarded() -> None:
+            if generation == _heartbeat_generation and not _shutdown_requested:
+                task()
+
+        _rpc_request_queue.put(guarded)
+        waker = _waker
+    _wake(waker)
 
 
 def dispatch_to_gui(
@@ -301,6 +367,8 @@ def dispatch_to_gui(
     timeout: float = 60,
     operation_name: str | None = None,
     queue_timeout: float | None = None,
+    on_cancel: Callable[[], None] | None = None,
+    expected_generation: int | None = None,
 ) -> Any:
     """Run ``task`` on the GUI thread and return its result.
 
@@ -325,6 +393,9 @@ def dispatch_to_gui(
     """
     rejection = _dispatch_health.rejection()
     if rejection is not None:
+        if on_cancel:
+            on_cancel()
+        rejection["mutation_outcome"] = "not_started"
         return rejection
 
     if queue_timeout is None:
@@ -340,44 +411,80 @@ def dispatch_to_gui(
     started_event = threading.Event()
     started_at: float | None = None
     cancelled = False
+    generation = dispatch_generation()
+
+    def cancel(reason: str = "stopped") -> None:
+        nonlocal cancelled
+        with state_lock:
+            if started_at is not None or cancelled:
+                return
+            cancelled = True
+            _task_history.update(task_id, state="cancelled", mutation_outcome="not_started",
+                                 cancellation_reason=reason, caller_timed_out=reason == "queue_timeout")
+            if on_cancel:
+                on_cancel()
+            started_event.set()
 
     def _wrapped() -> None:
         nonlocal started_at
-        with state_lock:
-            if cancelled:
-                return  # caller timed out and went away; don't run a stale task
-            started_at = time.monotonic()
-            _dispatch_health.start(task_id, operation)
-            started_event.set()
+        with _lifecycle_lock:
+            if generation != _heartbeat_generation or _shutdown_requested:
+                cancel()
+            _pending.pop(task_id, None)
+            with state_lock:
+                if cancelled:
+                    return
+                started_at = time.monotonic()
+                _task_history.update(task_id, state="running", started=time.time())
+                _dispatch_health.start(task_id, operation)
+                started_event.set()
         missing = object()
         res = missing
+        failed = False
         try:
             try:
                 res = task()
+                failed = res is None or res is False or isinstance(res, str) or (
+                    isinstance(res, dict) and res.get("success") is False
+                )
             except BaseException as e:
                 # SystemExit/KeyboardInterrupt from a script (sys.exit() in
                 # execute_code) must fail this call rather than quit FreeCAD.
                 res = f"{type(e).__name__}: {e}"
+                failed = True
                 log_error(f"MCP RPC: GUI task raised {res}\n{traceback.format_exc()}")
         finally:
             # Publish completion atomically with clearing health, so a deadline
             # racing with completion cannot report a missing successful result.
             with state_lock:
+                _task_history.finish(task_id, res, failed)
                 _dispatch_health.finish(task_id)
                 if res is not missing:
                     response_queue.put_nowait(res)
 
     queued_at = time.monotonic()
-    _rpc_request_queue.put(_wrapped)
-    if _waker is not None:
-        _waker.wake()  # immediate wake via Qt signal (thread-safe)
+    with _lifecycle_lock:
+        if _shutdown_requested or generation != _heartbeat_generation or (
+            expected_generation is not None and expected_generation != generation
+        ):
+            if on_cancel:
+                on_cancel()
+            return {"success": False, "code": "RPC_STOPPED", "mutation_outcome": "not_started",
+                    "error": "RPC dispatch stopped or its generation changed; operation was not started."}
+        _task_history.update(task_id, operation=operation, generation=generation,
+                             state="queued", submitted=time.time(), caller_timed_out=False)
+        _pending[task_id] = cancel
+        _rpc_request_queue.put(_wrapped)
+        waker = _waker
+    _wake(waker)  # never hold the lifecycle lock across external callbacks
 
     # Phase 1: wait for the task to start. Earlier queued tasks run first on
     # the GUI thread; that wait must not eat into this task's run budget.
     queue_deadline = queued_at + queue_timeout
     if not started_event.wait(max(0, queue_deadline - time.monotonic())):
-        with state_lock:
-            cancelled = started_at is None
+        with _lifecycle_lock:
+            cancel("queue_timeout")
+            _pending.pop(task_id, None)
     if cancelled:
         queued_for = time.monotonic() - queued_at
         last_defer = _last_defer
@@ -400,8 +507,10 @@ def dispatch_to_gui(
             hint = ""
         return {
             "success": False,
+            "task_id": task_id,
+            "mutation_outcome": "not_started",
             "error": (
-                f"GUI dispatch gave up after {queued_for:.1f}s waiting for "
+                f"GUI dispatch cancelled after {queued_for:.1f}s waiting for "
                 f"'{operation}' to start (queue_timeout={queue_timeout:g}s){hint}"
             ),
         }
@@ -419,5 +528,10 @@ def dispatch_to_gui(
             except queue.Empty:
                 stuck = _dispatch_health.mark_timed_out(task_id, timeout)
                 if stuck is not None:
-                    return stuck_failure(stuck, just_timed_out=True)
+                    _task_history.update(task_id, state="timed_out_running", caller_timed_out=True,
+                                         mutation_outcome="still_running")
+                    failure = stuck_failure(stuck, just_timed_out=True)
+                    failure.update(task_id=task_id, mutation_outcome="still_running")
+                    failure["error"] += f" Poll get_task_status(task_id={task_id}) before retrying."
+                    return failure
                 return {"success": False, "error": f"GUI dispatch timed out after {timeout}s"}

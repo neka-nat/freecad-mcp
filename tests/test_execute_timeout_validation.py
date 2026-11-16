@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import time
 import types
 from unittest.mock import MagicMock
 
@@ -71,15 +72,18 @@ def test_custom_timeout_covers_queue_then_execution_over_tcp(
     monkeypatch.setattr(FreeCADConnection, "RPC_TIMEOUT_MARGIN", 0.1)
     entered = threading.Event()
     rpc_module.FreeCAD.test_entered = entered
+    def blocking_delete(*_args):
+        entered.set()
+        time.sleep(0.35)
+        return True
+    monkeypatch.setattr(rpc, "_delete_object_gui", blocking_delete)
     with running_server(rpc) as (host, port):
-        connection = FreeCADConnection(host, port, timeout=0.1)
+        connection = FreeCADConnection(host, port, timeout=0.5)
         second = connection if shared_connection else FreeCADConnection(host, port, timeout=0.1)
         try:
             with ThreadPoolExecutor(max_workers=2) as workers:
                 first = workers.submit(
-                    connection.execute_code,
-                    "import time\nFreeCAD.test_entered.set()\ntime.sleep(0.35)\nprint('first')",
-                    0.6,
+                    connection.delete_object, "Doc", "Old",
                 )
                 assert entered.wait(2)
                 queued = workers.submit(
@@ -87,7 +91,7 @@ def test_custom_timeout_covers_queue_then_execution_over_tcp(
                 )
                 first_result, second_result = first.result(timeout=4), queued.result(timeout=4)
             assert first_result["success"] is True
-            assert first_result["message"].endswith("first\n")
+            assert first_result["object_name"] == "Old"
             assert second_result["success"] is True
             assert second_result["message"].endswith("second\n")
             assert connection.get_rpc_status()["gui_dispatch"]["state"] == "healthy"

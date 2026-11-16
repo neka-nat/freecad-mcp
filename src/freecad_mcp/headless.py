@@ -84,11 +84,11 @@ def run_headless(code: str, timeout: float, command: list[str] | None) -> dict[s
     except (TypeError, ValueError, OverflowError):
         valid_timeout = False
     if not valid_timeout:
-        return {"success": False, "error": "timeout must be a positive finite number"}
+        return {"success": False, "mutation_outcome": "not_started", "error": "timeout must be a positive finite number"}
     command = command or detect_freecadcmd()
     if not command:
         return {
-            "success": False,
+            "success": False, "mutation_outcome": "not_started",
             "error": "freecadcmd not found: install FreeCAD, or pass --freecadcmd to freecad-mcp",
         }
     with tempfile.NamedTemporaryFile(
@@ -113,13 +113,13 @@ def run_headless(code: str, timeout: float, command: list[str] | None) -> dict[s
     except subprocess.TimeoutExpired as e:
         out = "\n".join(part for part in (_clean(e.stdout), _clean(e.stderr)) if part)
         return {
-            "success": False,
+            "success": False, "mutation_outcome": "partial_or_unknown",
             "timed_out": True,
             "error": f"headless FreeCAD did not finish within {timeout:g} s",
             "output": out,
         }
     except OSError as e:
-        return {"success": False, "error": f"could not start headless FreeCAD: {e}"}
+        return {"success": False, "mutation_outcome": "not_started", "error": f"could not start headless FreeCAD: {e}"}
     finally:
         try:
             os.unlink(script)
@@ -128,6 +128,7 @@ def run_headless(code: str, timeout: float, command: list[str] | None) -> dict[s
     output = "\n".join(part for part in (_clean(proc.stdout), _clean(proc.stderr)) if part)
     result: dict[str, Any] = {
         "success": proc.returncode == 0,
+        "mutation_outcome": "completed" if proc.returncode == 0 else "partial_or_unknown",
         "returncode": proc.returncode,
         "output": output,
     }

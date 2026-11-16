@@ -84,8 +84,8 @@ def test_unexpected_gui_failure_does_not_kill_heartbeat(monkeypatch: pytest.Monk
     with load_gui_dispatch() as dispatch:
         timers = PendingTimers(dispatch)
         ran = []
-        dispatch.post_to_gui(lambda: ran.append(True))
         dispatch.start_heartbeat()
+        dispatch.post_to_gui(lambda: ran.append(True))
 
         def fail() -> int:
             raise RuntimeError("temporary GUI failure")
