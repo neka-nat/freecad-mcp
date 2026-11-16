@@ -57,9 +57,9 @@ In the **FreeCAD MCP** toolbar:
 
 1. Check **Remote Connections**. On the next server restart, the RPC server binds
    to `0.0.0.0` (all interfaces). It only accepts connections from the IP addresses
-   or CIDR subnets configured in **Allowed IPs**, which defaults to `127.0.0.1`.
+   or IPv4 CIDR subnets configured in **Allowed IPs**, which defaults to `127.0.0.1`.
 2. Click **Configure Allowed IPs** and enter a comma-separated list of allowed
-   client IP addresses or CIDR subnets, for example:
+   client IP addresses or IPv4 CIDR subnets, for example:
 
    ```text
    192.168.1.100, 10.0.0.0/24
@@ -83,8 +83,8 @@ Pass `--host` with the IP address or hostname of the machine running FreeCAD:
 }
 ```
 
-The `--host` value is validated on startup and must be a valid IPv4/IPv6 address
-or hostname. Restart your MCP client after updating its configuration.
+The `--host` value is validated on startup and must be a valid IPv4 address
+or hostname resolving to IPv4. The addon listener does not support IPv6. Restart your MCP client after updating its configuration.
 
 `--host` selects the GUI RPC host. [Headless execution](execution.md#headless-execution)
 runs on the machine hosting the MCP server, so its file paths must be accessible

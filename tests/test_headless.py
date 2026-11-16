@@ -21,7 +21,7 @@ def temporary_scripts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 def test_success_returns_output() -> None:
     res = run_headless("print('built'); print('  (50 %)')", 30, PY)
     assert res["success"] is True and res["returncode"] == 0
-    assert res["output"] == "built"  # progress noise filtered
+    assert res["output"] == "built\n  (50 %)"  # preserve script output
     text = format_headless_result(res)
     assert text.startswith("Headless FreeCAD script finished") and "reload_document" in text
 

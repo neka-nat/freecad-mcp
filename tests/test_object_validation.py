@@ -34,6 +34,7 @@ class FakeConsole:
 class FakeDocument:
     def __init__(self, obj: object):
         self.Name = "Doc"
+        self.UndoMode = 1
         self.obj = obj
         self.recompute_count = 0
         self.Objects: list[object] = []
@@ -229,4 +230,4 @@ def test_edit_object_returns_failure_with_existing_object_name() -> None:
     assert result["success"] is False
     assert result["object_name"] == "Cut"
     assert "Base or Tool is not set" in result["error"]
-    assert doc.recompute_count == 1
+    assert doc.recompute_count == 2

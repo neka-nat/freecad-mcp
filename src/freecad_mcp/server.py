@@ -2,7 +2,10 @@ import functools
 import logging
 import xmlrpc.client
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Callable, Dict, Literal
+from typing import Annotated, Any, AsyncIterator, Callable, Dict, Literal
+
+import anyio
+from pydantic import Field
 
 try:
     # mcp 1.x
@@ -48,6 +51,8 @@ logger.setLevel(logging.INFO)
 ViewName = Literal[
     "Isometric", "Front", "Top", "Right", "Back", "Left", "Bottom", "Dimetric", "Trimetric"
 ]
+PositiveTimeout = Annotated[float, Field(strict=True, gt=0, allow_inf_nan=False)]
+FemTimeout = Annotated[int, Field(strict=True, gt=0, le=2**31 - 1)]
 
 state = ServerState()
 
@@ -57,7 +62,7 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
     try:
         logger.info("FreeCADMCP server starting up")
         try:
-            _ = get_freecad_connection()
+            await anyio.to_thread.run_sync(get_freecad_connection)
             logger.info("Successfully connected to FreeCAD on startup")
         except Exception as e:
             logger.warning(f"Could not connect to FreeCAD on startup: {str(e)}")
@@ -97,7 +102,14 @@ def tool(fn: Callable[..., ToolResponse]) -> Callable[..., ToolResponse | CallTo
             return CallToolResult(content=list(response), isError=True)
         return response
 
-    return mcp.tool(structured_output=False)(wrapper)
+    @functools.wraps(fn)
+    async def async_wrapper(*args: Any, **kwargs: Any) -> ToolResponse | CallToolResult:
+        # SDK 1.x invokes synchronous tools on its event loop. Explicitly
+        # offload on both SDK versions so status and cancellation stay usable.
+        return await anyio.to_thread.run_sync(functools.partial(wrapper, *args, **kwargs))
+
+    mcp.tool(structured_output=False)(async_wrapper)
+    return wrapper
 
 
 def get_freecad_connection() -> FreeCADConnection:
@@ -175,10 +187,10 @@ def create_object(
     ``obj_type`` must name a type registered in FreeCAD's C++ type system, such
     as "Part::", "PartDesign::" or "Fem::" types. A number of FreeCAD features
     are implemented in Python rather than C++ and so are not registered types;
-    of those, these are supported here through dedicated factories, and each
-    requires the properties listed beside it:
+    of those, these are supported here through dedicated factories. They accept
+    the properties listed beside them (required for Draft factories):
 
-        Part::Tube        InnerRadius, OuterRadius, Height
+        Part::Tube        InnerRadius, OuterRadius, Height (optional; defaults 2, 5, 10 mm)
         Draft::Circle     Radius
         Draft::Rectangle  Length, Height
         Draft::Polygon    FacesNumber, Radius
@@ -272,17 +284,17 @@ def create_object(
         {
             "doc_name": "MyFEMAnalysis",
             "obj_name": "FemAnalysis",
-            "obj_type": "Fem::AnalysisPython",
+            "obj_type": "Fem::AnalysisPython"
         }
         ```
 
         If you want to create a FEM constraint, you can use the following data.
         ```json
         {
-            "doc_name": "MyFEMConstraint",
+            "doc_name": "MyFEMAnalysis",
             "obj_name": "FemConstraint",
             "obj_type": "Fem::ConstraintFixed",
-            "analysis_name": "MyFEMAnalysis",
+            "analysis_name": "FemAnalysis",
             "obj_properties": {
                 "References": [
                     {
@@ -300,7 +312,7 @@ def create_object(
             "doc_name": "MyFEMAnalysis",
             "obj_name": "FemMechanicalMaterial",
             "obj_type": "Fem::MaterialCommon",
-            "analysis_name": "MyFEMAnalysis",
+            "analysis_name": "FemAnalysis",
             "obj_properties": {
                 "Material": {
                     "Name": "MyMaterial",
@@ -318,10 +330,10 @@ def create_object(
         the legacy `ElementSizeMax/Min` keys are also accepted.
         ```json
         {
-            "doc_name": "MyFEMMesh",
+            "doc_name": "MyFEMAnalysis",
             "obj_name": "FemMesh",
             "obj_type": "Fem::FemMeshGmsh",
-            "analysis_name": "MyFEMAnalysis",
+            "analysis_name": "FemAnalysis",
             "obj_properties": {
                 "Shape": "MyObject",
                 "CharacteristicLengthMax": 10,
@@ -477,7 +489,7 @@ def execute_code_async(ctx: Context, code: str) -> list[TextContent]:
 
 
 @tool
-def execute_code_headless(ctx: Context, code: str, timeout: float = 600) -> list[TextContent]:
+def execute_code_headless(ctx: Context, code: str, timeout: PositiveTimeout = 600) -> list[TextContent]:
     """Run a FreeCAD Python script in a separate headless `freecadcmd` process.
 
     Use this for OCCT work that can crash or block FreeCAD: helical threads
@@ -528,7 +540,7 @@ def execute_code(
     code: str,
     include_screenshot: bool = True,
     view_name: ViewName = "Isometric",
-    timeout: float | None = None,
+    timeout: PositiveTimeout | None = None,
 ) -> list[TextContent | ImageContent]:
     """Execute arbitrary Python code in FreeCAD.
 
@@ -584,8 +596,10 @@ def get_view(
         - "Bottom"
         - "Dimetric"
         - "Trimetric"
-        width: The width of the screenshot in pixels. If not specified, uses the viewport width.
-        height: The height of the screenshot in pixels. If not specified, uses the viewport height.
+        width: Requested width in pixels. With both dimensions omitted, the
+            viewport is scaled to a maximum edge of 1024 pixels. If only one
+            dimension is omitted, that dimension uses the viewport size.
+        height: Requested height in pixels, following the same sizing rules.
         focus_object: The name of the object to focus on. If not specified, fits all objects in the view.
 
     Returns:
@@ -750,7 +764,7 @@ def run_fem_analysis(
     ctx: Context,
     doc_name: str,
     analysis_name: str,
-    timeout: int = 600,
+    timeout: FemTimeout = 600,
     include_screenshot: bool = True,
     view_name: ViewName = "Isometric",
 ) -> list[TextContent | ImageContent]:
@@ -781,8 +795,8 @@ def run_fem_analysis(
     (in N and MPa, with faces and direction). A failed load read stops the solve.
     Direction can be set to {"object_name": "Beam", "edge": "Edge1"}.
 
-    The solver runs synchronously on the FreeCAD GUI thread and blocks all
-    other RPC calls for its duration; do not fan out parallel requests.
+    The solver runs synchronously on the FreeCAD GUI thread. Other document
+    operations queue behind it; get_rpc_status and get_async_status remain available.
 
     Returns max von Mises stress (MPa), max/min displacement (mm), node count,
     and the working directory CalculiX wrote to. On failure, returns the
@@ -823,10 +837,12 @@ def _validate_host(value: str) -> str:
 
     import validators
 
-    if validators.ipv4(value) or validators.ipv6(value) or validators.hostname(value):
+    if validators.ipv6(value):
+        raise argparse.ArgumentTypeError("IPv6 is not supported by the addon listener; use IPv4 or a hostname resolving to IPv4")
+    if validators.ipv4(value) or validators.hostname(value):
         return value
     raise argparse.ArgumentTypeError(
-        f"Invalid host: '{value}'. Must be a valid IP address or hostname."
+        f"Invalid host: '{value}'. Must be a valid IPv4 address or hostname."
     )
 
 

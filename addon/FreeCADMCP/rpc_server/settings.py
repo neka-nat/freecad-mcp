@@ -2,6 +2,8 @@
 
 import json
 import os
+import tempfile
+from typing import Any
 
 import FreeCAD
 
@@ -35,10 +37,15 @@ def load_settings():
     return dict(_DEFAULT_SETTINGS)
 
 
-def save_settings(settings):
+def save_settings(settings: dict[str, Any]) -> None:
+    """Persist atomically; callers must report a write failure as a failure."""
     path = _get_settings_path()
+    temporary = None
     try:
-        with open(path, "w") as f:
-            json.dump(settings, f, indent=2)
-    except Exception as e:
-        FreeCAD.Console.PrintError(f"Failed to save MCP settings: {e}\n")
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=os.path.dirname(path), delete=False) as stream:
+            temporary = stream.name
+            json.dump(settings, stream, indent=2)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None and os.path.exists(temporary):
+            os.unlink(temporary)

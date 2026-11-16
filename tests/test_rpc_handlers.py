@@ -351,10 +351,10 @@ def test_commit_preserves_callback_return_values(
     [
         ("list_documents", (), ["Doc"]),
         ("get_objects", ("Doc",), [{"Name": "Box"}]),
-        ("get_objects", ("Missing",), []),
+
         ("get_object", ("Doc", "Box"), {"Name": "Box"}),
-        ("get_object", ("Doc", "Missing"), None),
-        ("get_object", ("Missing", "Box"), None),
+
+
     ],
 )
 def test_queries_use_gui_dispatch_and_keep_response_shapes(

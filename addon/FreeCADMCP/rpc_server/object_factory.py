@@ -18,7 +18,7 @@ from rpc_server.property_mapper import Object, set_object_property
 from rpc_server.object_validation import object_validity_error
 
 
-def _create_fem_mesh(doc: FreeCAD.Document, obj: Object):
+def _create_fem_mesh(doc: FreeCAD.Document, obj: Object) -> Any:
     """Create a ``Fem::FemMeshGmsh`` and run Gmsh to populate it.
 
     Accepts both the FreeCAD 0.x and 1.x property names (``Part``/``Shape``,
@@ -45,15 +45,28 @@ def _create_fem_mesh(doc: FreeCAD.Document, obj: Object):
     if geom_attr is None:
         raise ValueError("Mesh object has neither 'Shape' nor 'Part' property.")
     setattr(res, geom_attr, target_obj)
-    del obj.properties[geom_key]
-
+    properties = {}
     for param, value in obj.properties.items():
+        if param == geom_key:
+            continue
         target_param = legacy_to_new.get(param, param)
-        if target_param and hasattr(res, target_param):
-            setattr(res, target_param, value)
+        if not target_param or not hasattr(res, target_param):
+            raise ValueError(f"Unknown mesh property: {param}")
+        properties[target_param] = value
+    set_object_property(doc, res, properties)
     doc.recompute()
 
-    GmshTools(res).create_mesh()
+    mesher = GmshTools(res)
+    result = mesher.create_mesh()
+    if result or getattr(mesher, "error", False):
+        raise RuntimeError(f"Gmsh mesh generation failed: {result or 'mesher reported an error'}")
+    process = getattr(mesher, "process", None)
+    if process is not None and process.exitCode() != 0:
+        raise RuntimeError(f"Gmsh mesh generation failed (exit code {process.exitCode()})")
+    if res.FemMesh.NodeCount == 0 or (
+        res.FemMesh.VolumeCount + res.FemMesh.FaceCount + res.FemMesh.EdgeCount == 0
+    ):
+        raise RuntimeError("Gmsh produced an empty mesh")
     FreeCAD.Console.PrintMessage(
         f"FEM Mesh '{res.Name}' generated successfully in '{doc.Name}'.\n"
     )
@@ -288,10 +301,10 @@ def _rollback_creation(
 def create_object_gui(doc_name: str, obj: Object) -> dict[str, Any] | str:
     """Create an object in ``doc_name`` according to ``obj.type``.
 
-    Returns the created object's actual ``Name`` on success (FreeCAD
+    Returns a success dictionary with the object's actual ``object_name`` (FreeCAD
     sanitises and de-duplicates requested names — ``Box`` may come back as
     ``Box001`` — and every later get_object/edit_object call needs the real
-    one), or an error string on failure.
+    one), or an error string/failure dictionary on failure.
 
     Failed creation rolls back the transaction and removes new objects even
     with undo disabled. If cleanup fails, report the remaining actual names.
@@ -341,8 +354,8 @@ def _create_by_type(doc: FreeCAD.Document, obj: Object) -> FreeCAD.DocumentObjec
     return _create_generic_object(doc, obj)
 
 
-def edit_object_gui(doc_name: str, obj: Object):
-    """Apply properties to an existing object and verify the recomputed state."""
+def edit_object_gui(doc_name: str, obj: Object) -> bool | str | dict[str, Any]:
+    """Apply properties in one transaction; roll back failed or invalid edits."""
     try:
         doc = FreeCAD.getDocument(doc_name)
     except Exception:
@@ -356,18 +369,36 @@ def edit_object_gui(doc_name: str, obj: Object):
         )
         return f"Object '{obj.name}' not found in document '{doc_name}'.\n"
 
+    undo_mode = doc.UndoMode
+    transaction_open = False
     try:
+        # abortTransaction does not restore properties when undo is disabled.
+        if not undo_mode:
+            doc.UndoMode = 1
+        doc.openTransaction(f"Edit {obj.name}")
+        transaction_open = True
         set_object_property(doc, obj_ins, obj.properties)
         doc.recompute()
         problem = object_validity_error(obj_ins)
         if problem:
-            FreeCAD.Console.PrintError(problem + "\n")
-            return {
-                "success": False,
-                "object_name": obj_ins.Name,
-                "error": problem,
-            }
+            raise ValueError(problem)
+        doc.commitTransaction()
+        transaction_open = False
         FreeCAD.Console.PrintMessage(f"Object '{obj_ins.Name}' updated via RPC.\n")
         return True
-    except Exception as e:
-        return str(e)
+    except BaseException as e:
+        rollback_errors = []
+        if transaction_open:
+            try:
+                doc.abortTransaction()
+                doc.recompute()
+            except Exception as rollback_error:
+                rollback_errors.append(str(rollback_error))
+        note = (
+            "Rollback failed; changes may remain: " + "; ".join(rollback_errors)
+            if rollback_errors else "Edit rolled back."
+        )
+        return {"success": False, "object_name": obj.name, "error": f"{e}. {note}"}
+    finally:
+        if not undo_mode:
+            doc.UndoMode = undo_mode

@@ -1,7 +1,7 @@
 """Qt Command classes for the MCP Addon workbench menu.
 
-Defines the five toolbar/menu entries (Start, Stop, Toggle Auto-Start,
-Toggle Remote, Configure Allowed IPs).
+Defines six toolbar/menu entries (Start, Stop, Toggle Auto-Start,
+Toggle Remote, Configure Allowed IPs, Set Auth Token).
 
 ``register_commands()`` and ``schedule_toggle_sync()`` are invoked from
 ``rpc_server.py`` at import time to preserve current side-effect behavior.
@@ -10,6 +10,7 @@ Toggle Remote, Configure Allowed IPs).
 import FreeCAD
 import FreeCADGui
 from PySide import QtWidgets
+from typing import Any
 
 from rpc_server.ip_filter import validate_allowed_ips
 from rpc_server.settings import load_settings, save_settings
@@ -24,6 +25,15 @@ def _report_server_command(message: str, error: bool = False) -> None:
     except Exception:
         # Console feedback remains available if the main window is closing.
         pass
+
+
+def _persist_settings(settings: dict[str, Any]) -> bool:
+    try:
+        save_settings(settings)
+    except Exception as exc:
+        _report_server_command(f"Settings were not saved: {exc}", error=True)
+        return False
+    return True
 
 
 class StartRPCServerCommand:
@@ -73,7 +83,8 @@ class ToggleRemoteConnectionsCommand:
         from . import rpc_server
         settings = load_settings()
         settings["remote_enabled"] = bool(checked)
-        save_settings(settings)
+        if not _persist_settings(settings):
+            return
 
         if settings["remote_enabled"]:
             allowed_ips = settings.get("allowed_ips", "127.0.0.1")
@@ -133,7 +144,8 @@ class ConfigureAllowedIPsCommand:
                 return
             normalised = ", ".join(valid)
             settings["allowed_ips"] = normalised
-            save_settings(settings)
+            if not _persist_settings(settings):
+                return
             FreeCAD.Console.PrintMessage(
                 f"Allowed IPs updated to: {normalised}\n"
             )
@@ -172,7 +184,8 @@ class SetAuthTokenCommand:
             FreeCAD.Console.PrintMessage("Auth token not changed.\n")
             return
         settings["auth_token"] = text.strip()
-        save_settings(settings)
+        if not _persist_settings(settings):
+            return
         if settings["auth_token"]:
             FreeCAD.Console.PrintMessage("Auth token set — clients must authenticate.\n")
         else:
@@ -198,7 +211,8 @@ class ToggleAutoStartCommand:
     def Activated(self, checked=0):
         settings = load_settings()
         settings["auto_start_rpc"] = bool(checked)
-        save_settings(settings)
+        if not _persist_settings(settings):
+            return
 
         if settings["auto_start_rpc"]:
             FreeCAD.Console.PrintMessage(

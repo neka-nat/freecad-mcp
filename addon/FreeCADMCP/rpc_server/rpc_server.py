@@ -228,10 +228,9 @@ class FreeCADRPC:
 
     def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600) -> dict[str, Any]:
         """Run the CalculiX solver on an existing Fem::FemAnalysis and return summary results."""
-        try:
-            timeout_s = int(timeout)
-        except (TypeError, ValueError):
-            return {"success": False, "error": f"invalid timeout: {timeout!r}"}
+        if isinstance(timeout, bool) or not isinstance(timeout, int) or not 0 < timeout <= 2**31 - 1:
+            return {"success": False, "error": "timeout must be an integer between 1 and 2147483647 seconds"}
+        timeout_s = timeout
         res = dispatch_to_gui(
             lambda: self._run_fem_analysis_gui(doc_name, analysis_name),
             timeout=timeout_s,
@@ -402,7 +401,9 @@ class FreeCADRPC:
             f"Error executing Python code: {res}\n"
             f"--- code ---\n{code_preview}\n--- end ---\n"
         )
-        return _err(res)
+        failure = _err(res)
+        failure["output"] = output_buffer.getvalue()
+        return failure
 
     def get_objects(self, doc_name: str) -> list[dict[str, Any]]:
         return _query_on_gui(lambda: self._get_objects_gui(doc_name), "get_objects")
@@ -411,25 +412,25 @@ class FreeCADRPC:
         # FreeCAD.getDocument raises (not returns None) for an unknown name.
         try:
             doc = FreeCAD.getDocument(doc_name)
-        except Exception:
-            return []
+        except Exception as exc:
+            raise ValueError(f"Document '{doc_name}' not found.") from exc
         return [serialize_object(obj) for obj in doc.Objects]
 
-    def get_object(self, doc_name: str, obj_name: str) -> dict[str, Any] | None:
+    def get_object(self, doc_name: str, obj_name: str) -> dict[str, Any]:
         return _query_on_gui(
             lambda: self._get_object_gui(doc_name, obj_name), "get_object"
         )
 
-    def _get_object_gui(self, doc_name: str, obj_name: str) -> dict[str, Any] | None:
+    def _get_object_gui(self, doc_name: str, obj_name: str) -> dict[str, Any]:
         # FreeCAD.getDocument raises (not returns None) for an unknown name.
         try:
             doc = FreeCAD.getDocument(doc_name)
-        except Exception:
-            return None
+        except Exception as exc:
+            raise ValueError(f"Document '{doc_name}' not found.") from exc
         obj = doc.getObject(obj_name)
-        if obj:
-            return serialize_object(obj)
-        return None
+        if obj is None:
+            raise ValueError(f"Object '{obj_name}' not found in document '{doc_name}'.")
+        return serialize_object(obj)
 
     def insert_part_from_library(self, relative_path):
         res = dispatch_to_gui(
@@ -454,41 +455,38 @@ class FreeCADRPC:
         width: int | None = None,
         height: int | None = None,
         focus_object: str | None = None,
+        doc_name: str | None = None,
     ) -> str | None:
-        """Get a screenshot of the active view as a base64-encoded PNG string.
+        """Capture the displayed view, optionally restricted to its document.
 
-        Returns None if the active view does not support screenshots
-        (e.g., TechDraw or Spreadsheet workbench).
+        None means no matching displayed 3D view. Other failures are RPC faults.
+        The GUI task owns the file, including cleanup after a caller timeout.
         """
-        fd, tmp_path = tempfile.mkstemp(suffix=".png")
-        os.close(fd)
+        def task() -> dict[str, Any]:
+            if doc_name is not None:
+                active = FreeCAD.ActiveDocument
+                if active is None or active.Name != doc_name:
+                    return {"image": None}
+            if get_displayed_3d_view() is None:
+                return {"image": None}
+            fd, tmp_path = tempfile.mkstemp(suffix=".png")
+            os.close(fd)
+            try:
+                result = save_active_screenshot(tmp_path, view_name, width, height, focus_object)
+                if result is not True:
+                    raise RuntimeError(f"Screenshot failed: {result}")
+                with open(tmp_path, "rb") as stream:
+                    data = stream.read()
+                if not data:
+                    raise RuntimeError("Screenshot renderer produced an empty image")
+                return {"image": base64.b64encode(data).decode("utf-8")}
+            finally:
+                os.unlink(tmp_path)
 
-        def task() -> bool | str:
-            active_view = get_displayed_3d_view()
-            if active_view is None:
-                try:
-                    shown = FreeCADGui.activeView()
-                except Exception:
-                    shown = None
-                view_type = type(shown).__name__ if shown is not None else "None"
-                FreeCAD.Console.PrintWarning(
-                    f"MCP RPC: view type '{view_type}' does not support screenshots\n"
-                )
-                return False
-            return save_active_screenshot(tmp_path, view_name, width, height, focus_object)
-
-        try:
-            res = dispatch_to_gui(task, operation_name="get_active_screenshot")
-            if _ok(res):
-                with open(tmp_path, "rb") as f:
-                    return base64.b64encode(f.read()).decode("utf-8")
-            if res is False:
-                return None
-            FreeCAD.Console.PrintWarning(f"MCP RPC: screenshot failed: {res}\n")
-            return None
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+        result = dispatch_to_gui(task, operation_name="get_active_screenshot")
+        if isinstance(result, dict) and "image" in result:
+            return result["image"]
+        raise Fault(1, _err(result)["error"])
 
     def _create_document_gui(self, name):
         doc = FreeCAD.newDocument(name)

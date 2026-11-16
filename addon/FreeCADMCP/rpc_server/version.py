@@ -20,4 +20,4 @@ __version__ = _read_version()
 # Bump when the RPC contract changes in a way the MCP server must know about:
 # a method or parameter is added or removed, or a response shape changes.
 # Must match PROTOCOL_VERSION in src/freecad_mcp/version.py.
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2

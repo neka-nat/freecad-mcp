@@ -1,4 +1,5 @@
 import logging
+import base64
 import math
 import xmlrpc.client
 from typing import Any
@@ -57,6 +58,9 @@ class FreeCADConnection:
         # userinfo included, in its repr and error messages, and tools return
         # those messages to the model.
         self._headers = [("Authorization", f"Bearer {token}")] if token else []
+        if token and not token.isascii():
+            encoded = base64.b64encode(f":{token}".encode("utf-8")).decode("ascii")
+            self._headers = [("Authorization", f"Basic {encoded}")]
         self._timeout = timeout
 
     def _make_proxy(self, timeout: float) -> xmlrpc.client.ServerProxy:
@@ -165,12 +169,13 @@ class FreeCADConnection:
         width: int | None = None,
         height: int | None = None,
         focus_object: str | None = None,
+        doc_name: str | None = None,
     ) -> str | None:
-        try:
-            return self._call("get_active_screenshot", view_name, width, height, focus_object)
-        except Exception as e:
-            logger.error(f"Error getting screenshot: {e}")
-            return None
+        args = (view_name, width, height, focus_object)
+        # Keep explicit active-view capture compatible with older addons.
+        if doc_name is not None:
+            args += (doc_name,)
+        return self._call("get_active_screenshot", *args)
 
     def get_objects(self, doc_name: str) -> list[dict[str, Any]]:
         return self._call("get_objects", doc_name)
@@ -185,6 +190,8 @@ class FreeCADConnection:
         return self._call("list_documents")
 
     def run_fem_analysis(self, doc_name: str, analysis_name: str, timeout: int = 600) -> dict[str, Any]:
+        if isinstance(timeout, bool) or not isinstance(timeout, int) or not 0 < timeout <= 2**31 - 1:
+            raise ValueError("timeout must be an integer between 1 and 2147483647 seconds")
         # Both queueing and solving can consume `timeout` seconds each.
         socket_timeout = max(self._timeout, 2 * timeout + self.RPC_TIMEOUT_MARGIN)
         with self._make_proxy(socket_timeout) as proxy:

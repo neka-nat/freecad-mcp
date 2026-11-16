@@ -134,6 +134,7 @@ def run_fem_analysis(doc_name: str, analysis_name: str) -> dict:
             "max_von_mises_MPa": max(vm) if vm else None,
             "min_von_mises_MPa": min(vm) if vm else None,
             "max_displacement_mm": max(disp) if disp else None,
+            "min_displacement_mm": min(disp) if disp else None,
             "working_dir": work_dir,
         }
     except Exception as e:

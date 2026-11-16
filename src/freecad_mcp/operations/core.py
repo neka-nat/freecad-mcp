@@ -18,6 +18,19 @@ from ..version import addon_version_warning, is_missing_method_fault
 logger = logging.getLogger("FreeCADMCPserver")
 
 
+def _optional_screenshot(
+    freecad: FreeCADConnection, view_name: str, doc_name: str | None = None,
+) -> str | None:
+    """A failed optional image must not turn a completed edit into a failure."""
+    try:
+        if doc_name is None:
+            return freecad.get_active_screenshot(view_name)
+        return freecad.get_active_screenshot(view_name, doc_name=doc_name)
+    except Exception as exc:
+        logger.warning("Optional screenshot unavailable: %s", exc)
+        return None
+
+
 def create_document_operation(freecad: FreeCADConnection, name: str) -> ToolResponse:
     try:
         res = freecad.create_document(name)
@@ -53,7 +66,7 @@ def create_object_operation(
         else:
             return error_response(f"Failed to create object: {res['error']}")
         skip_screenshot = only_text_feedback or not include_screenshot
-        screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
+        screenshot = None if skip_screenshot else _optional_screenshot(freecad, view_name, doc_name)
         return add_screenshot_if_available(response, screenshot, skip_screenshot)
     except Exception as e:
         logger.error(f"Failed to create object: {str(e)}")
@@ -76,7 +89,7 @@ def edit_object_operation(
         else:
             return error_response(f"Failed to edit object: {res['error']}")
         skip_screenshot = only_text_feedback or not include_screenshot
-        screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
+        screenshot = None if skip_screenshot else _optional_screenshot(freecad, view_name, doc_name)
         return add_screenshot_if_available(response, screenshot, skip_screenshot)
     except Exception as e:
         logger.error(f"Failed to edit object: {str(e)}")
@@ -98,7 +111,7 @@ def delete_object_operation(
         else:
             return error_response(f"Failed to delete object: {res['error']}")
         skip_screenshot = only_text_feedback or not include_screenshot
-        screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
+        screenshot = None if skip_screenshot else _optional_screenshot(freecad, view_name, doc_name)
         return add_screenshot_if_available(response, screenshot, skip_screenshot)
     except Exception as e:
         logger.error(f"Failed to delete object: {str(e)}")
@@ -121,9 +134,12 @@ def execute_code_operation(
             # Skipping on failure avoids a second hanging call while the worker thread
             # may still be running.
             skip_screenshot = only_text_feedback or not include_screenshot
-            screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
+            screenshot = None if skip_screenshot else _optional_screenshot(freecad, view_name)
             return add_screenshot_if_available(response, screenshot, skip_screenshot)
-        return error_response(f"Failed to execute code: {res['error']}")
+        message = f"Failed to execute code: {res['error']}"
+        if res.get("output"):
+            message += "\nOutput before failure:\n" + res["output"]
+        return error_response(message)
     except Exception as e:
         logger.error(f"Failed to execute code: {str(e)}")
         return error_response(f"Failed to execute code: {str(e)}")
@@ -233,7 +249,7 @@ def insert_part_from_library_operation(
         else:
             return error_response(f"Failed to insert part from library: {res['error']}")
         skip_screenshot = only_text_feedback or not include_screenshot
-        screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
+        screenshot = None if skip_screenshot else _optional_screenshot(freecad, view_name)
         return add_screenshot_if_available(response, screenshot, skip_screenshot)
     except Exception as e:
         logger.error(f"Failed to insert part from library: {str(e)}")
@@ -250,7 +266,7 @@ def get_objects_operation(
     try:
         response = json_response(freecad.get_objects(doc_name))
         skip_screenshot = only_text_feedback or not include_screenshot
-        screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
+        screenshot = None if skip_screenshot else _optional_screenshot(freecad, view_name, doc_name)
         return add_screenshot_if_available(response, screenshot, skip_screenshot)
     except Exception as e:
         logger.error(f"Failed to get objects: {str(e)}")
@@ -268,7 +284,7 @@ def get_object_operation(
     try:
         response = json_response(freecad.get_object(doc_name, obj_name))
         skip_screenshot = only_text_feedback or not include_screenshot
-        screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
+        screenshot = None if skip_screenshot else _optional_screenshot(freecad, view_name, doc_name)
         return add_screenshot_if_available(response, screenshot, skip_screenshot)
     except Exception as e:
         logger.error(f"Failed to get object: {str(e)}")
@@ -339,7 +355,7 @@ def run_fem_analysis_operation(
                 return f"{v:.4g} {unit}" if isinstance(v, (int, float)) else f"unavailable ({unit})"
             loads = res.get("applied_loads")
             skip_screenshot = only_text_feedback or not include_screenshot
-            screenshot = None if skip_screenshot else freecad.get_active_screenshot(view_name)
+            screenshot = None if skip_screenshot else _optional_screenshot(freecad, view_name, doc_name)
             response = json_response({
                 "summary": (
                     f"FEM analysis '{analysis_name}' solved. "

@@ -21,7 +21,6 @@ from typing import Any
 logger = logging.getLogger("FreeCADMCPserver")
 
 FLATPAK_APP = "org.freecad.FreeCAD"
-_NOISE = ("%)", "Importing project files", "Postprocessing", "FreeCAD 1.", "(C) 2001", "LGPL")
 
 
 def detect_freecadcmd() -> list[str] | None:
@@ -71,17 +70,20 @@ def _clean(output: str | bytes | None) -> str:
         return ""
     if isinstance(output, bytes):
         output = output.decode("utf-8", errors="replace")
-    lines = [ln for ln in output.splitlines() if ln.strip() and not any(n in ln for n in _NOISE)]
-    return "\n".join(lines)
+    return output.rstrip("\r\n")
 
 
 def run_headless(code: str, timeout: float, command: list[str] | None) -> dict[str, Any]:
     """Execute ``code`` with ``command -c "exec(open(script).read())"``.
 
-    Returns ``success``, ``returncode``, ``output`` (stdout+stderr, noise
-    filtered), and flags ``crashed`` (killed by a signal) / ``timed_out``.
+    Returns ``success``, ``returncode``, ``output`` (stdout+stderr), and flags
+    ``crashed`` (killed by a signal) / ``timed_out``.
     """
-    if not math.isfinite(timeout) or timeout <= 0:
+    try:
+        valid_timeout = not isinstance(timeout, bool) and math.isfinite(timeout) and timeout > 0
+    except (TypeError, ValueError, OverflowError):
+        valid_timeout = False
+    if not valid_timeout:
         return {"success": False, "error": "timeout must be a positive finite number"}
     command = command or detect_freecadcmd()
     if not command:
@@ -123,7 +125,7 @@ def run_headless(code: str, timeout: float, command: list[str] | None) -> dict[s
             os.unlink(script)
         except OSError:
             pass
-    output = _clean(proc.stdout + "\n" + proc.stderr)
+    output = "\n".join(part for part in (_clean(proc.stdout), _clean(proc.stderr)) if part)
     result: dict[str, Any] = {
         "success": proc.returncode == 0,
         "returncode": proc.returncode,

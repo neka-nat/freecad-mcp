@@ -57,7 +57,7 @@ class _Connection:
     def list_documents(self) -> list[str]:
         raise ConnectionError("RPC unavailable")
 
-    def get_active_screenshot(self, *_args: Any) -> str:
+    def get_active_screenshot(self, *_args: Any, **_kwargs: Any) -> str:
         return "cG5n"
 
     def disconnect(self) -> None:

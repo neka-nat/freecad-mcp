@@ -28,7 +28,8 @@ printed output or error messages, arrive as visible escapes (`\x1b`, `\x00`).
 
 `execute_code_async` returns a `job_id`. `get_async_status(job_id)` reports
 whether the job is `running`, `done`, or `failed`, and includes the exception and
-traceback for failed jobs.
+traceback for failed jobs. Synchronous script failures also return captured output
+printed before the error.
 
 All running jobs and the 20 most recently completed jobs are retained in memory
 until FreeCAD exits. `get_async_status()` lists this history; `get_rpc_status`
@@ -94,6 +95,7 @@ path containing spaces inside that command string.
 Headless scripts receive closed standard input, so they cannot consume the MCP
 protocol stream or wait for interactive input. Pass all inputs in the code or
 files. Printed lines are flushed to preserve progress output on failure or timeout.
+Output is not filtered by content; FreeCAD banners and progress text may appear.
 
 ## GUI dispatch timeouts
 
@@ -118,6 +120,9 @@ timeout to match the capped budget. Invalid values are rejected before execution
 Omitting `timeout` preserves the 90-second default and compatibility with older
 addons; an explicit timeout requires an updated addon. For heavy pure-geometry work that touches neither the document
 nor the GUI, prefer `execute_code_async`.
+
+FEM timeouts must be integer seconds from 1 to 2147483647; script timeouts
+must be positive finite numbers. Booleans are rejected at the MCP boundary.
 
 The client timeout covers both budgets plus a 30-second margin. Other clients
 and MCP hosts must allow these response times in their own timeout settings.
