@@ -109,6 +109,114 @@ def get_displayed_3d_view() -> Any:
     return view
 
 
+def _image_is_flat_color(path: str, threshold: int = 4) -> bool:
+    """True when the saved PNG is (almost) a single flat color.
+
+    A genuinely rendered scene always has many distinct pixel values; the
+    broken offscreen captures come out as one solid color over the whole
+    canvas. Sampling a sparse grid keeps this cheap even for large images.
+    """
+    try:
+        from PySide6 import QtGui
+
+        img = QtGui.QImage(path)
+        if img.isNull() or img.width() == 0:
+            return True
+        colors = set()
+        for sx in range(0, img.width(), max(1, img.width() // 32)):
+            for sy in range(0, img.height(), max(1, img.height() // 32)):
+                colors.add(img.pixel(sx, sy))
+                if len(colors) > threshold:
+                    return False
+        return True
+    except Exception:
+        return False
+
+
+def _find_active_gl_widget() -> Any:
+    """Return the QOpenGLWidget of the ACTIVE 3D view, or None.
+
+    mdi.findChild(QOpenGLWidget) returns the FIRST widget in the child tree,
+    which may belong to a hidden/secondary MDI subwindow (e.g. an old empty
+    document tab still sitting at its default 400x300 size). Grabbing that
+    widget's rect produces a screenshot of the wrong region (or a flat color).
+    """
+    from PySide6 import QtOpenGLWidgets, QtWidgets
+
+    win = FreeCADGui.getMainWindow()
+    mdi = win.findChild(QtWidgets.QMdiArea)
+    if mdi is None:
+        return None
+    # Prefer the GL widget belonging to the active MDI subwindow.
+    active_sub = mdi.activeSubWindow() or mdi.currentSubWindow()
+    if active_sub is not None:
+        gl = active_sub.findChild(QtOpenGLWidgets.QOpenGLWidget)
+        if gl is not None:
+            return gl
+    return None
+
+
+def _grab_compositor_viewport(save_path: str, width: int, height: int) -> bool:
+    """Opt-in screen capture, limited to the identified, unobscured FreeCAD view."""
+    import os
+    if os.environ.get("FREECAD_MCP_ALLOW_SCREEN_CAPTURE") != "1":
+        return False
+    try:
+        from PySide6 import QtCore, QtGui
+        from rpc_server.screencopy import capture_viewport
+        win = FreeCADGui.getMainWindow()
+        gl = _find_active_gl_widget()
+        if gl is None or not gl.isVisible() or get_displayed_3d_view() is None:
+            return False
+        rel = gl.mapTo(win, QtCore.QPoint(0, 0))
+        rect = (rel.x(), rel.y(), gl.width(), gl.height())
+        image = capture_viewport(os.getpid(), rect, (win.width(), win.height()), QtGui.QImage)
+        if image is None:
+            return False
+        if width and height:
+            image = image.scaled(width, height, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+        return image.save(save_path, "PNG")
+    except Exception:
+        return False
+
+
+def _grab_opengl_widget_fallback(save_path: str, width: int, height: int) -> bool:
+    """Re-grab the active view from its live QOpenGLWidget framebuffer.
+
+    Returns True when a non-empty image was written to ``save_path``.
+
+    .. note::
+        On NVIDIA + Wayland this readback produces artifact-laden frames
+        (torn/stale buffers). Kept as the last-resort fallback only; prefer
+        :func:`_grab_compositor_viewport`.
+    """
+    try:
+        from PySide6 import QtCore, QtOpenGLWidgets, QtWidgets
+
+        win = FreeCADGui.getMainWindow()
+        mdi = win.findChild(QtWidgets.QMdiArea)
+        if mdi is None:
+            return False
+        gl = _find_active_gl_widget()
+        if gl is None:
+            return False
+        img = gl.grabFramebuffer()
+        if img.isNull() or img.width() == 0:
+            return False
+        # Trim the capture to the requested aspect/size when it differs (the
+        # framebuffer is the live viewport, not the requested size).
+        if width and height and (img.width() != width or img.height() != height):
+            img = img.scaled(
+                width,
+                height,
+                QtCore.Qt.KeepAspectRatio,
+                QtCore.Qt.SmoothTransformation,
+            )
+        return img.save(save_path, "PNG")
+    except Exception:
+        return False
+
+
 def save_active_screenshot(
     save_path: str,
     view_name: str = "Isometric",
@@ -165,14 +273,23 @@ def save_active_screenshot(
         else:
             view.fitAll()
         resolved_width, resolved_height = _resolve_screenshot_size(view, width, height)
-        # On Wayland the offscreen GL contexts used by the default saveImage()
-        # method render solid black; "Framebuffer" reads back the on-screen GL
-        # context and captures correctly (and also works on X11/Windows/macOS).
-        # FreeCAD < 1.0 lacks the method argument — fall back to the legacy call.
+        # Screen capture is an explicit opt-in. Normally use FreeCAD's own
+        # renderer/framebuffer without reading the desktop.
+        if _grab_compositor_viewport(save_path, resolved_width, resolved_height):
+            if focused_selection:
+                FreeCADGui.Selection.clearSelection()
+                _flush_gui_events(delay_ms=0)
+            return True
         try:
             view.saveImage(save_path, resolved_width, resolved_height, "Current", "Framebuffer")
         except TypeError:
             view.saveImage(save_path, resolved_width, resolved_height, "Current")
+
+        # Flat-color result means the offscreen path rendered nothing at all;
+        # re-grab from the live QOpenGLWidget framebuffer as a last resort.
+        if _image_is_flat_color(save_path):
+            if _grab_opengl_widget_fallback(save_path, resolved_width, resolved_height):
+                FreeCAD.Console.PrintLog("MCP RPC: used the active OpenGL framebuffer fallback\n")
 
         if focused_selection:
             FreeCADGui.Selection.clearSelection()
