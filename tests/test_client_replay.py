@@ -17,6 +17,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from freecad_mcp.freecad_client import FreeCADConnection, _TimeoutTransport
+from freecad_mcp.version import PROTOCOL_VERSION
 
 
 @pytest.fixture
@@ -45,6 +46,9 @@ def lost_response_server() -> Iterator[tuple[FreeCADConnection, list[str], int]]
             pass
 
     class Interface:
+        def get_rpc_status(self) -> dict[str, Any]:
+            return {"protocol_version": PROTOCOL_VERSION}
+
         def create_object(self, _doc: str, data: dict[str, Any]) -> dict[str, Any]:
             name = f"{data['Name']}{len(created) + 1}"
             created.append(name)
