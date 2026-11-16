@@ -70,7 +70,8 @@ default.
 | Guide | Contents |
 | --- | --- |
 | [Installation](docs/installation.md) | Addon directories, setup screenshots, running from source |
-| [Configuration](docs/configuration.md) | Auto-start, text feedback, remote connections |
+| [Configuration](docs/configuration.md) | Auto-start, text feedback, remote connections, HTTP transport |
+| [Docker](docs/docker.md) | Running the MCP server in a container, client setup, networking |
 | [Tools](docs/tools.md) | Available tools, screenshots, FEM analysis |
 | [Code execution](docs/execution.md) | GUI execution, background jobs, headless scripts, timeout troubleshooting |
 | [Demos and examples](docs/examples.md) | Design demos, FEM example, ADK and LangChain integrations |
