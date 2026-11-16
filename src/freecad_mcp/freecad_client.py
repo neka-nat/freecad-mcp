@@ -1,3 +1,4 @@
+import http.client
 import logging
 import math
 import xmlrpc.client
@@ -18,6 +19,20 @@ class _TimeoutTransport(xmlrpc.client.Transport):
     def __init__(self, timeout: float = 30, **kwargs):
         super().__init__(**kwargs)
         self._timeout = timeout
+
+    def request(self, host: Any, handler: str, request_body: bytes, verbose: bool = False) -> Any:
+        # Transport.request retries disconnected requests. A modifying RPC can
+        # already have committed before its response is lost, so never replay it.
+        try:
+            return self.single_request(host, handler, request_body, verbose)
+        except (
+            http.client.RemoteDisconnected, ConnectionResetError,
+            ConnectionAbortedError, BrokenPipeError,
+        ) as exc:
+            raise ConnectionError(
+                "RPC connection lost before a response; the operation may already have executed. "
+                "Inspect document state before retrying a modifying call."
+            ) from exc
 
     def make_connection(self, host):
         conn = super().make_connection(host)
