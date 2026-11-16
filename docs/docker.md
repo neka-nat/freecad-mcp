@@ -6,6 +6,11 @@ If you would rather not install Python or uv on your host, you can run the MCP
 server in Docker. FreeCAD and the addon still run on the host; the container only
 holds the MCP server and its Python dependencies.
 
+`execute_code_headless` runs inside the container and requires FreeCADCmd there.
+This image does not include it; use a native MCP installation or extend the image
+if you need that tool. Files used by container-side tools must also be mounted
+into the container.
+
 ## Linux: host networking (recommended)
 
 ```bash
@@ -96,6 +101,9 @@ docker run --rm --init \
 - The container refuses to start without a token because it listens on all of its
   interfaces. Always publish the port as `127.0.0.1:8000:8000`, never `8000:8000`.
 - Clients send `Authorization: Bearer <token>`, as described above.
+- If you publish a different host port (for example `127.0.0.1:9000:8000`),
+  also pass `--allowed-host localhost:9000 --allowed-host 127.0.0.1:9000` so the
+  HTTP Host check accepts the address your client uses.
 
 ### Running without a token
 
