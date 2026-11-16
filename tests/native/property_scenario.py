@@ -12,6 +12,7 @@ sys.path.insert(0, ADDON_PATH)
 from rpc_server.serialize import serialize_value
 from rpc_server.property_mapper import Object, set_object_property
 from rpc_server.object_factory import create_object_gui, edit_object_gui
+from rpc_server import object_factory
 from femmesh import gmshtools
 
 doc = App.newDocument("NativeContracts")
@@ -42,6 +43,25 @@ try:
         assert doc.UndoMode == undo_mode
 
     analysis = ObjectsFem.makeAnalysis(doc, "Analysis")
+    original_factory = object_factory._create_by_type
+    try:
+        for undo_mode in (0, 1):
+            doc.UndoMode = undo_mode
+            box.Length = 10
+            doc.recompute()
+            before = {item.Name for item in doc.Objects}
+            def failing_factory(document, request):
+                box.Length = 77
+                document.addObject("Part::Box", "Temporary")
+                raise ValueError("factory changed an existing object")
+            object_factory._create_by_type = failing_factory
+            result = create_object_gui(doc.Name, Object("Temporary", "Part::Box"))
+            assert result["mutation_outcome"] == "rolled_back", result
+            assert box.Length.Value == 10
+            assert {item.Name for item in doc.Objects} == before
+            assert doc.UndoMode == undo_mode
+    finally:
+        object_factory._create_by_type = original_factory
     class Mesher:
         exit_code = 0
         empty = False

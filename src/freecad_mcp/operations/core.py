@@ -25,7 +25,7 @@ def _failure(message: str, details: dict[str, Any]) -> ErrorResponse:
     return ErrorResponse([*error_response(message), *json_response(details)])
 
 
-def get_task_status_operation(freecad: FreeCADConnection, task_id: int | None = None) -> ToolResponse:
+def get_task_status_operation(freecad: FreeCADConnection, task_id: str | None = None) -> ToolResponse:
     try:
         result = freecad.get_task_status(task_id)
         if not result.get("success"):

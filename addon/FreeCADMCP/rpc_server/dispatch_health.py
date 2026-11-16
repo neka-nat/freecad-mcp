@@ -18,7 +18,7 @@ class DispatchHealth:
         self._timed_out = False
         self._timeout_seconds = 0.0
 
-    def start(self, task_id: int, operation: str) -> None:
+    def start(self, task_id: str | int, operation: str) -> None:
         with self._lock:
             self._active_task_id = task_id
             self._operation = operation
@@ -26,7 +26,7 @@ class DispatchHealth:
             self._timed_out = False
             self._timeout_seconds = 0.0
 
-    def finish(self, task_id: int) -> None:
+    def finish(self, task_id: str | int) -> None:
         """Clear state only when the finishing task is still the active one."""
         with self._lock:
             if self._active_task_id != task_id:
@@ -37,7 +37,7 @@ class DispatchHealth:
             self._timed_out = False
             self._timeout_seconds = 0.0
 
-    def mark_timed_out(self, task_id: int, timeout: float) -> dict[str, Any] | None:
+    def mark_timed_out(self, task_id: str | int, timeout: float) -> dict[str, Any] | None:
         """Mark a running task as timed out and return the resulting snapshot."""
         with self._lock:
             if self._active_task_id != task_id:

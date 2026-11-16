@@ -121,7 +121,9 @@ dispatch as stuck.
 A GUI task cannot be cancelled once it has started, so a slower `execute_code`
 call reports a timeout while the task keeps running. Its response includes
 `task_id` and `mutation_outcome: still_running`. Poll `get_task_status(task_id)`
-for the eventual result before retrying. Pass `timeout` (positive finite seconds, capped at 1800) for
+for the eventual result before retrying. IDs are opaque strings that include a
+process-specific namespace; an ID from a previous FreeCAD process cannot identify
+new work after a restart. Pass `timeout` (positive finite seconds, capped at 1800) for
 work that genuinely has to run on the GUI thread and takes longer, such as
 importing or exporting a large STEP assembly; the client widens its socket
 timeout to match the capped budget. Invalid values are rejected before execution.
@@ -163,7 +165,7 @@ touching that broken object can wedge FreeCAD's GUI thread.
 ## Listener, readiness, and operation outcomes
 
 `get_rpc_status` separates the listener (`starting`, `running`, `stopping`,
-`stopped`) from GUI dispatch (`healthy`, `queued`, `blocked`, `busy`, `stuck`,
+`stopped`, `stop_failed`) from GUI dispatch (`healthy`, `queued`, `blocked`, `busy`, `stuck`,
 `stopped`). Dispatch includes `accepting`, `ready`, queue counts, the last observed
 UI blocker, heartbeat age, and a generation number. These are snapshots, not a
 reservation of the GUI. An absent/stale heartbeat is visible even when no task
@@ -177,6 +179,8 @@ Restart is refused until running GUI work and the namespace owner finish. An
 old worker's `commit()` and requests from the previous listener generation cannot
 enter the new queue. Stopping the listener does not erase script variables or
 job history.
+If the shutdown worker cannot start, status reports `stop_failed` and retains
+the listener so Stop can be retried. New document work remains disabled.
 
 `get_task_status()` lists pending GUI tasks and the last 20 terminal tasks in
 completion order. States are `queued`, `running`, `timed_out_running`, `done`,
@@ -194,7 +198,7 @@ Failure responses carry `mutation_outcome` when known:
 | --- | --- |
 | `not_started` | Admission rejected or queued work cancelled; this operation did not run. |
 | `still_running` | The caller timed out; poll the task before retrying. |
-| `rolled_back` | The operation's transaction/creation cleanup completed. |
+| `rolled_back` | The document transaction was aborted and creation cleanup completed, including changes to existing objects. |
 | `retained_invalid` | Creation committed an invalid object for inspection; use the returned name. |
 | `cleanup_incomplete` | Rollback/cleanup failed; inspect reported remaining objects and errors. |
 | `partial_or_unknown` | Execution failed after it may have changed state; inspect before retrying. |

@@ -529,7 +529,7 @@ def execute_code_headless(ctx: Context, code: str, timeout: PositiveTimeout = 60
 
 
 @tool
-def get_task_status(ctx: Context, task_id: Annotated[int, Field(strict=True, gt=0)] | None = None) -> list[TextContent]:
+def get_task_status(ctx: Context, task_id: str | None = None) -> list[TextContent]:
     """Poll a timed-out GUI operation without waiting for the GUI thread.
 
     Omit task_id to list pending work and the last 20 completed operations.

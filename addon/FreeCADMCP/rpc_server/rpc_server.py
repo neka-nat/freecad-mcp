@@ -209,7 +209,7 @@ class FreeCADRPC:
                     "authentication_required": bool(_applied_settings.get("auth_token")),
                 }}
 
-    def get_task_status(self, task_id: int | None = None) -> dict[str, Any]:
+    def get_task_status(self, task_id: str | None = None) -> dict[str, Any]:
         """Read pending/late GUI results without dispatching to the GUI thread."""
         return get_task_status(task_id)
 
@@ -344,12 +344,15 @@ class FreeCADRPC:
         functions can reuse it in later async calls. It may only be called from
         an async worker, not from a synchronous script or GUI callback.
         """
+        if not isinstance(code, str):
+            return {"success": False, "code": "INVALID_CODE", "mutation_outcome": "not_started",
+                    "error": "code must be a string"}
+        code_preview = code if len(code) <= 200 else code[:200] + "…"
         job_id = f"job-{uuid.uuid4().hex}"
         rejection = _claim_script(job_id, self._generation)
         if rejection:
             return rejection
         generation = self._generation
-        code_preview = code if len(code) <= 200 else code[:200] + "…"
 
         def worker() -> None:
             # Synchronous capture routes only the GUI thread, so this worker's
@@ -396,8 +399,8 @@ class FreeCADRPC:
                 except Exception:
                     pass  # never let status cleanup mask or outlive the real work
 
-        _record_job(job_id, state="running", started=time.time(), code=code_preview)
         try:
+            _record_job(job_id, state="running", started=time.time(), code=code_preview)
             _refresh_job_status()
             threading.Thread(target=worker, daemon=True).start()
         except Exception as e:
@@ -649,6 +652,8 @@ def start_rpc_server(port: int = 9875) -> str:
     global rpc_server_thread, rpc_server_instance, _listener_state, _server_id, _applied_settings
 
     if rpc_server_instance:
+        if _listener_state == "stop_failed":
+            return "RPC Server stop failed; retry Stop before restarting."
         host, bound_port = rpc_server_instance.server_address
         return f"RPC Server already running at {host}:{bound_port} (PID {os.getpid()})."
 
@@ -720,7 +725,7 @@ def start_rpc_server(port: int = 9875) -> str:
     return msg
 
 
-def stop_rpc_server():
+def stop_rpc_server() -> str:
     global rpc_server_instance, rpc_server_thread, _stop_thread, _listener_state, _job_status_message
 
     if not rpc_server_instance:
@@ -728,8 +733,6 @@ def stop_rpc_server():
 
     server = rpc_server_instance
     thread = rpc_server_thread
-    rpc_server_instance = None
-    rpc_server_thread = None
 
     _listener_state = "stopping"
     request_shutdown()
@@ -742,7 +745,7 @@ def stop_rpc_server():
         pass
     _job_status_message = ""
 
-    def _shutdown_and_close():
+    def _shutdown_and_close() -> None:
         global _listener_state
         # shutdown() only stops the accept loop; in-flight requests run in
         # their own daemon threads and are not waited for. Kept off the GUI
@@ -763,8 +766,18 @@ def stop_rpc_server():
             _listener_state = "stopped"
         FreeCAD.Console.PrintMessage("RPC Server stopped.\n")
 
-    _stop_thread = threading.Thread(target=_shutdown_and_close, daemon=True)
-    _stop_thread.start()
+    try:
+        stopper = threading.Thread(target=_shutdown_and_close, daemon=True)
+        stopper.start()
+    except Exception as exc:
+        # Keep the live listener reachable so Stop can be retried. Dispatch
+        # stays closed to new work after the failed stop attempt.
+        _stop_thread = None
+        _listener_state = "stop_failed"
+        return f"RPC Server stop failed: {exc}. Retry Stop; the listener is still open."
+    _stop_thread = stopper
+    rpc_server_instance = None
+    rpc_server_thread = None
     return "RPC Server stopping… Queued work cancelled; running work may finish. Shared script variables are retained."
 
 

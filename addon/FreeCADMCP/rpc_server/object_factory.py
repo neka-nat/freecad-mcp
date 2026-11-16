@@ -318,8 +318,14 @@ def create_object_gui(doc_name: str, obj: Object) -> dict[str, Any] | str:
         FreeCAD.Console.PrintError(f"Document '{doc_name}' not found.\n")
         return {"success": False, "error": f"Document '{doc_name}' not found.", "mutation_outcome": "not_started"}
     existing = {o.Name for o in doc.Objects}
+    undo_mode = doc.UndoMode
     transaction_open = False
+    result: dict[str, Any]
     try:
+        # Factories may also change existing objects (groups, support links).
+        # Removing newly created objects alone cannot undo those changes.
+        if not undo_mode:
+            doc.UndoMode = 1
         doc.openTransaction(f"Create {obj.name}")
         transaction_open = True
         created = _create_by_type(doc, obj)
@@ -328,17 +334,27 @@ def create_object_gui(doc_name: str, obj: Object) -> dict[str, Any] | str:
         doc.commitTransaction()
         transaction_open = False
         if problem:
-            return {
+            result = {
                 "success": False,
                 "object_name": created.Name,
                 "error": problem,
                 "mutation_outcome": "retained_invalid",
             }
-        return {"success": True, "object_name": created.Name, "mutation_outcome": "completed"}
+        else:
+            result = {"success": True, "object_name": created.Name, "mutation_outcome": "completed"}
     except BaseException as e:
         if transaction_open:
-            return _rollback_creation(doc, existing, e)
-        return str(e)
+            result = _rollback_creation(doc, existing, e)
+        else:
+            result = {"success": False, "error": str(e), "mutation_outcome": "not_started"}
+    if not undo_mode:
+        try:
+            doc.UndoMode = undo_mode
+        except Exception as exc:
+            result["success"] = False
+            result["error"] = result.get("error", "Creation committed.") + f" Undo mode restoration failed: {exc}"
+            result["undo_mode_restored"] = False
+    return result
 
 
 def _create_by_type(doc: FreeCAD.Document, obj: Object) -> FreeCAD.DocumentObject:

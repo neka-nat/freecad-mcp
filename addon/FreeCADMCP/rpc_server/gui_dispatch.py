@@ -34,10 +34,12 @@ Robustness and performance guarantees:
 """
 
 import itertools
+import math
 import queue
 import threading
 import time
 import traceback
+import uuid
 from typing import Any, Callable
 
 import FreeCAD
@@ -55,9 +57,10 @@ _processing_since: float = 0.0  # wall-clock time when _processing became True
 _heartbeat_generation = 0
 _shutdown_requested = False
 _task_ids = itertools.count(1)
+_task_namespace = uuid.uuid4().hex
 _dispatch_health = DispatchHealth()
 _lifecycle_lock = threading.RLock()
-_pending: dict[int, Callable[[], None]] = {}
+_pending: dict[str, Callable[[], None]] = {}
 _task_history = TaskHistory()
 _last_tick: float | None = None
 
@@ -189,6 +192,26 @@ def _flush_gui_events(delay_ms: int = 20) -> None:
         app.processEvents(flags, delay_ms)
 
 
+def _ui_should_defer() -> bool:
+    """Sample GUI blockers even while idle and between queued callbacks."""
+    global _last_defer
+    now = time.monotonic()
+    mouse_down = QtWidgets.QApplication.mouseButtons() != QtCore.Qt.NoButton
+    if _mouse_guard_should_defer(mouse_down, now):
+        _last_defer = ("mouse buttons held (3D navigation drag)", now)
+        return True
+    if mouse_down:
+        _warn_stale_mouse_once()
+    if QtWidgets.QApplication.activePopupWidget() is not None:
+        _last_defer = ("a popup or context menu is open in FreeCAD", now)
+        return True
+    if QtWidgets.QApplication.activeModalWidget() is not None:
+        _last_defer = ("a modal dialog is open in FreeCAD", now)
+        return True
+    _last_defer = None
+    return False
+
+
 def process_gui_tasks() -> None:
     """Drain queued GUI-thread callables without scheduling heartbeat timers.
 
@@ -206,24 +229,10 @@ def process_gui_tasks() -> None:
         return  # re-entrant call from processEvents inside a task; skip
 
     try:
+        if _ui_should_defer():
+            return
         if _rpc_request_queue.empty():
             return  # nothing queued; skip cursor/status-bar churn on idle heartbeat ticks
-
-        now = time.monotonic()
-        mouse_down = QtWidgets.QApplication.mouseButtons() != QtCore.Qt.NoButton
-        if _mouse_guard_should_defer(mouse_down, now):
-            _last_defer = ("mouse buttons held (3D navigation drag)", now)
-            return  # user is dragging; defer to next tick
-        if mouse_down:
-            _warn_stale_mouse_once()  # stale state: fall through and process anyway
-        if QtWidgets.QApplication.activePopupWidget() is not None:
-            _last_defer = ("a popup or context menu is open in FreeCAD", now)
-            return  # context menu or popup open; defer to next tick
-        if QtWidgets.QApplication.activeModalWidget() is not None:
-            _last_defer = ("a modal dialog is open in FreeCAD", now)
-            return  # modal dialog open; defer to next tick
-
-        _last_defer = None
         _processing = True
         _processing_since = time.monotonic()
         app = QtWidgets.QApplication.instance()
@@ -241,6 +250,8 @@ def process_gui_tasks() -> None:
             status_bar.showMessage(busy_message)
         try:
             while not _rpc_request_queue.empty():
+                if _ui_should_defer():
+                    return
                 task = _rpc_request_queue.get()
                 if task is _SHUTDOWN:
                     if _shutdown_requested:
@@ -312,7 +323,7 @@ def get_dispatch_status() -> dict[str, Any]:
     with _lifecycle_lock:
         snapshot.update(generation=_heartbeat_generation, accepting=not _shutdown_requested,
                         queued_tasks=len(_pending), queue_depth=_rpc_request_queue.qsize())
-        blocked = _last_defer if not _rpc_request_queue.empty() else None
+        blocked = _last_defer
         snapshot["blocked_reason"] = blocked[0] if blocked else None
         snapshot["heartbeat_age_seconds"] = (
             None if _last_tick is None else max(0, time.monotonic() - _last_tick)
@@ -331,7 +342,7 @@ def get_dispatch_status() -> dict[str, Any]:
     return snapshot
 
 
-def get_task_status(task_id: int | None = None) -> dict[str, Any]:
+def get_task_status(task_id: str | None = None) -> dict[str, Any]:
     return _task_history.snapshot(task_id)
 
 
@@ -391,6 +402,20 @@ def dispatch_to_gui(
     Returns the task's return value on success, an error string if the task
     raises, or ``{"success": False, "error": ...}`` on timeout.
     """
+    for name, budget in (("timeout", timeout), ("queue_timeout", queue_timeout)):
+        if name == "queue_timeout" and budget is None:
+            continue
+        try:
+            valid = (not isinstance(budget, bool) and isinstance(budget, (int, float))
+                     and math.isfinite(budget) and budget > 0)
+        except (ValueError, OverflowError):
+            valid = False
+        if not valid:
+            if on_cancel:
+                on_cancel()
+            return {"success": False, "code": "INVALID_TIMEOUT", "mutation_outcome": "not_started",
+                    "error": f"{name} must be a positive finite number"}
+
     rejection = _dispatch_health.rejection()
     if rejection is not None:
         if on_cancel:
@@ -401,7 +426,7 @@ def dispatch_to_gui(
     if queue_timeout is None:
         queue_timeout = timeout
 
-    task_id = next(_task_ids)
+    task_id = f"{_task_namespace}:{next(_task_ids)}"
     operation = operation_name or getattr(task, "__name__", "GUI operation")
     if operation == "<lambda>":
         operation = "GUI operation"

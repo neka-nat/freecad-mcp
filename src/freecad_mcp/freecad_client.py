@@ -193,7 +193,7 @@ class FreeCADConnection:
         with self._make_proxy(self._timeout) as proxy:
             return proxy.get_async_status(job_id)
 
-    def get_task_status(self, task_id: int | None = None) -> dict[str, Any]:
+    def get_task_status(self, task_id: str | None = None) -> dict[str, Any]:
         return self._call("get_task_status", task_id)
 
     def get_active_screenshot(

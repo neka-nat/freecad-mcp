@@ -29,6 +29,7 @@ class Document:
     Name = "Doc"
 
     def __init__(self) -> None:
+        self.UndoMode = 0
         self.Objects: list[Item] = [Item("Existing", "Part::Box")]
         self.events: list[str] = []
 
