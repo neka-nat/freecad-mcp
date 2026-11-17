@@ -1,0 +1,4 @@
+# cmd.exe mis-parses LF-only batch files: goto labels and multi-line blocks
+# break, and a failed redirection inside a block can make cmd lose its place in
+# the file entirely. Keep batch files checked out with CRLF on every platform.
+*.bat text eol=crlf
