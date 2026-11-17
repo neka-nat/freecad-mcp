@@ -1,11 +1,12 @@
 """Rejected work cannot leak ownership or execute later; lifecycle failures recover."""
+import threading
 import types
 from unittest.mock import Mock
 
 import pytest
 
 from test_gui_dispatch import load_gui_dispatch, ThreadedWaker
-from test_rpc_handlers import rpc_module
+from test_rpc_handlers import rpc_module, wait_for_job
 
 
 @pytest.mark.parametrize("code", [42, None, {}, ["pass"]])
@@ -17,7 +18,10 @@ def test_invalid_async_code_does_not_claim_namespace(rpc_module, code) -> None:
     assert rpc.execute_code("print('next')")["success"]
 
 
-@pytest.mark.parametrize("budget", ["bad", 0, -1, True, float("nan"), float("inf"), 10**400])
+@pytest.mark.parametrize("budget", [
+    "bad", 0, -1, True, float("nan"), float("inf"), 10**400,
+    1e300, threading.TIMEOUT_MAX * 2,
+])
 @pytest.mark.parametrize("parameter", ["timeout", "queue_timeout"])
 def test_invalid_dispatch_budget_never_enqueues(budget, parameter: str) -> None:
     with load_gui_dispatch() as dispatch:
@@ -30,6 +34,21 @@ def test_invalid_dispatch_budget_never_enqueues(budget, parameter: str) -> None:
         dispatch.process_gui_tasks()
         called.assert_not_called()
         cancelled.assert_called_once_with()
+
+
+def test_oversized_async_commit_cannot_mutate_after_job_failure(rpc_module: types.ModuleType) -> None:
+    rpc_module.test_dispatch._waker = None
+    rpc = rpc_module.FreeCADRPC()
+    reply = rpc.execute_code_async(
+        "commit(lambda: setattr(App, 'unexpected_mutation', True), timeout=1e300)"
+    )
+    job = wait_for_job(rpc, reply["job_id"])
+    assert job["state"] == "failed"
+    assert "INVALID_TIMEOUT" in job["error"]
+    assert rpc_module._scripts.snapshot()["state"] == "idle"
+    rpc_module.test_dispatch.process_gui_tasks()
+    assert not hasattr(rpc_module.FreeCAD, "unexpected_mutation")
+    assert rpc.get_task_status()["tasks"] == []
 
 
 @pytest.mark.parametrize("guard", ["activeModalWidget", "activePopupWidget"])
