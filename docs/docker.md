@@ -24,8 +24,23 @@ else needs configuring: the addon keeps its default loopback-only setting, and t
 server listens on `127.0.0.1` only, so no token is required. This works on Linux
 only; on Docker Desktop (Mac, Windows) use the bridge setup below.
 
-Options go after the image name, for example `--listen-port 9000` or
-`--listen-token <token>` (or `-e FREECAD_MCP_LISTEN_TOKEN`) to also require a token.
+Application options go after the image name and replace the image's default
+arguments, so repeat `--transport streamable-http` when customizing the service:
+
+```bash
+docker run --rm --init --network host freecad-mcp \
+  --transport streamable-http --listen-port 9000
+```
+
+To require a token, export `FREECAD_MCP_LISTEN_TOKEN` and pass Docker's environment
+option **before** the image name:
+
+```bash
+docker run --rm --init --network host -e FREECAD_MCP_LISTEN_TOKEN freecad-mcp
+```
+
+Alternatively, append `--transport streamable-http --listen-token <token>` after
+the image name; the environment variable avoids exposing the token in arguments.
 
 ## Connect your MCP client
 
