@@ -184,12 +184,13 @@ def test_rpc_status_exposes_pending_config_without_tokens(rpc_module: types.Modu
 
 
 def test_mcp_failure_preserves_task_id_and_polling_result() -> None:
+    task_id = "process-namespace:7"
     connection = types.SimpleNamespace(
-        execute_code=lambda *_: {"success": False, "error": "timeout", "task_id": 7,
+        execute_code=lambda *_: {"success": False, "error": "timeout", "task_id": task_id,
                                 "mutation_outcome": "still_running"},
-        get_task_status=lambda _: {"success": True, "task": {"task_id": 7, "state": "done"}},
+        get_task_status=lambda _: {"success": True, "task": {"task_id": task_id, "state": "done"}},
     )
     reply = execute_code_operation(connection, True, "pass")
     assert isinstance(reply, ErrorResponse)
-    assert json.loads(reply[1].text)["task_id"] == 7
-    assert json.loads(get_task_status_operation(connection, 7)[0].text)["task"]["state"] == "done"
+    assert json.loads(reply[1].text)["task_id"] == task_id
+    assert json.loads(get_task_status_operation(connection, task_id)[0].text)["task"]["state"] == "done"

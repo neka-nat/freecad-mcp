@@ -241,3 +241,8 @@ together; protocol 1 and 2 serialize rotations differently.
 Protocol 3 adds generation-scoped dispatch, GUI task history, explicit mutation
 outcomes and exclusive shared-script admission. Update the server and addon
 together; overlapping scripts now return `SCRIPT_BUSY` instead of racing.
+
+Protocol 4 requires process-qualified string task IDs. Protocol 3 revisions used
+both integer and string IDs without distinguishing their compatibility. Update
+both components together so late results remain pollable. Treat task IDs as
+opaque strings and pass them back unchanged.

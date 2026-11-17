@@ -102,6 +102,13 @@ def test_matching_addon_gives_no_warning() -> None:
     assert addon_version_warning(matching_status()) is None
 
 
+def test_integer_task_id_protocol_is_not_reported_as_compatible() -> None:
+    assert PROTOCOL_VERSION >= 4
+    warning, connection = check(VersionedAddon(matching_status(protocol_version=3)))
+    assert "Update the addon" in warning
+    assert connection.compatibility["state"] == "mismatch"
+
+
 def test_addon_without_get_rpc_status_is_reported_as_old() -> None:
     warning, _ = check(OldestAddon())
     assert warning is not None
