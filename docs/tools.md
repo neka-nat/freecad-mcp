@@ -47,6 +47,9 @@ Use `get_view` to request a screenshot explicitly; it is available even with
 maximum edge of 1024 pixels. With only one dimension supplied, the other uses
 the viewport dimension. Optional screenshots are omitted when the requested
 document is not the displayed document; they never show another document.
+Capture fails if event processing changes the displayed document or view.
+Compositor and framebuffer fallbacks produce the exact requested dimensions;
+they preserve the viewport's aspect ratio and add transparent padding when needed.
 
 Supported views are `Isometric`, `Front`, `Top`,
 `Right`, `Back`, `Left`, `Bottom`, `Dimetric`, and `Trimetric`.

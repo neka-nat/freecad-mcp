@@ -69,3 +69,17 @@ def test_native_property_contracts() -> None:
     reply = run_headless(code, 60, COMMAND)
     assert reply["success"], reply
     assert "NATIVE_PROPERTY_CONTRACTS_OK" in reply["output"], reply
+
+
+def test_native_capture_dimensions_and_padding() -> None:
+    root = Path(__file__).resolve().parents[1]
+    scenario = root / "tests/native/capture_scenario.py"
+    code = (
+        f"import runpy; runpy.run_path({str(scenario)!r}, init_globals="
+        f"{{'ADDON_PATH': {str(root / 'addon/FreeCADMCP')!r}}})"
+    )
+    reply = run_headless(code, 30, COMMAND)
+    assert reply["success"], reply
+    if "NATIVE_CAPTURE_QT6_UNAVAILABLE" in reply["output"]:
+        pytest.skip("Screenshot fallbacks require Qt 6/PySide6")
+    assert "NATIVE_CAPTURE_SIZE_OK" in reply["output"]

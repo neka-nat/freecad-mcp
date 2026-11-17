@@ -109,6 +109,31 @@ def get_displayed_3d_view() -> Any:
     return view
 
 
+def _require_capture_view(view: Any, document: Any) -> None:
+    """Fail if event processing replaced the document or displayed view."""
+    if FreeCAD.ActiveDocument is not document or get_displayed_3d_view() is not view:
+        raise RuntimeError("The displayed document or 3D view changed during screenshot capture")
+
+
+def _fit_capture_image(image: Any, width: int, height: int) -> Any:
+    """Fit the whole viewport into an exact-size PNG without distorting geometry."""
+    from PySide6 import QtCore, QtGui
+
+    scaled = image.scaled(width, height, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+    # QPainter uses logical pixels; screenshot dimensions are physical pixels.
+    scaled.setDevicePixelRatio(1)
+    if scaled.width() == width and scaled.height() == height:
+        return scaled
+    canvas = QtGui.QImage(width, height, QtGui.QImage.Format_ARGB32)
+    canvas.fill(QtCore.Qt.transparent)
+    painter = QtGui.QPainter(canvas)
+    try:
+        painter.drawImage((width - scaled.width()) // 2, (height - scaled.height()) // 2, scaled)
+    finally:
+        painter.end()
+    return canvas
+
+
 def _image_is_flat_color(path: str, threshold: int = 4) -> bool:
     """True when the saved PNG is (almost) a single flat color.
 
@@ -156,7 +181,9 @@ def _find_active_gl_widget() -> Any:
     return None
 
 
-def _grab_compositor_viewport(save_path: str, width: int, height: int) -> bool:
+def _grab_compositor_viewport(
+    save_path: str, width: int, height: int, view: Any, document: Any,
+) -> bool:
     """Opt-in screen capture, limited to the identified, unobscured FreeCAD view."""
     import os
     if os.environ.get("FREECAD_MCP_ALLOW_SCREEN_CAPTURE") != "1":
@@ -164,23 +191,26 @@ def _grab_compositor_viewport(save_path: str, width: int, height: int) -> bool:
     try:
         from PySide6 import QtCore, QtGui
         from rpc_server.screencopy import capture_viewport
+        _require_capture_view(view, document)
         win = FreeCADGui.getMainWindow()
         gl = _find_active_gl_widget()
-        if gl is None or not gl.isVisible() or get_displayed_3d_view() is None:
+        if gl is None or not gl.isVisible():
             return False
         rel = gl.mapTo(win, QtCore.QPoint(0, 0))
         rect = (rel.x(), rel.y(), gl.width(), gl.height())
         image = capture_viewport(os.getpid(), rect, (win.width(), win.height()), QtGui.QImage)
         if image is None:
             return False
-        if width and height:
-            image = image.scaled(width, height, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+        _require_capture_view(view, document)
+        image = _fit_capture_image(image, width, height)
         return image.save(save_path, "PNG")
     except Exception:
         return False
 
 
-def _grab_opengl_widget_fallback(save_path: str, width: int, height: int) -> bool:
+def _grab_opengl_widget_fallback(
+    save_path: str, width: int, height: int, view: Any, document: Any,
+) -> bool:
     """Re-grab the active view from its live QOpenGLWidget framebuffer.
 
     Returns True when a non-empty image was written to ``save_path``.
@@ -191,27 +221,15 @@ def _grab_opengl_widget_fallback(save_path: str, width: int, height: int) -> boo
         :func:`_grab_compositor_viewport`.
     """
     try:
-        from PySide6 import QtCore, QtOpenGLWidgets, QtWidgets
-
-        win = FreeCADGui.getMainWindow()
-        mdi = win.findChild(QtWidgets.QMdiArea)
-        if mdi is None:
-            return False
+        _require_capture_view(view, document)
         gl = _find_active_gl_widget()
         if gl is None:
             return False
         img = gl.grabFramebuffer()
         if img.isNull() or img.width() == 0:
             return False
-        # Trim the capture to the requested aspect/size when it differs (the
-        # framebuffer is the live viewport, not the requested size).
-        if width and height and (img.width() != width or img.height() != height):
-            img = img.scaled(
-                width,
-                height,
-                QtCore.Qt.KeepAspectRatio,
-                QtCore.Qt.SmoothTransformation,
-            )
+        _require_capture_view(view, document)
+        img = _fit_capture_image(img, width, height)
         return img.save(save_path, "PNG")
     except Exception:
         return False
@@ -236,8 +254,10 @@ def save_active_screenshot(
                 "The tab in front is not a 3D view (TechDraw page, Start page...); "
                 "bring the 3D view to the front"
             )
+        document = FreeCAD.ActiveDocument
 
         apply_view_orientation(view, view_name)
+        _require_capture_view(view, document)
 
         focused_selection = False
         # The resolved object we frame on (when focus_object is given), kept so
@@ -254,6 +274,7 @@ def save_active_screenshot(
                 focused_selection = True
                 focus_target = obj
                 _flush_gui_events()
+                _require_capture_view(view, document)
                 FreeCADGui.Selection.clearSelection()
             else:
                 view.fitAll()
@@ -261,6 +282,7 @@ def save_active_screenshot(
             view.fitAll()
 
         _flush_gui_events()
+        _require_capture_view(view, document)
         # On macOS, when the FreeCAD window is not exposed (fully occluded or
         # minimized), saveImage() right after pumping the event loop grabs a blank
         # frame. Re-issuing the framing synchronously forces a redraw first. The
@@ -275,7 +297,9 @@ def save_active_screenshot(
         resolved_width, resolved_height = _resolve_screenshot_size(view, width, height)
         # Screen capture is an explicit opt-in. Normally use FreeCAD's own
         # renderer/framebuffer without reading the desktop.
-        if _grab_compositor_viewport(save_path, resolved_width, resolved_height):
+        captured = _grab_compositor_viewport(save_path, resolved_width, resolved_height, view, document)
+        _require_capture_view(view, document)
+        if captured:
             if focused_selection:
                 FreeCADGui.Selection.clearSelection()
                 _flush_gui_events(delay_ms=0)
@@ -284,12 +308,14 @@ def save_active_screenshot(
             view.saveImage(save_path, resolved_width, resolved_height, "Current", "Framebuffer")
         except TypeError:
             view.saveImage(save_path, resolved_width, resolved_height, "Current")
+        _require_capture_view(view, document)
 
         # Flat-color result means the offscreen path rendered nothing at all;
         # re-grab from the live QOpenGLWidget framebuffer as a last resort.
         if _image_is_flat_color(save_path):
-            if _grab_opengl_widget_fallback(save_path, resolved_width, resolved_height):
+            if _grab_opengl_widget_fallback(save_path, resolved_width, resolved_height, view, document):
                 FreeCAD.Console.PrintLog("MCP RPC: used the active OpenGL framebuffer fallback\n")
+            _require_capture_view(view, document)
 
         if focused_selection:
             FreeCADGui.Selection.clearSelection()
