@@ -54,6 +54,13 @@ not raise or focus another window automatically; failed checks use the renderer.
 This opt-in captures composited desktop pixels. A transient overlay can race
 the checks, so leave it disabled when screen contents must remain private.
 
+## Agent feedback file
+
+`submit_feedback` appends to `~/.freecad-mcp/feedback.jsonl` by default. Set
+the `FREECAD_MCP_FEEDBACK_FILE` environment variable or pass
+`--feedback-file PATH` to the MCP server to use another file. The flag wins
+over the variable. The folder is created on first use.
+
 ## Remote connections
 
 By default, the RPC server listens on `localhost` and does not accept remote
