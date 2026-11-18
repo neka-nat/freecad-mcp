@@ -17,6 +17,13 @@ except ImportError:
     from mcp.server.mcpserver import MCPServer as FastMCP
 from mcp.types import CallToolResult, ImageContent, TextContent
 
+from .feedback import (
+    FeedbackKind,
+    FeedbackSeverity,
+    append_entry,
+    build_entry,
+    default_feedback_path,
+)
 from .freecad_client import FreeCADConnection
 from .http_transport import (
     DEFAULT_LISTEN_HOST,
@@ -48,7 +55,7 @@ from .operations import (
     run_fem_analysis_operation,
 )
 from .prompt_text import ASSET_CREATION_STRATEGY
-from .responses import ErrorResponse, ToolResponse
+from .responses import ErrorResponse, ToolResponse, error_response, text_response
 from .server_state import ServerState
 
 
@@ -90,7 +97,13 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
 
 mcp = FastMCP(
     "FreeCADMCP",
-    instructions="FreeCAD integration through the Model Context Protocol",
+    instructions=(
+        "FreeCAD integration through the Model Context Protocol. "
+        "When a tool fails in a way that looks like a server problem, lacks "
+        "something you needed, behaves differently from its description, or "
+        "you had to work around it with execute_code, call submit_feedback "
+        "once with what happened, so the maintainers can fix it."
+    ),
     lifespan=server_lifespan,
 )
 
@@ -792,6 +805,59 @@ def get_rpc_status(ctx: Context) -> list[TextContent]:
     return get_rpc_status_operation(get_freecad_connection())
 
 
+def _client_info(ctx: Context) -> dict[str, Any] | None:
+    """Name and version the MCP client gave when it connected, if any."""
+    try:
+        info = ctx.session.client_params.clientInfo
+    except Exception:
+        return None
+    name, ver = getattr(info, "name", None), getattr(info, "version", None)
+    return {"name": name, "version": ver} if name else None
+
+
+@tool
+def submit_feedback(
+    ctx: Context,
+    kind: FeedbackKind,
+    summary: str,
+    details: str = "",
+    tool_name: str | None = None,
+    workaround: str = "",
+    severity: FeedbackSeverity = "medium",
+) -> list[TextContent]:
+    """Leave feedback about this FreeCAD MCP server for its maintainers.
+
+    Call this when a tool fails in a way that looks like a server or addon
+    problem, a tool is missing something you needed, a description was wrong
+    or unclear, or you had to work around a tool (for example with
+    execute_code). One call per distinct issue; don't report errors in your
+    own scripts or the user's model. The feedback is appended to a local file
+    the maintainers review; it does not reach FreeCAD and works while FreeCAD
+    is down.
+
+    Args:
+        kind: "bug", "missing_feature", "confusing" (unclear behavior or
+            description), "workaround", "docs", "praise", or "other".
+        summary: One line saying what is wrong or wanted.
+        details: What you called, what happened, and what you expected.
+            Include error text. Leave out secrets and personal data.
+        tool_name: The tool the feedback is about, if one.
+        workaround: What you did instead, such as the execute_code snippet.
+        severity: "low", "medium" (default), or "high" (blocked the task).
+    """
+    if not summary.strip():
+        return error_response("summary is required: one line saying what is wrong or wanted.")
+    path = state.feedback_path or default_feedback_path()
+    entry = build_entry(
+        kind, summary, details, tool_name, workaround, severity, _client_info(ctx)
+    )
+    try:
+        append_entry(entry, path)
+    except OSError as e:
+        return error_response(f"Could not save feedback to {path}: {e}")
+    return text_response(f"Feedback {entry['id']} saved. Thank you.")
+
+
 @tool
 def run_fem_analysis(
     ctx: Context,
@@ -895,6 +961,13 @@ def main():
         "other users can read command-line arguments; omit if the addon has "
         "no token set)",
     )
+    parser.add_argument(
+        "--feedback-file",
+        default=None,
+        help="JSONL file submit_feedback appends to (default: the "
+        "FREECAD_MCP_FEEDBACK_FILE environment variable, else "
+        "~/.freecad-mcp/feedback.jsonl)",
+    )
     parser.add_argument("--freecadcmd", default=None, help="Command that starts headless FreeCAD for execute_code_headless, e.g. 'flatpak run --command=freecadcmd org.freecad.FreeCAD' (default: auto-detect PATH, then Flatpak)")
     parser.add_argument(
         "--transport",
@@ -955,6 +1028,9 @@ def main():
     state.only_text_feedback = args.only_text_feedback
     state.rpc_host = args.host
     state.auth_token = args.auth_token or os.environ.get("FREECAD_MCP_TOKEN") or None
+    if args.feedback_file:
+        from pathlib import Path
+        state.feedback_path = Path(args.feedback_file).expanduser()
     from .headless import parse_command
     state.freecadcmd = parse_command(args.freecadcmd)
     logger.info(f"Only text feedback: {state.only_text_feedback}")

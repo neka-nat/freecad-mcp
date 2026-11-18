@@ -23,6 +23,7 @@
 | `insert_part_from_library` | Insert a part from the [FreeCAD parts library](https://github.com/FreeCAD/FreeCAD-library). |
 | `get_parts_list` | List parts in the [FreeCAD parts library](https://github.com/FreeCAD/FreeCAD-library). |
 | `run_fem_analysis` | Run CalculiX on an existing analysis and return summary results. |
+| `submit_feedback` | Let an agent report a bug, missing feature, or workaround to the maintainers; saved to a local file. |
 
 See [code execution](execution.md) for execution modes, shared script state,
 background job tracking, and timeout handling.
@@ -99,3 +100,30 @@ aliases are accepted by both creation and editing.
 `get_task_status(task_id)` retrieves a GUI operation after a timeout without
 waiting for the GUI. Omit the ID to list pending and recently completed tasks.
 See [execution lifecycle and outcomes](execution.md#listener-readiness-and-operation-outcomes).
+
+## Agent feedback
+
+`submit_feedback` lets the agent using the server report problems with it: a
+tool that failed in a way that looks like a server or addon bug, something a
+tool lacked, a description that was wrong or unclear, or a workaround it
+needed (often an `execute_code` snippet). The server's instructions ask
+agents to call it once per issue.
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `kind` | required | `bug`, `missing_feature`, `confusing`, `workaround`, `docs`, `praise`, or `other`. |
+| `summary` | required | One line saying what is wrong or wanted. |
+| `details` | `""` | What was called, what happened, what was expected, error text. |
+| `tool_name` | `null` | The tool the feedback is about. |
+| `workaround` | `""` | What the agent did instead. |
+| `severity` | `"medium"` | `low`, `medium`, or `high` (blocked the task). |
+
+Each call appends one JSON line to `~/.freecad-mcp/feedback.jsonl`, with an
+ID, a UTC timestamp, the server and protocol versions, and the MCP client's
+name and version. Nothing is sent over the network, and the tool works while
+FreeCAD is down. See [configuration](configuration.md#agent-feedback-file) to
+change the file. To review it:
+
+```bash
+jq -r '[.time, .kind, .severity, .tool // "-", .summary] | @tsv' ~/.freecad-mcp/feedback.jsonl
+```
