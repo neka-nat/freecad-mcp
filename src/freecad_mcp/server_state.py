@@ -14,3 +14,4 @@ class ServerState:
     version_notice: str | None = None  # addon version warning not yet shown in a tool reply
     last_version_notice: str | None = None
     lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    connection_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)

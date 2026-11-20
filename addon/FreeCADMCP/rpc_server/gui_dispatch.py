@@ -407,14 +407,15 @@ def dispatch_to_gui(
             continue
         try:
             valid = (not isinstance(budget, bool) and isinstance(budget, (int, float))
-                     and math.isfinite(budget) and budget > 0)
+                     and math.isfinite(budget) and 0 < budget <= threading.TIMEOUT_MAX)
         except (ValueError, OverflowError):
             valid = False
         if not valid:
             if on_cancel:
                 on_cancel()
             return {"success": False, "code": "INVALID_TIMEOUT", "mutation_outcome": "not_started",
-                    "error": f"{name} must be a positive finite number"}
+                    "error": (f"{name} must be a positive finite number no greater than "
+                              f"{threading.TIMEOUT_MAX:g} seconds on this platform")}
 
     rejection = _dispatch_health.rejection()
     if rejection is not None:

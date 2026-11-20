@@ -55,6 +55,32 @@ def test_allowed_hosts() -> None:
     assert "127.5.5.5:8000" in build_allowed_hosts("127.5.5.5", 8000)
 
 
+@pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "[::1]"])
+def test_default_http_port_accepts_normal_host_and_origin(host: str) -> None:
+    app = build_app(server.FastMCP("port80"), "streamable-http", "127.0.0.1", 80, TOKEN)
+    # Exercise IPv6 Host headers without TestClient's IPv6 URL parsing bug.
+    with TestClient(app, base_url="http://localhost") as client:
+        headers = {**HEADERS, "Authorization": f"Bearer {TOKEN}"}
+        for authority in (host, f"{host}:80"):
+            reply = client.post("/mcp", json=INIT, headers={
+                **headers, "Host": authority, "Origin": f"http://{authority}",
+            })
+            assert reply.status_code == 200
+        assert client.post("/mcp", json=INIT, headers={
+            **headers, "Host": "evil.example",
+        }).status_code == 421
+        assert client.post("/mcp", json=INIT, headers={
+            **headers, "Origin": "http://evil.example",
+        }).status_code == 403
+
+
+def test_default_port_aliases_do_not_allow_unconfigured_ports() -> None:
+    hosts = build_allowed_hosts("0.0.0.0", 8000, ["proxy.example:80"])
+    assert "proxy.example" in hosts and "proxy.example:80" in hosts
+    assert "localhost" not in hosts and "127.0.0.1" not in hosts
+    assert "proxy.example:8000" not in hosts
+
+
 @pytest.fixture(params=["streamable-http", "sse"])
 def fresh_mcp(request: pytest.FixtureRequest):
     # build_app mutates settings; use a throwaway server instead of the global.

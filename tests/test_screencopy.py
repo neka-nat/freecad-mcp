@@ -1,7 +1,9 @@
 """Screen capture must not select a browser or ignore an overlay."""
 import importlib.util
 from pathlib import Path
+import sys
 import types
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -59,7 +61,7 @@ def test_window_change_during_capture_discards_image(capture) -> None:
 
 def test_desktop_capture_requires_explicit_opt_in(view_module, monkeypatch) -> None:
     monkeypatch.delenv("FREECAD_MCP_ALLOW_SCREEN_CAPTURE", raising=False)
-    assert view_module._grab_compositor_viewport("unused.png", 100, 100) is False
+    assert view_module._grab_compositor_viewport("unused.png", 100, 100, None, None) is False
 
 
 def test_framebuffer_uses_only_active_subwindow(view_module, monkeypatch) -> None:
@@ -74,3 +76,47 @@ def test_framebuffer_uses_only_active_subwindow(view_module, monkeypatch) -> Non
     assert view_module._find_active_gl_widget() is active_gl
     active_sub.findChild = lambda _: None
     assert view_module._find_active_gl_widget() is None
+
+
+@pytest.mark.parametrize("backend", ["compositor", "framebuffer"])
+@pytest.mark.parametrize("when", ["before", "during"])
+def test_fallback_discards_image_if_target_changes(
+    view_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, backend: str, when: str,
+) -> None:
+    view, image = Mock(), Mock()
+    image.isNull.return_value = False
+    image.width.return_value = 1600
+    gui = view_module.FreeCADGui
+    gui.activeView.return_value = view
+    document = view_module.FreeCAD.ActiveDocument
+    gl = types.SimpleNamespace(
+        isVisible=lambda: True,
+        mapTo=lambda *_: types.SimpleNamespace(x=lambda: 0, y=lambda: 0),
+        width=lambda: 1600, height=lambda: 900,
+    )
+    gui.getMainWindow = lambda: types.SimpleNamespace(width=lambda: 1600, height=lambda: 1000)
+    monkeypatch.setattr(view_module, "_find_active_gl_widget", lambda: gl)
+    resize = Mock()
+    monkeypatch.setattr(view_module, "_fit_capture_image", resize)
+
+    def capture(*_args: Any) -> Any:
+        gui.activeView.return_value = Mock()
+        return image
+
+    capture_call = Mock(side_effect=capture)
+    gl.grabFramebuffer = capture_call
+    monkeypatch.setenv("FREECAD_MCP_ALLOW_SCREEN_CAPTURE", "1")
+    monkeypatch.setitem(sys.modules, "PySide6", types.SimpleNamespace(
+        QtCore=types.SimpleNamespace(QPoint=lambda *_: None), QtGui=types.SimpleNamespace(QImage=object)))
+    monkeypatch.setitem(sys.modules, "rpc_server.screencopy", types.SimpleNamespace(capture_viewport=capture_call))
+    if when == "before":
+        gui.activeView.return_value = Mock()
+    fallback = (view_module._grab_compositor_viewport if backend == "compositor"
+                else view_module._grab_opengl_widget_fallback)
+    assert fallback("unused.png", 800, 600, view, document) is False
+    if when == "before":
+        capture_call.assert_not_called()
+    else:
+        capture_call.assert_called_once()
+    resize.assert_not_called()
+    image.save.assert_not_called()

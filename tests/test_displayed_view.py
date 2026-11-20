@@ -89,6 +89,34 @@ def test_displayed_3d_view_keeps_capture_and_framing(
         assert shown.fitAll.call_count == 2
 
 
+@pytest.mark.parametrize("focus", [None, "Box"])
+@pytest.mark.parametrize("changed", ["view", "document"])
+def test_capture_rejects_target_changes_during_event_processing(
+    view_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, focus: str | None, changed: str,
+) -> None:
+    shown = Mock()
+    view_module.FreeCADGui.activeView.return_value = shown
+
+    def switch_target(*_args: Any, **_kwargs: Any) -> None:
+        if changed == "view":
+            view_module.FreeCADGui.activeView.return_value = Mock()
+        else:
+            view_module.FreeCAD.ActiveDocument = object()
+
+    view_module._flush_gui_events.side_effect = switch_target
+    compositor, framebuffer = Mock(), Mock()
+    monkeypatch.setattr(view_module, "_grab_compositor_viewport", compositor)
+    monkeypatch.setattr(view_module, "_grab_opengl_widget_fallback", framebuffer)
+    target = tmp_path / "changed.png"
+    reply = view_module.save_active_screenshot(str(target), focus_object=focus)
+    assert isinstance(reply, str) and "changed during screenshot capture" in reply
+    shown.saveImage.assert_not_called()
+    compositor.assert_not_called()
+    framebuffer.assert_not_called()
+    assert not target.exists()
+
+
 @pytest.mark.parametrize("supported", [False, True])
 def test_rpc_capture_runs_on_gui_and_cleans_temp_file(
     rpc_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch,

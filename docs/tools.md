@@ -27,6 +27,12 @@
 See [code execution](execution.md) for execution modes, shared script state,
 background job tracking, and timeout handling.
 
+The MCP server connects to the GUI addon on the first RPC-backed tool call.
+Tool discovery and headless execution remain available when GUI RPC is unavailable.
+Cancelling `execute_code_headless` terminates its subprocess and ordinary child
+processes and waits for cleanup. Cancellation does not undo files already written;
+children that deliberately detach from the process group may survive.
+
 ## Screenshot options
 
 The following tools return optional screenshots: `create_object`, `edit_object`,
@@ -47,6 +53,9 @@ Use `get_view` to request a screenshot explicitly; it is available even with
 maximum edge of 1024 pixels. With only one dimension supplied, the other uses
 the viewport dimension. Optional screenshots are omitted when the requested
 document is not the displayed document; they never show another document.
+Capture fails if event processing changes the displayed document or view.
+Compositor and framebuffer fallbacks produce the exact requested dimensions;
+they preserve the viewport's aspect ratio and add transparent padding when needed.
 
 Supported views are `Isometric`, `Front`, `Top`,
 `Right`, `Back`, `Left`, `Bottom`, `Dimetric`, and `Trimetric`.
@@ -98,4 +107,6 @@ aliases are accepted by both creation and editing.
 
 `get_task_status(task_id)` retrieves a GUI operation after a timeout without
 waiting for the GUI. Omit the ID to list pending and recently completed tasks.
+In recorded results, integers outside XML-RPC's signed 32-bit range are returned
+as exact decimal strings so they cannot prevent status polling.
 See [execution lifecycle and outcomes](execution.md#listener-readiness-and-operation-outcomes).

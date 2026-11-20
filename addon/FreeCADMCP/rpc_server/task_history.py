@@ -7,6 +7,12 @@ import time
 from typing import Any
 
 
+def _parse_history_integer(value: str) -> int | str:
+    """Keep XML-RPC integers numeric and preserve larger values as decimal text."""
+    number = int(value)
+    return number if -(2**31) <= number < 2**31 else value
+
+
 class TaskHistory:
     def __init__(self, keep: int = 20) -> None:
         self._lock = threading.Lock()
@@ -33,7 +39,8 @@ class TaskHistory:
         try:
             encoded = json.dumps(result, default=lambda _: "<non-JSON result>", allow_nan=False)
             truncated = len(encoded) > 65536
-            value = {"preview": encoded[:65536]} if truncated else json.loads(encoded)
+            value = ({"preview": encoded[:65536]} if truncated else
+                     json.loads(encoded, parse_int=_parse_history_integer))
         except Exception:
             value, truncated = "<result unavailable>", False
         outcome = result.get("mutation_outcome") if type(result) is dict else None

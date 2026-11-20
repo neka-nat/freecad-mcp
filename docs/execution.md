@@ -186,6 +186,9 @@ job history.
 If the shutdown worker cannot start, status reports `stop_failed` and retains
 the listener so Stop can be retried. New document work remains disabled.
 
+Protocol 4 task IDs are opaque, process-qualified strings. Pass the returned ID
+unchanged to `get_task_status(task_id)`; do not convert it to an integer.
+
 `get_task_status()` lists pending GUI tasks and the last 20 terminal tasks in
 completion order. States are `queued`, `running`, `timed_out_running`, `done`,
 `failed`, and `cancelled`. Terminal records contain the result; late script

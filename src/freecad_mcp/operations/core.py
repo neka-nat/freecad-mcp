@@ -323,7 +323,11 @@ def get_parts_list_operation(freecad: FreeCADConnection) -> ToolResponse:
 
 
 def list_documents_operation(freecad: FreeCADConnection) -> ToolResponse:
-    return json_response(freecad.list_documents())
+    try:
+        return json_response(freecad.list_documents())
+    except Exception as exc:
+        logger.error("Failed to list documents: %s", exc)
+        return error_response(f"Failed to list documents: {exc}")
 
 
 def get_rpc_status_operation(freecad: FreeCADConnection) -> ToolResponse:

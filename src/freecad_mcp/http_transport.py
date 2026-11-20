@@ -100,6 +100,9 @@ def build_allowed_hosts(
         hosts.append(f"[{listen_host}]:{listen_port}" if ":" in listen_host else f"{listen_host}:{listen_port}")
     for host in extra_hosts:
         hosts.append(host if ":" in host.rpartition("]")[2] else f"{host}:{listen_port}")
+    # HTTP clients omit the default port in Host and Origin. Accept that
+    # equivalent authority only for an explicitly allowed port 80 endpoint.
+    hosts.extend(host[:-3] for host in list(hosts) if host.endswith(":80"))
     return list(dict.fromkeys(hosts))
 
 
