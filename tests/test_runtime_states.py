@@ -160,6 +160,32 @@ def test_task_history_is_bounded_but_keeps_pending_and_truncates_results() -> No
         assert history.snapshot(23)["task"]["result_truncated"] is True
 
 
+def test_task_history_large_integers_survive_rpc_and_mcp(rpc_module: types.ModuleType) -> None:
+    history = rpc_module.test_dispatch._task_history
+    # Async commit wraps the user return value in a tuple before recording it.
+    result = ({"values": [-(2**31) - 1, -(2**31), 2**31 - 1, 2**31, 2**40],
+               "unchanged": [True, False, None, 1.5, "text"]},)
+    history.finish("large-result", result, failed=False)
+    history.finish("ordinary-result", {"success": True}, failed=False)
+    expected = [{"values": [str(-(2**31) - 1), -(2**31), 2**31 - 1,
+                            str(2**31), str(2**40)],
+                 "unchanged": [True, False, None, 1.5, "text"]}]
+    with running_server(rpc_module.FreeCADRPC()) as (host, port):
+        connection = FreeCADConnection(host, port)
+        for task_id in ("large-result", None):
+            reply = get_task_status_operation(connection, task_id)
+            assert not isinstance(reply, ErrorResponse), reply
+            payload = json.loads(reply[0].text)
+            task = (payload["task"] if task_id else
+                    next(task for task in payload["tasks"] if task["task_id"] == "large-result"))
+            assert task["state"] == "done"
+            assert task["mutation_outcome"] == "completed"
+            assert task["result_truncated"] is False
+            assert task["result"] == expected
+        assert connection.get_task_status("ordinary-result")["task"]["result"] == {"success": True}
+    assert result[0]["values"][-1] == 2**40  # recording must not change the caller's result
+
+
 def test_cached_connection_refreshes_generation_and_resets_missing_budgets(monkeypatch: pytest.MonkeyPatch) -> None:
     interface = VersionedAddon(matching_status(server_id="first", execute_code_timeout=45))
     with running_server(interface) as (host, port):

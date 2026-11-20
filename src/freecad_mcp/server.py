@@ -71,14 +71,8 @@ state = ServerState()
 async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
     try:
         logger.info("FreeCADMCP server starting up")
-        try:
-            await anyio.to_thread.run_sync(get_freecad_connection)
-            logger.info("Successfully connected to FreeCAD on startup")
-        except Exception as e:
-            logger.warning(f"Could not connect to FreeCAD on startup: {str(e)}")
-            logger.warning(
-                "Make sure the FreeCAD addon is running before using FreeCAD resources or tools"
-            )
+        # GUI RPC is optional for headless tools and tool discovery. Connect on
+        # the first RPC-backed call instead of blocking MCP initialization.
         yield {}
     finally:
         if state.freecad_connection:
@@ -93,6 +87,64 @@ mcp = FastMCP(
     instructions="FreeCAD integration through the Model Context Protocol",
     lifespan=server_lifespan,
 )
+
+
+# RunVar gives each event loop its own limiters (including repeated SDK sessions).
+_control_limiter: anyio.lowlevel.RunVar[anyio.CapacityLimiter] = anyio.lowlevel.RunVar(
+    "freecad_control_limiter"
+)
+_heavy_limiter: anyio.lowlevel.RunVar[anyio.CapacityLimiter] = anyio.lowlevel.RunVar(
+    "freecad_heavy_limiter"
+)
+_CONTROL_TOOLS = {"get_rpc_status", "get_task_status", "get_async_status"}
+_HEAVY_TOOLS = {"execute_code", "execute_code_headless", "run_fem_analysis"}
+
+
+def _tool_limiter(name: str) -> anyio.CapacityLimiter | None:
+    """Reserve status capacity independently of long-running work."""
+    if name in _CONTROL_TOOLS:
+        slot = _control_limiter
+    elif name in _HEAVY_TOOLS:
+        slot = _heavy_limiter
+    else:
+        return None
+    try:
+        return slot.get()
+    except LookupError:
+        limiter = anyio.CapacityLimiter(4)
+        slot.set(limiter)
+        return limiter
+
+
+async def _run_headless_tool(
+    call: Callable[[], ToolResponse | CallToolResult], limiter: anyio.CapacityLimiter | None,
+) -> ToolResponse | CallToolResult:
+    """Signal subprocess cancellation, then join the worker before returning."""
+    from threading import Event
+    from .headless import cancellation_event
+
+    cancel = Event()
+    done = anyio.Event()
+    result: ToolResponse | CallToolResult = []
+
+    async def worker() -> None:
+        nonlocal result
+        try:
+            result = await anyio.to_thread.run_sync(call, limiter=limiter)
+        finally:
+            done.set()
+
+    token = cancellation_event.set(cancel)
+    try:
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(worker)
+            try:
+                await done.wait()
+            finally:
+                cancel.set()
+    finally:
+        cancellation_event.reset(token)
+    return result
 
 
 def tool(fn: Callable[..., ToolResponse]) -> Callable[..., ToolResponse | CallToolResult]:
@@ -117,27 +169,38 @@ def tool(fn: Callable[..., ToolResponse]) -> Callable[..., ToolResponse | CallTo
     async def async_wrapper(*args: Any, **kwargs: Any) -> ToolResponse | CallToolResult:
         # SDK 1.x invokes synchronous tools on its event loop. Explicitly
         # offload on both SDK versions so status and cancellation stay usable.
-        return await anyio.to_thread.run_sync(functools.partial(wrapper, *args, **kwargs))
+        call = functools.partial(wrapper, *args, **kwargs)
+        limiter = _tool_limiter(fn.__name__)
+        if fn.__name__ == "execute_code_headless":
+            return await _run_headless_tool(call, limiter)
+        return await anyio.to_thread.run_sync(call, limiter=limiter)
 
     mcp.tool(structured_output=False)(async_wrapper)
     return wrapper
 
 
 def get_freecad_connection() -> FreeCADConnection:
-    with state.lock:
-        return _get_freecad_connection_locked()
+    current = state
+    with current.lock:
+        cached = current.freecad_connection
+    # Only initial callers wait for admission. A cached client remains usable
+    # while another caller refreshes its compatibility information.
+    if not current.connection_lock.acquire(blocking=cached is None):
+        assert cached is not None
+        return cached
+    try:
+        return _check_freecad_connection(current)
+    finally:
+        current.connection_lock.release()
 
 
-def _get_freecad_connection_locked() -> FreeCADConnection:
-    """Get or create a persistent FreeCAD connection.
-
-    The connection is cached only after FreeCAD answers, so a server started
-    before FreeCAD checks the addon version on the first call that reaches it.
-    """
-    if state.freecad_connection is None:
-        connection = FreeCADConnection(
-            host=state.rpc_host, port=9875, token=state.auth_token
-        )
+def _check_freecad_connection(current: ServerState) -> FreeCADConnection:
+    """Check the connection without holding the reply/state lock during I/O."""
+    with current.lock:
+        connection = current.freecad_connection
+        host, token = current.rpc_host, current.auth_token
+    if connection is None:
+        connection = FreeCADConnection(host=host, port=9875, token=token)
         try:
             # ping() raises, rather than returning False, when nothing listens.
             reachable = connection.ping()
@@ -159,14 +222,15 @@ def _get_freecad_connection_locked() -> FreeCADConnection:
             raise Exception(
                 "Failed to connect to FreeCAD. Make sure the FreeCAD addon is running."
             )
-        state.freecad_connection = connection
-    notice = state.freecad_connection.check_addon_version()
-    if notice != state.last_version_notice:
-        state.version_notice = notice
-        state.last_version_notice = notice
-        if notice:
-            logger.warning(notice)
-    return state.freecad_connection
+    notice = connection.check_addon_version()
+    with current.lock:
+        current.freecad_connection = connection
+        if notice != current.last_version_notice:
+            current.version_notice = notice
+            current.last_version_notice = notice
+            if notice:
+                logger.warning(notice)
+    return connection
 
 
 @tool

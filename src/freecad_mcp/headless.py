@@ -6,6 +6,9 @@ unsaved document; here it only kills the helper process, and the caller gets
 the exit status and the script's output back.
 """
 
+from contextvars import ContextVar
+from threading import Event
+import time
 import logging
 import math
 import os
@@ -14,6 +17,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -21,6 +25,17 @@ from typing import Any
 logger = logging.getLogger("FreeCADMCPserver")
 
 FLATPAK_APP = "org.freecad.FreeCAD"
+cancellation_event: ContextVar[Event | None] = ContextVar("headless_cancellation", default=None)
+
+
+class HeadlessCancelled(RuntimeError):
+    """The caller cancelled this headless invocation."""
+
+
+def _check_cancelled() -> None:
+    event = cancellation_event.get()
+    if event is not None and event.is_set():
+        raise HeadlessCancelled("Headless execution cancelled; prior file writes are not undone")
 
 
 def detect_freecadcmd() -> list[str] | None:
@@ -32,9 +47,7 @@ def detect_freecadcmd() -> list[str] | None:
     flatpak = shutil.which("flatpak")
     if flatpak:
         try:
-            probe = subprocess.run(
-                [flatpak, "info", FLATPAK_APP], capture_output=True, timeout=30
-            )
+            probe = _run_process([flatpak, "info", FLATPAK_APP], timeout=30)
         except (OSError, subprocess.TimeoutExpired):
             return None
         if probe.returncode == 0:
@@ -53,7 +66,44 @@ def parse_command(value: str | None) -> list[str] | None:
     except OSError:
         # A command line can be an invalid/overlong filename on some platforms.
         pass
-    return shlex.split(value)
+    return _split_windows_command(value) if sys.platform == "win32" else shlex.split(value)
+
+
+def _split_windows_command(value: str) -> list[str]:
+    """Split Windows argv quoting, preserving literal path backslashes."""
+    args: list[str] = []
+    i = 0
+    while i < len(value):
+        while i < len(value) and value[i] in " \t":
+            i += 1
+        if i == len(value):
+            break
+        arg: list[str] = []
+        quoted = False
+        while i < len(value) and (quoted or value[i] not in " \t"):
+            slashes = 0
+            while i < len(value) and value[i] == "\\":
+                slashes += 1
+                i += 1
+            if i < len(value) and value[i] == '"':
+                arg.extend("\\" * (slashes // 2))
+                if slashes % 2:
+                    arg.append('"')
+                elif quoted and i + 1 < len(value) and value[i + 1] == '"':
+                    arg.append('"')
+                    i += 1
+                else:
+                    quoted = not quoted
+                i += 1
+            else:
+                arg.extend("\\" * slashes)
+                if i < len(value) and (quoted or value[i] not in " \t"):
+                    arg.append(value[i])
+                    i += 1
+        if quoted:
+            raise ValueError("Unclosed quote in Windows command")
+        args.append("".join(arg))
+    return args
 
 
 def _script_dir() -> Path:
@@ -93,12 +143,22 @@ def _terminate_process_tree(proc: subprocess.Popen) -> None:
 
 
 def _run_process(argv: list[str], timeout: float) -> subprocess.CompletedProcess:
+    _check_cancelled()
     with subprocess.Popen(
         argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
         text=True, encoding="utf-8", errors="replace", start_new_session=os.name != "nt",
     ) as proc:
         try:
-            stdout, stderr = proc.communicate(timeout=timeout)
+            deadline = time.monotonic() + timeout
+            while True:
+                _check_cancelled()
+                remaining = max(0, deadline - time.monotonic())
+                try:
+                    stdout, stderr = proc.communicate(timeout=min(remaining, 0.1))
+                    break
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() >= deadline:
+                        raise
         except subprocess.TimeoutExpired as exc:
             cleanup_note = ""
             try:
@@ -117,7 +177,11 @@ def _run_process(argv: list[str], timeout: float) -> subprocess.CompletedProcess
                 exc.stderr = _clean(exc.stderr) + cleanup_note + "\nA detached child may still be running."
             raise exc
         except BaseException:
-            _terminate_process_tree(proc)
+            try:
+                _terminate_process_tree(proc)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
             raise
     return subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
 

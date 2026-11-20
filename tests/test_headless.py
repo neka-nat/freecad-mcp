@@ -212,3 +212,28 @@ def test_headless_cannot_read_the_open_mcp_stdin() -> None:
         result = json.loads(parent.stdout.read())
     assert result["success"] is True, result
     assert result["output"] == "''"
+
+
+@pytest.mark.parametrize("args", [
+    [r"C:\FreeCAD\bin\FreeCADCmd.exe", "--quiet"],
+    [r"C:\Program Files\FreeCAD\FreeCADCmd.exe", "--quiet"],
+    [r"\\host\share\FreeCADCmd.exe", "", "two words"],
+    ["FreeCADCmd.exe", 'embedded"quote', "trailing slash \\", "'literal'"],
+])
+def test_windows_commands_with_arguments_round_trip(args: list[str]) -> None:
+    assert headless._split_windows_command(subprocess.list2cmdline(args)) == args
+
+
+def test_parse_command_uses_windows_rules(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(headless.sys, "platform", "win32")
+    assert parse_command(r'C:\FreeCAD\bin\FreeCADCmd.exe --quiet') == [
+        r'C:\FreeCAD\bin\FreeCADCmd.exe', '--quiet',
+    ]
+    assert parse_command(r'"C:\Program Files\FreeCAD\FreeCADCmd.exe" --quiet') == [
+        r'C:\Program Files\FreeCAD\FreeCADCmd.exe', '--quiet',
+    ]
+
+
+def test_windows_command_rejects_unclosed_quote() -> None:
+    with pytest.raises(ValueError, match="Unclosed quote"):
+        headless._split_windows_command('"C:\\Program Files\\FreeCAD.exe')

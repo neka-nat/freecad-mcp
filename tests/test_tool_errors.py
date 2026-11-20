@@ -186,8 +186,7 @@ def test_stdio_client_receives_error_flags_and_original_content() -> None:
                     assert json.loads(fem.content[0].text)["error"] == "no solver"
                     transport = await session.call_tool("list_documents", {})
                     assert _error(transport)
-                    # SDK 2.x hides details of unexpected exceptions.
-                    assert "list_documents" in transport.content[0].text
+                    assert transport.content[0].text == "Failed to list documents: RPC unavailable"
                     success = await session.call_tool("create_object", {
                         "doc_name": "Doc", "obj_type": "Part::Box", "obj_name": "Box",
                         "obj_properties": {"Length": 5},
