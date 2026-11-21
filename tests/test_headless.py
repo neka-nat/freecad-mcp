@@ -129,6 +129,19 @@ def test_snap_command_is_detected(monkeypatch: pytest.MonkeyPatch) -> None:
     assert headless.detect_freecadcmd() == ["/snap/bin/freecad.cmd"]
 
 
+def test_windows_default_install_is_detected_newest_first(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    for version in ("1.9", "1.10"):
+        exe = tmp_path / f"FreeCAD {version}" / "bin" / "freecadcmd.exe"
+        exe.parent.mkdir(parents=True)
+        exe.touch()
+    monkeypatch.setattr(headless.shutil, "which", lambda name: None)
+    monkeypatch.setattr(headless.os, "name", "nt")
+    monkeypatch.setenv("ProgramFiles", str(tmp_path))
+    monkeypatch.delenv("ProgramFiles(x86)", raising=False)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    assert headless.detect_freecadcmd() == [str(tmp_path / "FreeCAD 1.10" / "bin" / "freecadcmd.exe")]
+
+
 def test_missing_command_is_a_clear_error(monkeypatch) -> None:
     import freecad_mcp.headless as h
 
