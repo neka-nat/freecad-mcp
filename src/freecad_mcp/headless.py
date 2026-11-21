@@ -23,11 +23,25 @@ logger = logging.getLogger("FreeCADMCPserver")
 FLATPAK_APP = "org.freecad.FreeCAD"
 
 
+def _windows_install_candidates() -> list[str]:
+    """Default Windows install locations, newest FreeCAD version first."""
+    roots = [os.environ.get(v) for v in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA")]
+    found = [
+        str(exe)
+        for root in roots if root
+        for exe in Path(root).glob("FreeCAD*/bin/freecadcmd.exe")
+    ]
+    return sorted(found, key=lambda p: [int(n) for n in re.findall(r"\d+", p)], reverse=True)
+
+
 def detect_freecadcmd() -> list[str] | None:
-    """Find a headless FreeCAD executable: PATH first, then the Flatpak."""
+    """Find a headless FreeCAD executable: PATH, the Windows installer dirs, then the Flatpak."""
     for name in ("freecadcmd", "FreeCADCmd", "freecadcmd.exe", "freecad.cmd"):
         path = shutil.which(name)
         if path:
+            return [path]
+    if os.name == "nt":
+        for path in _windows_install_candidates():
             return [path]
     flatpak = shutil.which("flatpak")
     if flatpak:
