@@ -1,5 +1,6 @@
 """Active-view orientation, sizing, and screenshot capture."""
 
+from collections import Counter
 from typing import Any
 
 import FreeCAD
@@ -109,26 +110,37 @@ def get_displayed_3d_view() -> Any:
     return view
 
 
-def _image_is_flat_color(path: str, threshold: int = 4) -> bool:
-    """True when the saved PNG is (almost) a single flat color.
+# Share of the sampled pixels one color must cover for a capture to count as blank.
+FLAT_DOMINANT_SHARE = 0.99
 
-    A genuinely rendered scene always has many distinct pixel values; the
-    broken offscreen captures come out as one solid color over the whole
-    canvas. Sampling a sparse grid keeps this cheap even for large images.
+
+def _qimage_is_flat(img: Any, dominant_share: float = FLAT_DOMINANT_SHARE) -> bool:
+    """True when the image is (almost) a single flat color.
+
+    The broken captures come out as one solid color over the whole canvas. A
+    genuine render can still have very few distinct colors: a flat-shaded
+    top-down plan samples to background, floor, wall tops and edges. So judge
+    by how much of the canvas the most common color covers, not by how many
+    colors there are. Sampling a sparse grid keeps this cheap even for large
+    images.
     """
+    if img.isNull() or img.width() == 0:
+        return True
+    samples = [
+        img.pixel(sx, sy)
+        for sx in range(0, img.width(), max(1, img.width() // 32))
+        for sy in range(0, img.height(), max(1, img.height() // 32))
+    ]
+    most_common = Counter(samples).most_common(1)[0][1]
+    return most_common / len(samples) >= dominant_share
+
+
+def _image_is_flat_color(path: str, dominant_share: float = FLAT_DOMINANT_SHARE) -> bool:
+    """True when the saved PNG is (almost) a single flat color (see :func:`_qimage_is_flat`)."""
     try:
         from PySide6 import QtGui
 
-        img = QtGui.QImage(path)
-        if img.isNull() or img.width() == 0:
-            return True
-        colors = set()
-        for sx in range(0, img.width(), max(1, img.width() // 32)):
-            for sy in range(0, img.height(), max(1, img.height() // 32)):
-                colors.add(img.pixel(sx, sy))
-                if len(colors) > threshold:
-                    return False
-        return True
+        return _qimage_is_flat(QtGui.QImage(path), dominant_share)
     except Exception:
         return False
 
@@ -183,7 +195,10 @@ def _grab_compositor_viewport(save_path: str, width: int, height: int) -> bool:
 def _grab_opengl_widget_fallback(save_path: str, width: int, height: int) -> bool:
     """Re-grab the active view from its live QOpenGLWidget framebuffer.
 
-    Returns True when a non-empty image was written to ``save_path``.
+    Returns True when a non-blank image was written to ``save_path``. A blank
+    grab is not written: on macOS the framebuffer of a view that is not
+    exposed reads back blank too, and writing it would throw away whatever
+    the offscreen render already put in ``save_path``.
 
     .. note::
         On NVIDIA + Wayland this readback produces artifact-laden frames
@@ -201,7 +216,7 @@ def _grab_opengl_widget_fallback(save_path: str, width: int, height: int) -> boo
         if gl is None:
             return False
         img = gl.grabFramebuffer()
-        if img.isNull() or img.width() == 0:
+        if _qimage_is_flat(img):
             return False
         # Trim the capture to the requested aspect/size when it differs (the
         # framebuffer is the live viewport, not the requested size).
