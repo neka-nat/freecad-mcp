@@ -574,6 +574,7 @@ def execute_code(
     include_screenshot: bool = True,
     view_name: ViewName = "Isometric",
     timeout: PositiveTimeout | None = None,
+    rollback: bool = False,
 ) -> list[TextContent | ImageContent]:
     """Execute arbitrary Python code in FreeCAD.
 
@@ -593,6 +594,11 @@ def execute_code(
             running; poll get_task_status using the returned task_id for the late result. Prefer
             execute_code_async for heavy pure-geometry work that touches neither
             the document nor the GUI.
+        rollback: Run the code as one transaction in every open document
+            (default False). If it raises, every document change is undone,
+            including steps the code committed itself, so a failed edit
+            leaves no half-built objects behind. Variables, files and closed
+            documents are not restored.
 
     Returns:
         A message indicating the success or failure of the code execution, the output of the code execution, and a screenshot of the object.
@@ -604,6 +610,7 @@ def execute_code(
         include_screenshot,
         view_name,
         timeout,
+        rollback,
     )
 
 

@@ -36,6 +36,7 @@ from rpc_server.serialize import serialize_object
 from rpc_server.settings import load_settings, save_settings
 from rpc_server.stdout_capture import capture_stdout
 from rpc_server.script_state import ScriptState
+from rpc_server.script_transaction import ScriptTransaction
 from rpc_server.version import PROTOCOL_VERSION, __version__ as ADDON_VERSION
 from rpc_server.view_manager import get_displayed_3d_view, save_active_screenshot
 
@@ -424,7 +425,7 @@ class FreeCADRPC:
             ),
         }
 
-    def execute_code(self, code: str, timeout: Any = None) -> dict[str, Any]:
+    def execute_code(self, code: str, timeout: Any = None, rollback: Any = False) -> dict[str, Any]:
         """Execute Python code on the GUI thread and wait for the result.
 
         Runs on the GUI thread so that FreeCAD document operations
@@ -438,7 +439,16 @@ class FreeCADRPC:
         large STEP assembly. Without it such a call reports a timeout while the
         task keeps running. Poll get_task_status with the returned task_id for
         the eventual result before retrying.
+
+        ``rollback=True`` runs the script inside one transaction in every open
+        document: if it raises, all document changes are undone, including
+        steps the script committed itself, and the reply says
+        ``mutation_outcome: rolled_back`` (or ``cleanup_incomplete`` with the
+        reasons). Python state such as variables in the shared namespace, files
+        and closed documents is not restored.
         """
+        if not isinstance(rollback, bool):
+            return {"success": False, "mutation_outcome": "not_started", "error": f"invalid rollback: {rollback!r}"}
         timeout_s = self.EXECUTE_CODE_TIMEOUT
         if timeout is not None:
             try:
@@ -456,14 +466,25 @@ class FreeCADRPC:
         output_buffer = io.StringIO()
 
         def task() -> dict[str, Any]:
+            txn = ScriptTransaction(FreeCAD, code.strip().splitlines()[0] if code.strip() else "") if rollback else None
             try:
+                if txn:
+                    txn.open()
                 with capture_stdout(output_buffer):
                     exec(code, _EXEC_NAMESPACE)
-                return {"success": True, "mutation_outcome": "completed",
-                        "message": "Python code executed successfully.\nOutput: " + output_buffer.getvalue()}
+                result = {"success": True, "mutation_outcome": "completed",
+                          "message": "Python code executed successfully.\nOutput: " + output_buffer.getvalue()}
+                if txn:
+                    restore_errors = txn.commit()
+                    if restore_errors:
+                        result["warnings"] = restore_errors
+                return result
             except BaseException as exc:
-                return {"success": False, "mutation_outcome": "partial_or_unknown",
-                        "error": f"{type(exc).__name__}: {exc}", "output": output_buffer.getvalue()}
+                failure = {"success": False, "mutation_outcome": "partial_or_unknown",
+                           "error": f"{type(exc).__name__}: {exc}", "output": output_buffer.getvalue()}
+                if txn:
+                    failure.update(txn.rollback())
+                return failure
             finally:
                 _scripts.release(owner)
 

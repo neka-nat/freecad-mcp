@@ -176,7 +176,9 @@ class FreeCADConnection:
     def insert_part_from_library(self, relative_path: str) -> dict[str, Any]:
         return self._call("insert_part_from_library", relative_path)
 
-    def execute_code(self, code: str, timeout: float | None = None) -> dict[str, Any]:
+    def execute_code(
+        self, code: str, timeout: float | None = None, rollback: bool = False,
+    ) -> dict[str, Any]:
         # The addon permits a full queue budget followed by a full run budget.
         # Both default to EXECUTE_CODE_TIMEOUT, or to the caller's per-call
         # timeout, so the socket must outlast either budget.
@@ -195,7 +197,10 @@ class FreeCADConnection:
         with self._make_proxy(socket_timeout) as proxy:
             # Without an explicit timeout, call with a single argument so a
             # newer client keeps working against an addon that predates the
-            # timeout parameter.
+            # timeout parameter; rollback is sent only when requested, for
+            # the same reason.
+            if rollback:
+                return proxy.execute_code(code, run_budget, True)
             if timeout is None:
                 return proxy.execute_code(code)
             return proxy.execute_code(code, run_budget)
