@@ -11,7 +11,7 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
 # Must match PROTOCOL_VERSION in addon/FreeCADMCP/rpc_server/version.py.
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 
 try:
     __version__ = version("freecad-mcp")

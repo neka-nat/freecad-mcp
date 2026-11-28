@@ -23,9 +23,29 @@ the current script finishes. Document tools, status queries, and async `commit()
 remain available. Scripts may still spawn their own threads; those threads must
 coordinate their own state and follow FreeCAD's thread-safety rules.
 
-Variables survive an RPC stop/start, but not a FreeCAD process restart. Failed
-scripts preserve assignments and document changes made before the exception;
-script execution is not a transaction. Headless scripts use a separate process.
+Variables survive an RPC stop/start, but not a FreeCAD process restart. By
+default, failed scripts preserve assignments and document changes made before
+the exception. Headless scripts use a separate process.
+
+## Rollback on failure
+
+`execute_code(code, rollback=True)` runs the script as one transaction in every
+open document, so a document reached through `App.getDocument()` is covered as
+well as the active one. If the script raises, every document change is undone and
+the reply carries `mutation_outcome: rolled_back`; the document looks as it did
+before the call, with no half-built sketch or feature left to clean up. A
+successful script commits as one undo step per document.
+
+- Steps the script commits itself (an explicit `commitTransaction()`, commands such
+  as `Std_ToggleFreeze`) are undone as well, also when the undo stack is full.
+- Documents with undo disabled get it enabled for the call and restored after.
+- After the rollback, changed documents are recomputed, linked sources before the
+  documents that link to them.
+- Not restored: variables in the shared namespace, files written, and documents
+  the script opened or closed. Opening or closing a document turns the outcome into
+  `cleanup_incomplete` with `cleanup_errors` naming it.
+- Changes made after the script commits its own transaction are recorded only if
+  it opens a new one; FreeCAD does not track them otherwise.
 
 Characters that XML-RPC cannot carry, such as ANSI colour codes or NUL bytes in
 printed output or error messages, arrive as visible escapes (`\x1b`, `\x00`).
@@ -202,7 +222,7 @@ Failure responses carry `mutation_outcome` when known:
 | --- | --- |
 | `not_started` | Admission rejected or queued work cancelled; this operation did not run. |
 | `still_running` | The caller timed out; poll the task before retrying. |
-| `rolled_back` | The document transaction was aborted and creation cleanup completed, including changes to existing objects. |
+| `rolled_back` | The document transaction was aborted and cleanup completed, including changes to existing objects (`create_object`, `execute_code` with `rollback=True`). |
 | `retained_invalid` | Creation committed an invalid object for inspection; use the returned name. |
 | `cleanup_incomplete` | Rollback/cleanup failed; inspect reported remaining objects and errors. |
 | `partial_or_unknown` | Execution failed after it may have changed state; inspect before retrying. |

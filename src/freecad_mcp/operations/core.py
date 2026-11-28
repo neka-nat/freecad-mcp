@@ -142,9 +142,10 @@ def execute_code_operation(
     include_screenshot: bool = True,
     view_name: str = "Isometric",
     timeout: float | None = None,
+    rollback: bool = False,
 ) -> ToolResponse:
     try:
-        res = freecad.execute_code(code, timeout)
+        res = freecad.execute_code(code, timeout, rollback) if rollback else freecad.execute_code(code, timeout)
         if res["success"]:
             response = text_response(f"Code executed successfully: {res['message']}")
             # Only attempt screenshot when code completed and screenshots are wanted.
@@ -154,6 +155,10 @@ def execute_code_operation(
             screenshot = None if skip_screenshot else _optional_screenshot(freecad, view_name)
             return add_screenshot_if_available(response, screenshot, skip_screenshot)
         message = f"Failed to execute code: {res['error']}"
+        if res.get("mutation_outcome") == "rolled_back":
+            message += "\nAll document changes were rolled back."
+        elif res.get("mutation_outcome") == "cleanup_incomplete":
+            message += "\nRollback incomplete: " + "; ".join(res.get("cleanup_errors", []))
         if res.get("output"):
             message += "\nOutput before failure:\n" + res["output"]
         return _failure(message, res)
